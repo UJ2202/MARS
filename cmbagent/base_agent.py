@@ -9,10 +9,9 @@ from cmbagent.utils import file_search_max_num_results
 from autogen.agentchat import ConversableAgent, UpdateSystemMessage
 import autogen
 import copy
+from cmbagent.cmbagent_utils import cmbagent_debug
 
 # cmbagent_debug=True
-
-cmbagent_debug = autogen.cmbagent_utils.cmbagent_debug
 
 class CmbAgentUserProxyAgent(UserProxyAgent): ### this is for admin and executor 
     """A custom proxy agent for the user with redefined default descriptions."""
@@ -150,7 +149,6 @@ class BaseAgent:
             llm_config=self.llm_config,
             overwrite_tools=True,
             overwrite_instructions=True,
-            cmbagent_debug=cmbagent_debug,
             )
         
         if cmbagent_debug:
@@ -214,8 +212,7 @@ class BaseAgent:
                 update_agent_state_before_reply=[UpdateSystemMessage(self.info["instructions"]),],
                 description=self.info["description"],
                 llm_config=self.llm_config,
-            cmbagent_debug=cmbagent_debug,
-            functions=functions,
+                functions=functions,
             )
         
 
@@ -267,16 +264,15 @@ class BaseAgent:
             description=self.info["description"],
             llm_config=self.llm_config,
             human_input_mode=self.info["human_input_mode"],
-        max_consecutive_auto_reply=self.info["max_consecutive_auto_reply"],
-        is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
-        code_execution_config={
-            "executor": LocalCommandLineCodeExecutor(work_dir=self.work_dir,
-                                                    timeout=self.info["timeout"],
-                                                    execution_policies = execution_policies
-                                                    ),
-            "last_n_messages": 2,
-        },
-        cmbagent_debug=cmbagent_debug,
+            max_consecutive_auto_reply=self.info["max_consecutive_auto_reply"],
+            is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
+            code_execution_config={
+                "executor": LocalCommandLineCodeExecutor(work_dir=self.work_dir,
+                                                        timeout=self.info["timeout"],
+                                                        execution_policies = execution_policies
+                                                        ),
+                "last_n_messages": 2,
+            },
         )
 
         if cmbagent_debug:

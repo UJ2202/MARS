@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { X, Eye, EyeOff, Upload, Key, TestTube2, CheckCircle, XCircle, AlertTriangle, Loader2 } from 'lucide-react';
+import { getApiUrl } from '@/lib/config';
 
 interface CredentialsModalProps {
   isOpen: boolean;
@@ -71,7 +72,7 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
     setTestResults(null);
     
     try {
-      const response = await fetch('http://localhost:8000/api/credentials/test', {
+      const response = await fetch(getApiUrl('/api/credentials/test'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -96,7 +97,7 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
     setSaving(true);
     
     try {
-      const response = await fetch('http://localhost:8000/api/credentials/store', {
+      const response = await fetch(getApiUrl('/api/credentials/store'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

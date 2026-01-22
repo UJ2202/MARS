@@ -3,10 +3,9 @@ import os
 import re
 import ast
 import base64
-from autogen.cmbagent_utils import cmbagent_debug
+from .cmbagent_utils import cmbagent_debug, IMG_WIDTH, cmbagent_disable_display
 from IPython.display import Image as IPImage, display as ip_display
 from IPython.display import Markdown
-from autogen.cmbagent_utils import IMG_WIDTH
 import autogen
 from autogen.agentchat.group import ContextVariables
 from autogen.agentchat.group import AgentTarget, ReplyResult, TerminateTarget
@@ -17,9 +16,6 @@ import json
 from pathlib import Path
 from .utils import AAS_keywords_dict
 from .vlm_utils import account_for_external_api_calls, send_image_to_vlm, create_vlm_prompt, call_external_plot_debugger, vlm_model
-
-cmbagent_debug = autogen.cmbagent_debug
-cmbagent_disable_display = autogen.cmbagent_disable_display
 
 
 
@@ -606,13 +602,16 @@ For the next agent suggestion, follow these rules:
             context_variables (dict): A dictionary maintaining execution context, including previous plans, 
                 feedback tracking, and finalized plans.
         """
+        # DEBUG: Track record_plan calls
+        print(f"[DEBUG record_plan] Called. feedback_left={context_variables.get('feedback_left', 'MISSING')}, num_plans={len(context_variables.get('plans', []))}")
+        
         context_variables["plans"].append(plan_suggestion)
 
         context_variables["proposed_plan"] = plan_suggestion
 
         context_variables["number_of_steps_in_plan"] = number_of_steps_in_plan
 
-        if context_variables["feedback_left"]==0:
+        if context_variables["feedback_left"] <= 0:
             context_variables["final_plan"] = context_variables["plans"][-1]
             return ReplyResult(target=AgentTarget(terminator), ## transfer to control
                             message="Planning stage complete. Exiting.",
@@ -693,12 +692,29 @@ You must not invoke any other agent than the ones listed above.
 
     def record_review(plan_review: str, context_variables: ContextVariables) -> ReplyResult:
         """ Record reviews of the plan."""
+        # DEBUG: Track record_review calls
+        print(f"[DEBUG record_review] Called. feedback_left BEFORE={context_variables.get('feedback_left', 'MISSING')}")
+        
         context_variables["reviews"].append(plan_review)
         context_variables["feedback_left"] -= 1
+        
+        # Guard against going negative
+        if context_variables["feedback_left"] < 0:
+            context_variables["feedback_left"] = 0
 
         context_variables["recommendations"] = plan_review
+        
+        print(f"[DEBUG record_review] feedback_left AFTER={context_variables.get('feedback_left', 'MISSING')}")
+        
+        # If no feedback left, terminate instead of going back to planner
+        if context_variables["feedback_left"] <= 0:
+            print(f"[DEBUG record_review] Terminating - going to terminator")
+            context_variables["final_plan"] = context_variables.get("proposed_plan", context_variables["plans"][-1] if context_variables["plans"] else "")
+            return ReplyResult(target=AgentTarget(terminator),
+                            message="Planning stage complete after review. Exiting.",
+                            context_variables=context_variables)
 
-
+        print(f"[DEBUG record_review] Continuing - going back to planner")
         return ReplyResult(target=AgentTarget(planner),  ## transfer back to planner
                         message=f"""
 Recommendations have been logged.  

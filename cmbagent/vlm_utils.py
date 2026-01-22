@@ -9,8 +9,7 @@ from autogen.agentchat.group import ContextVariables
 from pydantic import BaseModel, Field
 from .utils import get_api_keys_from_env
 from .vlm_injections import scientific_context, get_injection_by_name
-
-cmbagent_debug = autogen.cmbagent_debug
+from .cmbagent_utils import cmbagent_debug
 _last_executed_code = None
 
 # VLM model configuration

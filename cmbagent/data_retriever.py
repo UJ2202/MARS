@@ -1,6 +1,6 @@
 import os
 import subprocess
-from autogen.cmbagent_utils import cmbagent_debug
+from .cmbagent_utils import cmbagent_debug
 
 # Base URL for the repository containing the data
 REPO_URL = "https://github.com/CMBAgents/cmbagent_data.git"

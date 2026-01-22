@@ -16,13 +16,39 @@ from .rag_utils import make_rag_agents
 from .version import __version__
 import os
 from IPython.display import Image, display, Markdown
-from autogen.cmbagent_utils import LOGO, IMG_WIDTH, cmbagent_disable_display
+from .cmbagent_utils import LOGO, IMG_WIDTH, cmbagent_disable_display
 
+# Workflow functions - import from workflows module
+from .workflows import (
+    planning_and_control_context_carryover,
+    planning_and_control,
+    deep_research,  # Alias for planning_and_control_context_carryover
+    one_shot,
+    human_in_the_loop,
+    control,
+)
 
+# Keyword functions
+from .keywords import get_keywords
 
-from .cmbagent import planning_and_control, one_shot, get_keywords, human_in_the_loop, control, planning_and_control_context_carryover, work_dir_default, summarize_document, summarize_documents, preprocess_task
+# Processing functions
+from .processing import summarize_document, summarize_documents, preprocess_task
 
-from .cmbagent import planning_and_control_context_carryover as deep_research
+# Utilities
+from .utils import work_dir_default
+
+# Workflow callbacks for event tracking
+from .callbacks import (
+    WorkflowCallbacks, 
+    PlanInfo, 
+    StepInfo, 
+    StepStatus,
+    create_null_callbacks,
+    create_print_callbacks,
+    create_websocket_callbacks,
+    create_database_callbacks,
+    merge_callbacks
+)
 
 # OCR functionality
 from .ocr import process_single_pdf, process_folder

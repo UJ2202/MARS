@@ -1,0 +1,106 @@
+"""
+Pydantic models for API request and response validation.
+"""
+
+from typing import Dict, Any, Optional, List
+from pydantic import BaseModel
+
+
+# =============================================================================
+# Task Models
+# =============================================================================
+
+class TaskRequest(BaseModel):
+    """Request model for task submission."""
+    task: str
+    config: Dict[str, Any] = {
+        "model": "gpt-4o",
+        "maxRounds": 25,
+        "maxAttempts": 6,
+        "agent": "engineer",
+        "workDir": "~/Desktop/cmbdir"
+    }
+
+
+class TaskResponse(BaseModel):
+    """Response model for task submission."""
+    task_id: str
+    status: str
+    message: str
+
+
+# =============================================================================
+# File Models
+# =============================================================================
+
+class FileItem(BaseModel):
+    """Model representing a file or directory item."""
+    name: str
+    path: str
+    type: str  # 'file' or 'directory'
+    size: Optional[int] = None
+    modified: Optional[float] = None
+    mime_type: Optional[str] = None
+
+
+class DirectoryListing(BaseModel):
+    """Model representing a directory listing response."""
+    path: str
+    items: List[FileItem]
+    parent: Optional[str] = None
+
+
+# =============================================================================
+# ArXiv Models
+# =============================================================================
+
+class ArxivFilterRequest(BaseModel):
+    """Request model for arXiv URL filtering."""
+    input_text: str
+    work_dir: Optional[str] = None
+
+
+class ArxivFilterResponse(BaseModel):
+    """Response model for arXiv URL filtering."""
+    status: str
+    result: Dict[str, Any]
+    message: str
+
+
+# =============================================================================
+# Enhance Input Models
+# =============================================================================
+
+class EnhanceInputRequest(BaseModel):
+    """Request model for input text enhancement."""
+    input_text: str
+    work_dir: Optional[str] = None
+    max_workers: Optional[int] = 2
+    max_depth: Optional[int] = 10
+
+
+class EnhanceInputResponse(BaseModel):
+    """Response model for input text enhancement."""
+    status: str
+    enhanced_text: str
+    processing_summary: Dict[str, Any]
+    cost_breakdown: Dict[str, Any]
+    message: str
+
+
+# =============================================================================
+# Branching Models
+# =============================================================================
+
+class BranchRequest(BaseModel):
+    """Request model for creating a workflow branch."""
+    step_id: str
+    branch_name: str
+    hypothesis: Optional[str] = None
+    modifications: Optional[Dict[str, Any]] = None
+
+
+class PlayFromNodeRequest(BaseModel):
+    """Request model for resuming execution from a node."""
+    node_id: str
+    context_override: Optional[Dict[str, Any]] = None

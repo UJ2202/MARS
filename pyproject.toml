@@ -21,7 +21,7 @@ dependencies = [
     "anthropic",
     "mistralai",
     "ruamel.yaml",
-    "cmbagent_autogen>=0.0.91post11",
+    "ag2[openai]>=0.10.3",
     # "google-cloud-aiplatform==1.91.0",
     "jsonref==1.1.0",
     "cobaya",                   # to use yaml_load_file function    # TODO: maybe replace if only yaml_load_file is needed
@@ -29,7 +29,7 @@ dependencies = [
 
     "streamlit",
     "ipython",                  # needed for streamlit
-    
+
     # FastAPI backend dependencies
     "fastapi>=0.104.1",
     "uvicorn[standard]>=0.24.0",
@@ -37,6 +37,11 @@ dependencies = [
     "python-multipart>=0.0.6",
     "pydantic>=2.7.4",
     "aiohttp>=3.9.0",
+
+    # Database dependencies
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg2-binary>=2.9",
 ]
 
 [project.optional-dependencies]

@@ -1,11 +1,9 @@
 from autogen.agentchat.group import AgentTarget, TerminateTarget, OnCondition, StringLLMCondition
-from autogen.cmbagent_utils import cmbagent_debug
+from .cmbagent_utils import cmbagent_debug
 import autogen
 from autogen import GroupChatManager, GroupChat
 from autogen.agentchat.contrib.capabilities.transform_messages import TransformMessages
 from autogen.agentchat.contrib.capabilities.transforms import MessageHistoryLimiter
-
-cmbagent_debug = autogen.cmbagent_utils.cmbagent_debug
 
 def register_all_hand_offs(cmbagent_instance):
     if cmbagent_debug:

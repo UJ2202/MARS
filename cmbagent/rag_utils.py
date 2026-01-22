@@ -1,7 +1,7 @@
 import os
 import importlib
 from openai import OpenAI
-from autogen.cmbagent_utils import cmbagent_debug
+from .cmbagent_utils import cmbagent_debug
 import requests
 import pprint
 from .utils import path_to_assistants,default_chunking_strategy,YAML,update_yaml_preserving_format

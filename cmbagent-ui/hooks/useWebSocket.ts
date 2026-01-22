@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { getWsUrl } from '@/lib/config'
 
 interface WebSocketMessage {
   type: 'output' | 'status' | 'result' | 'error' | 'complete' | 'heartbeat'
@@ -37,7 +38,7 @@ export function useWebSocket({
     taskIdRef.current = taskId
 
     try {
-      const ws = new WebSocket(`ws://localhost:8000/ws/${taskId}`)
+      const ws = new WebSocket(getWsUrl(`/ws/${taskId}`))
       wsRef.current = ws
 
       ws.onopen = () => {

@@ -2,7 +2,7 @@ import os
 import logging
 import importlib
 import requests
-import autogen 
+import autogen
 import json
 import sys
 import pandas as pd
@@ -13,12 +13,13 @@ import time
 import pickle
 from collections import defaultdict
 from openai import OpenAI
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import glob
 from IPython.display import Image
 from autogen.agentchat.group import ContextVariables
 from autogen.agentchat.group.patterns import AutoPattern
 
+from .callbacks import WorkflowCallbacks, StepInfo, PlanInfo, StepStatus, create_null_callbacks
 from .agents.planner_response_formatter.planner_response_formatter import save_final_plan
 from .utils import work_dir_default
 from .utils import default_llm_model as default_llm_model_default
@@ -38,29 +39,10 @@ from .keywords_utils import UnescoKeywords
 from .keywords_utils import AaaiKeywords
 from .utils import unesco_taxonomy_path, aaai_keywords_path
 
-def import_non_rag_agents():
-    imported_non_rag_agents = {}
-    for subdir in os.listdir(path_to_agents):
-        # Skip rag_agents folder and non-directories
-        if subdir == "rag_agents":
-            continue
-        subdir_path = os.path.join(path_to_agents, subdir)
-        if os.path.isdir(subdir_path):
-            for filename in os.listdir(subdir_path):
-                if filename.endswith(".py") and filename != "__init__.py" and filename[0] != ".":
-                    module_name = filename[:-3]  # Remove the .py extension
-                    class_name = ''.join([part.capitalize() for part in module_name.split('_')]) + 'Agent'
-                    # Assuming the module path is agents.<subdir>.<module_name>
-                    module_path = f"cmbagent.agents.{subdir}.{module_name}"
-                    module = importlib.import_module(module_path)
-                    agent_class = getattr(module, class_name)
-                    imported_non_rag_agents[class_name] = {
-                        'agent_class': agent_class,
-                        'agent_name': module_name,
-                    }
-    return imported_non_rag_agents
+# Import from managers module for backward compatibility
+from cmbagent.managers.agent_manager import import_non_rag_agents
 
-from autogen import cmbagent_debug
+from .cmbagent_utils import cmbagent_debug
 from autogen.agentchat import initiate_group_chat
 from cmbagent.context import shared_context as shared_context_default
 import shutil
@@ -68,7 +50,6 @@ import shutil
 class CMBAgent:
 
     logging.disable(logging.CRITICAL)
-    cmbagent_debug = autogen.cmbagent_debug
 
     def __init__(self,
                  cache_seed=None,
@@ -123,6 +104,7 @@ class CMBAgent:
                  mode = "planning_and_control", # can be "one_shot" , "chat" or "planning_and_control" (default is planning and control), or "planning_and_control_context_carryover"
                  chat_agent = None,
                  api_keys = None,
+                 approval_config = None,  # Optional ApprovalConfig for HITL control
                 #  make_new_rag_agents = False, ## can be a list of names for new rag agents to be created
                  **kwargs):
         """
@@ -186,6 +168,12 @@ class CMBAgent:
         self.mode = mode
         self.chat_agent = chat_agent
 
+        # HITL approval configuration
+        self.approval_config = approval_config
+        if self.approval_config is None:
+            from cmbagent.database.approval_types import ApprovalConfig, ApprovalMode
+            self.approval_config = ApprovalConfig(mode=ApprovalMode.NONE)
+
         if not self.skip_memory and 'memory' not in agent_list:
             self.agent_list.append('memory')
 
@@ -196,17 +184,103 @@ class CMBAgent:
         if work_dir != work_dir_default:
             # delete work_dir_default as it wont be used
             # exception if we are working within work_dir_default, i.e., work_dir is a subdirectory of work_dir_default
-            if not work_dir_default.resolve() in work_dir.resolve().parents:
+            # Convert to Path objects for comparison if they are strings
+            work_dir_default_path = Path(work_dir_default) if isinstance(work_dir_default, str) else work_dir_default
+            work_dir_path = Path(work_dir) if isinstance(work_dir, str) else work_dir
+            if not work_dir_default_path.resolve() in work_dir_path.resolve().parents:
                 shutil.rmtree(work_dir_default, ignore_errors=True)
             # shutil.rmtree(work_dir_default, ignore_errors=True)
 
-        self.work_dir = os.path.expanduser(work_dir)
+        # Always store work_dir as absolute string path (without resolving symlinks)
+        if isinstance(work_dir, str):
+            self.work_dir = os.path.abspath(os.path.expanduser(work_dir))
+        else:
+            # Convert Path to string using abspath to avoid resolving symlinks
+            self.work_dir = os.path.abspath(os.path.expanduser(str(work_dir)))
         self.clear_work_dir_bool = clear_work_dir
         if clear_work_dir:
             self.clear_work_dir()
-        
+
         # add the work_dir to the python path so we can import modules from it
         sys.path.append(self.work_dir)
+
+        # Database initialization (optional, controlled by environment variable)
+        self.use_database = os.getenv("CMBAGENT_USE_DATABASE", "true").lower() == "true"
+        self.db_session: Optional[Any] = None
+        self.session_id: Optional[str] = None
+        self.workflow_repo: Optional[Any] = None
+        self.persistence: Optional[Any] = None
+        self.dag_builder: Optional[Any] = None
+        self.dag_executor: Optional[Any] = None
+        self.dag_visualizer: Optional[Any] = None
+        self.workflow_sm: Optional[Any] = None
+        self.approval_manager: Optional[Any] = None
+        self.retry_manager: Optional[Any] = None
+        self.retry_metrics: Optional[Any] = None
+
+        if self.use_database:
+            try:
+                from cmbagent.database import get_db_session, init_database
+                from cmbagent.database.repository import WorkflowRepository
+                from cmbagent.database.persistence import DualPersistenceManager
+                from cmbagent.database.session_manager import SessionManager
+                from cmbagent.database.dag_builder import DAGBuilder
+                from cmbagent.database.dag_executor import DAGExecutor
+                from cmbagent.database.dag_visualizer import DAGVisualizer
+                from cmbagent.database.state_machine import StateMachine
+                from cmbagent.database.approval_manager import ApprovalManager
+
+                # Initialize database
+                init_database()
+
+                # Create database session
+                self.db_session = get_db_session()
+
+                # Get or create session
+                session_manager = SessionManager(self.db_session)
+                self.session_id = session_manager.get_or_create_default_session()
+
+                # Create repositories
+                self.workflow_repo = WorkflowRepository(self.db_session, self.session_id)
+
+                # Create persistence manager
+                self.persistence = DualPersistenceManager(
+                    self.db_session,
+                    self.session_id,
+                    self.work_dir
+                )
+
+                # Create DAG components
+                self.dag_builder = DAGBuilder(self.db_session, self.session_id)
+                self.dag_executor = DAGExecutor(self.db_session, self.session_id)
+                self.dag_visualizer = DAGVisualizer(self.db_session)
+                self.workflow_sm = StateMachine(self.db_session, "workflow_run")
+
+                # Create approval manager
+                self.approval_manager = ApprovalManager(self.db_session, self.session_id)
+
+                # Create retry context manager and metrics
+                from cmbagent.retry.retry_context_manager import RetryContextManager
+                from cmbagent.retry.retry_metrics import RetryMetrics
+                self.retry_manager = RetryContextManager(self.db_session, self.session_id)
+                self.retry_metrics = RetryMetrics(self.db_session)
+
+                if cmbagent_debug:
+                    print(f"Database initialized with session_id: {self.session_id}")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize database: {e}. Continuing without database.")
+                self.use_database = False
+                self.db_session = None
+                self.session_id = None
+                self.workflow_repo = None
+                self.persistence = None
+                self.dag_builder = None
+                self.dag_executor = None
+                self.dag_visualizer = None
+                self.workflow_sm = None
+                self.approval_manager = None
+                self.retry_manager = None
+                self.retry_metrics = None
 
         self.path_to_assistants = path_to_assistants
 
@@ -236,7 +310,7 @@ class CMBAgent:
                         "check_every_ms": None,
                     }
         
-        if autogen.cmbagent_debug:
+        if cmbagent_debug:
             print('\n\n\n\nin cmbagent.py self.llm_config: ',self.llm_config)
 
         # self.llm_config =  {"model": "gpt-4o-mini", "cache_seed": None}
@@ -405,6 +479,7 @@ class CMBAgent:
             all_agents += self.groupchat.new_conversable_agents
 
         for agent in all_agents:
+            # First try the custom cost_dict (used by vlm_utils)
             if hasattr(agent, "cost_dict") and agent.cost_dict.get("Agent"):
                 name = (
                     agent.cost_dict["Agent"][0]
@@ -434,58 +509,108 @@ class CMBAgent:
                     cost_dict["Completion Tokens"].append(summed_comp)
                     cost_dict["Total Tokens"].append(summed_total)
                     cost_dict["Model"].append(model_name)
+            # Also try AG2's native usage tracking via client
+            elif hasattr(agent, "client") and agent.client is not None:
+                try:
+                    usage_summary = getattr(agent.client, "total_usage_summary", None)
+                    if usage_summary:
+                        agent_name = getattr(agent, "name", "unknown")
+                        for model_name, model_usage in usage_summary.items():
+                            if isinstance(model_usage, dict):
+                                prompt_tokens = model_usage.get("prompt_tokens", 0)
+                                completion_tokens = model_usage.get("completion_tokens", 0)
+                                total_tokens = prompt_tokens + completion_tokens
+                                # Estimate cost based on model (rough pricing)
+                                pricing = {
+                                    "gpt-4o": {"input": 2.50, "output": 10.00},
+                                    "gpt-4": {"input": 30.00, "output": 60.00},
+                                    "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+                                    "gemini-2.0-flash": {"input": 0.10, "output": 0.40},
+                                    "gemini-1.5-flash": {"input": 0.075, "output": 0.30},
+                                }
+                                # Default pricing if model not found
+                                model_key = next((k for k in pricing if k in model_name.lower()), None)
+                                if model_key:
+                                    input_cost = (prompt_tokens / 1_000_000) * pricing[model_key]["input"]
+                                    output_cost = (completion_tokens / 1_000_000) * pricing[model_key]["output"]
+                                    cost = input_cost + output_cost
+                                else:
+                                    cost = (total_tokens / 1_000_000) * 5.0  # Default $5/M tokens
+
+                                if agent_name in cost_dict["Agent"]:
+                                    i = cost_dict["Agent"].index(agent_name)
+                                    cost_dict["Cost ($)"][i] += cost
+                                    cost_dict["Prompt Tokens"][i] += prompt_tokens
+                                    cost_dict["Completion Tokens"][i] += completion_tokens
+                                    cost_dict["Total Tokens"][i] += total_tokens
+                                else:
+                                    cost_dict["Agent"].append(agent_name)
+                                    cost_dict["Cost ($)"].append(cost)
+                                    cost_dict["Prompt Tokens"].append(prompt_tokens)
+                                    cost_dict["Completion Tokens"].append(completion_tokens)
+                                    cost_dict["Total Tokens"].append(total_tokens)
+                                    cost_dict["Model"].append(model_name)
+                except Exception as e:
+                    print(f"Warning: Could not extract AG2 usage for agent {getattr(agent, 'name', 'unknown')}: {e}")
 
         # --- build DataFrame & totals ----------------------------------------------
         df = pd.DataFrame(cost_dict)
-        numeric_cols = df.select_dtypes(include="number").columns
-        totals = df[numeric_cols].sum()
-        df.loc["Total"] = pd.concat([pd.Series({"Agent": "Total"}), totals])
+
+        # Only add totals if DataFrame has data
+        if not df.empty:
+            numeric_cols = df.select_dtypes(include="number").columns
+            totals = df[numeric_cols].sum()
+            df.loc["Total"] = pd.concat([pd.Series({"Agent": "Total"}), totals])
 
         # --- string formatting for display ------------------------------------------------------
-        df_str = df.copy()
-        df_str["Cost ($)"] = df_str["Cost ($)"].map(lambda x: f"${x:.8f}")
-        for col in ["Prompt Tokens", "Completion Tokens", "Total Tokens"]:
-            df_str[col] = df_str[col].astype(int).astype(str)
+        if df.empty:
+            print("\nDisplaying cost…\n")
+            print("No cost data available (no API calls were made)")
+        else:
+            df_str = df.copy()
+            df_str["Cost ($)"] = df_str["Cost ($)"].map(lambda x: f"${x:.8f}")
+            for col in ["Prompt Tokens", "Completion Tokens", "Total Tokens"]:
+                df_str[col] = df_str[col].astype(int).astype(str)
 
-        columns = df_str.columns.tolist()
-        rows = df_str.fillna("").values.tolist()
+            columns = df_str.columns.tolist()
+            rows = df_str.fillna("").values.tolist()
 
-        # --- column widths ----------------------------------------------------------
-        widths = [
-            max(len(col), max(len(str(row[i])) for row in rows))
-            for i, col in enumerate(columns)
-        ]
+            # --- column widths ----------------------------------------------------------
+            widths = [
+                max(len(col), max(len(str(row[i])) for row in rows))
+                for i, col in enumerate(columns)
+            ]
 
-        # --- header with alignment markers -----------------------------------------
-        header   = "|" + "|".join(f" {columns[i].ljust(widths[i])} " for i in range(len(columns))) + "|"
+            # --- header with alignment markers -----------------------------------------
+            header   = "|" + "|".join(f" {columns[i].ljust(widths[i])} " for i in range(len(columns))) + "|"
 
-        # Markdown alignment row: left for text, right for numbers
-        align_row = []
-        for i, col in enumerate(columns):
-            if col == "Agent":
-                align_row.append(":" + "-"*(widths[i]+1))      # :---- for left
-            else:
-                align_row.append("-"*(widths[i]+1) + ":")      # ----: for right
-        separator = "|" + "|".join(align_row) + "|"
-
-        # --- build data lines -------------------------------------------------------
-        lines = [header, separator]
-        for idx, row in enumerate(rows):
-            # insert rule before the Total row
-            if row[0] == "Total":
-                lines.append("|" + "|".join("-"*(widths[i]+2) for i in range(len(columns))) + "|")
-
-            cell = []
+            # Markdown alignment row: left for text, right for numbers
+            align_row = []
             for i, col in enumerate(columns):
-                s = str(row[i])
                 if col == "Agent":
-                    cell.append(f" {s.ljust(widths[i])} ")
+                    align_row.append(":" + "-"*(widths[i]+1))      # :---- for left
                 else:
-                    cell.append(f" {s.rjust(widths[i])} ")
-            lines.append("|" + "|".join(cell) + "|")
+                    align_row.append("-"*(widths[i]+1) + ":")      # ----: for right
+            separator = "|" + "|".join(align_row) + "|"
 
-        print("\nDisplaying cost…\n")
-        print("\n".join(lines))
+            # --- build data lines -------------------------------------------------------
+            lines = [header, separator]
+            for idx, row in enumerate(rows):
+                # insert rule before the Total row
+                if row[0] == "Total":
+                    lines.append("|" + "|".join("-"*(widths[i]+2) for i in range(len(columns))) + "|")
+
+                cell = []
+                for i, col in enumerate(columns):
+                    s = str(row[i])
+                    if col == "Agent":
+                        cell.append(f" {s.ljust(widths[i])} ")
+                    else:
+                        cell.append(f" {s.rjust(widths[i])} ")
+                lines.append("|" + "|".join(cell) + "|")
+
+            print("\nDisplaying cost…\n")
+            print("\n".join(lines))
 
         self.final_context['cost_dataframe'] = df
 
@@ -494,8 +619,8 @@ class CMBAgent:
         cost_data = df.to_dict(orient='records')
         
         # Add timestamp
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Use module-level datetime import (already imported at top)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Save to JSON file in workdir
         if name_append is not None:
@@ -523,6 +648,91 @@ class CMBAgent:
                 elif os.path.isdir(item_path):
                     shutil.rmtree(item_path)
 
+    def create_retry_context_for_step(self, step, attempt_number, max_attempts, user_feedback=None):
+        """
+        Create retry context for a step.
+
+        Args:
+            step: WorkflowStep object
+            attempt_number: Current attempt number
+            max_attempts: Maximum retry attempts
+            user_feedback: Optional user feedback/guidance
+
+        Returns:
+            RetryContext object or None if retry manager not available
+        """
+        if self.retry_manager:
+            return self.retry_manager.create_retry_context(
+                step=step,
+                attempt_number=attempt_number,
+                max_attempts=max_attempts,
+                user_feedback=user_feedback
+            )
+        return None
+
+    def format_retry_prompt_for_context(self, retry_context):
+        """
+        Format retry context into a prompt string.
+
+        Args:
+            retry_context: RetryContext object
+
+        Returns:
+            Formatted prompt string or empty string if retry manager not available
+        """
+        if self.retry_manager and retry_context:
+            return self.retry_manager.format_retry_prompt(retry_context)
+        return ""
+
+    def record_retry_attempt(self, step, attempt_number, error_type, error_message, traceback, agent_output):
+        """
+        Record a retry attempt for a step.
+
+        Args:
+            step: WorkflowStep object
+            attempt_number: Attempt number
+            error_type: Type of error (if failed)
+            error_message: Error message (if failed)
+            traceback: Full traceback (if failed)
+            agent_output: Agent output
+        """
+        if self.retry_manager:
+            self.retry_manager.record_attempt(
+                step=step,
+                attempt_number=attempt_number,
+                error_type=error_type,
+                error_message=error_message,
+                traceback=traceback,
+                agent_output=agent_output
+            )
+
+    def get_retry_stats(self, run_id):
+        """
+        Get retry statistics for a workflow run.
+
+        Args:
+            run_id: Workflow run ID
+
+        Returns:
+            Dictionary with retry statistics or None if metrics not available
+        """
+        if self.retry_metrics:
+            return self.retry_metrics.get_retry_stats(run_id)
+        return None
+
+    def generate_retry_report(self, run_id):
+        """
+        Generate a retry report for a workflow run.
+
+        Args:
+            run_id: Workflow run ID
+
+        Returns:
+            Formatted report string or None if metrics not available
+        """
+        if self.retry_metrics:
+            return self.retry_metrics.generate_retry_report(run_id)
+        return None
 
     def solve(self, task, 
               initial_agent='task_improver', 
@@ -959,1731 +1169,41 @@ class CMBAgent:
         return
 
 
-def clean_work_dir(work_dir):
-    # Clear everything inside work_dir if it exists
-    if os.path.exists(work_dir):
-        for item in os.listdir(work_dir):
-            item_path = os.path.join(work_dir, item)
-            if os.path.isfile(item_path):
-                os.unlink(item_path)
-            elif os.path.isdir(item_path):
-                shutil.rmtree(item_path)
-
-
-def planning_and_control_context_carryover(
-                            task,
-                            max_rounds_planning = 50,
-                            max_rounds_control = 100,
-                            max_plan_steps = 3,
-                            n_plan_reviews = 1,
-                            plan_instructions = '',
-                            engineer_instructions = '', # append to engineer instructions
-                            researcher_instructions = '', # append to researcher instructions
-                            hardware_constraints = '', 
-                            max_n_attempts = 3,
-                            planner_model = default_agents_llm_model['planner'],
-                            plan_reviewer_model = default_agents_llm_model['plan_reviewer'],
-                            engineer_model = default_agents_llm_model['engineer'],
-                            researcher_model = default_agents_llm_model['researcher'],
-                            idea_maker_model = default_agents_llm_model['idea_maker'],
-                            idea_hater_model = default_agents_llm_model['idea_hater'],
-                            camb_context_model = default_agents_llm_model['camb_context'],
-                            plot_judge_model = default_agents_llm_model['plot_judge'],
-                            default_llm_model = default_llm_model_default,
-                            default_formatter_model = default_formatter_model_default,
-                            work_dir = work_dir_default,
-                            api_keys = None,
-                            restart_at_step = -1,   ## if -1 or 0, do not restart. if 1, restart from step 1, etc.
-                            clear_work_dir = False,
-                            researcher_filename = shared_context_default['researcher_filename'],
-                            ):
-
-    # Create work directory if it doesn't exist
-    Path(work_dir).expanduser().resolve().mkdir(parents=True, exist_ok=True)
-    work_dir = os.path.expanduser(work_dir)
-
-    if clear_work_dir:
-        clean_work_dir(work_dir)
-    
-    context_dir = Path(work_dir).expanduser().resolve() / "context"
-    os.makedirs(context_dir, exist_ok=True)
-
-    print("Created context directory: ", context_dir)
-
-
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
-
-    ## planning
-    if restart_at_step <= 0:
-
-
-        ## planning
-        planning_dir = Path(work_dir).expanduser().resolve() / "planning"
-        planning_dir.mkdir(parents=True, exist_ok=True)
-
-        start_time = time.time()
-
-
-
-        planner_config = get_model_config(planner_model, api_keys)
-        plan_reviewer_config = get_model_config(plan_reviewer_model, api_keys)
-    
-
-        cmbagent = CMBAgent(work_dir = planning_dir,
-                            default_llm_model = default_llm_model,
-                            default_formatter_model = default_formatter_model,
-                            agent_llm_configs = {
-                                'planner': planner_config,
-                                'plan_reviewer': plan_reviewer_config,
-                            },
-                            api_keys = api_keys
-                            )
-        end_time = time.time()
-        initialization_time_planning = end_time - start_time
-
-        start_time = time.time()
-
-        cmbagent.solve(task,
-                    max_rounds=max_rounds_planning,
-                    initial_agent="plan_setter",
-                    shared_context = {'feedback_left': n_plan_reviews,
-                                        'max_n_attempts': max_n_attempts,
-                                        'maximum_number_of_steps_in_plan': max_plan_steps,
-                                        'planner_append_instructions': plan_instructions,
-                                        'engineer_append_instructions': engineer_instructions,
-                                        'researcher_append_instructions': researcher_instructions,
-                                        'plan_reviewer_append_instructions': plan_instructions,
-                                        'hardware_constraints': hardware_constraints,
-                                        'researcher_filename': researcher_filename}
-                    )
-        end_time = time.time()
-        execution_time_planning = end_time - start_time
-
-        # Create a dummy groupchat attribute if it doesn't exist
-        if not hasattr(cmbagent, 'groupchat'):
-            Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-            cmbagent.groupchat = Dummy()
-
-        # Now call display_cost without triggering the AttributeError
-        cmbagent.display_cost()
-
-        planning_output = copy.deepcopy(cmbagent.final_context)
-        
-        outfile = save_final_plan(planning_output, planning_dir)
-        print(f"\nStructured plan written to {outfile}")
-        print(f"\nPlanning took {execution_time_planning:.4f} seconds\n")
-
-        context_path = os.path.join(context_dir, "context_step_0.pkl") # save the initial context (0: planning)
-        # with open(context_path, 'w') as f:
-        #     json.dump(current_context, f, indent=2)
-        with open(context_path, 'wb') as f:
-            pickle.dump(cmbagent.final_context, f)
-        # Save timing report as JSON
-        timing_report = {
-            'initialization_time_planning': initialization_time_planning,
-            'execution_time_planning': execution_time_planning, 
-            'total_time': initialization_time_planning + execution_time_planning
-        }
-
-        # Add timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Save to JSON file in workdir
-        timing_path = os.path.join(planning_output['work_dir'], f"time/timing_report_planning_{timestamp}.json")
-        with open(timing_path, 'w') as f:
-            json.dump(timing_report, f, indent=2)
-        
-        print(f"\nTiming report data saved to: {timing_path}\n")
-
-
-        ## delete empty folders during planning
-        database_full_path = os.path.join(planning_output['work_dir'], planning_output['database_path'])
-        codebase_full_path = os.path.join(planning_output['work_dir'], planning_output['codebase_path'])
-        for folder in [database_full_path, codebase_full_path]:
-            if not os.listdir(folder):
-                os.rmdir(folder)
-
-
-    
-    ## control
-    engineer_config = get_model_config(engineer_model, api_keys)
-    researcher_config = get_model_config(researcher_model, api_keys)
-    camb_context_config = get_model_config(camb_context_model, api_keys)
-    idea_maker_config = get_model_config(idea_maker_model, api_keys)
-    idea_hater_config = get_model_config(idea_hater_model, api_keys)
-    plot_judge_config = get_model_config(plot_judge_model, api_keys)
-        
-    control_dir = Path(work_dir).expanduser().resolve() / "control"
-    control_dir.mkdir(parents=True, exist_ok=True)
-
-    current_context = copy.deepcopy(planning_output) if restart_at_step <= 0 else load_context(os.path.join(context_dir, f"context_step_{restart_at_step-1}.pkl"))
-    number_of_steps_in_plan = current_context['number_of_steps_in_plan']
-    step_summaries = []  
-    # print("in cmbagent.py: current_context before step loop: ", current_context)
-    initial_step = 1 if restart_at_step <= 0 else restart_at_step
-    for step in range(initial_step, number_of_steps_in_plan + 1):
-        clear_work_dir = True if step == 1 and restart_at_step <= 0 else False ## not fully sure what is the best thing to do, but this is OK for now.
-        starter_agent = "control" if step == 1 else "control_starter"
-        # print(f"in cmbagent.py: step: {step}/{number_of_steps_in_plan}")
-        # print("\n\n")
-        # print("current_context['previous_steps_execution_summary']: ", current_context['previous_steps_execution_summary'] )
-        # print("\n\n")
-
-
-        start_time = time.time()
-        cmbagent = CMBAgent(
-            work_dir = control_dir,
-            clear_work_dir = clear_work_dir,
-            default_llm_model = default_llm_model,
-            default_formatter_model = default_formatter_model,
-            agent_llm_configs = {
-                                'engineer': engineer_config,
-                                'researcher': researcher_config,
-                                'idea_maker': idea_maker_config,
-                                'idea_hater': idea_hater_config,
-                                'camb_context': camb_context_config,
-                                'plot_judge': plot_judge_config,
-            },
-            mode = "planning_and_control_context_carryover",
-            api_keys = api_keys
-            )
-        
-
-        # print(f"in cmbagent.py: idea_maker_config: {idea_maker_config}")
-        # print(f"in cmbagent.py: idea_hater_config: {idea_hater_config}")
-        
-        end_time = time.time()
-        initialization_time_control = end_time - start_time
-        
-        if step == 1:
-            plan_input = load_plan(os.path.join(work_dir, "planning/final_plan.json"))["sub_tasks"]
-            agent_for_step = plan_input[0]['sub_task_agent']
-        else:
-            agent_for_step = current_context['agent_for_sub_task']
-        
-       
-
-        # import sys 
-        # sys.exit()
-
-        parsed_context = copy.deepcopy(current_context)
-
-        parsed_context["agent_for_sub_task"] = agent_for_step
-        parsed_context["current_plan_step_number"] = step
-        parsed_context["n_attempts"] = 0 ## reset number of failures for each step. 
-        # print(f"\nin cmbagent.py: agent_for_step {step}: {agent_for_step}")
-        # print("xo"*100+"\n\n")
-        # print("in cmbagent.py: parsed_context: ", parsed_context["final_plan"])
-        # print("in cmbagent.py: parsed_context: ", parsed_context["number_of_steps_in_plan"])
-        # print("xo"*100+"\n\n")
-        # import sys
-        # sys.exit()
-            
-
-        start_time = time.time()   
-
-        cmbagent.solve(task,
-                        max_rounds=max_rounds_control,
-                        initial_agent=starter_agent,
-                        shared_context = parsed_context,
-                        step = step
-                        )
-        
-
-        end_time = time.time()
-        execution_time_control = end_time - start_time
-
-        # number of failures:
-
-        number_of_failures = cmbagent.final_context['n_attempts']
-
-        
-        results = {'chat_history': cmbagent.chat_result.chat_history,
-                   'final_context': cmbagent.final_context}
-        
-        if number_of_failures >= cmbagent.final_context['max_n_attempts']:
-            print(f"in cmbagent.py: number of failures: {number_of_failures} >= max_n_attempts: {cmbagent.final_context['max_n_attempts']}. Exiting.")
-            break
-        # print("_"*100+"\n\n")
-        # print("in cmbagent.py: collecting step summaries for step: ", step)
-        for msg in results['chat_history'][::-1]:
-            # print("\nin cmbagent.py: msg: ", msg)
-            if 'name' in msg:
-                # print("\nin cmbagent.py: msg['name']: ", msg['name'])
-                agent_for_step = agent_for_step.removesuffix("_context")
-                agent_for_step = agent_for_step.removesuffix("_agent")
-                if msg['name'] == agent_for_step or msg['name'] == f"{agent_for_step}_nest" or msg['name'] == f"{agent_for_step}_response_formatter":
-                    # print("\nin cmbagent.py: msg['content']: ", msg['content'])
-                    this_step_execution_summary = msg['content']
-                    # build this step’s summary
-                    summary = f"### Step {step}\n{this_step_execution_summary.strip()}"
-                    step_summaries.append(summary)  
-                    cmbagent.final_context['previous_steps_execution_summary'] = "\n\n".join(step_summaries)
-                    break
-        # print("in cmbagent.py: step_summaries: ", step_summaries)
-        # print("_"*100+"\n\n")
-        current_context = copy.deepcopy(cmbagent.final_context)
-
-        
-        results['initialization_time_control'] = initialization_time_control
-        results['execution_time_control'] = execution_time_control
-
-        # Save timing report as JSON
-        timing_report = {
-            'initialization_time_control': initialization_time_control,
-            'execution_time_control': execution_time_control,
-            'total_time': initialization_time_control + execution_time_control
-        }
-
-        # Add timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save to JSON file in workdir
-        timing_path = os.path.join(current_context['work_dir'], f"time/timing_report_step_{step}_{timestamp}.json")
-        with open(timing_path, 'w') as f:
-            json.dump(timing_report, f, indent=2)
-        
-        print(f"\nTiming report data saved to: {timing_path}\n")
-
-        
-        # Create a dummy groupchat attribute if it doesn't exist
-        if not hasattr(cmbagent, 'groupchat'):
-            Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-            cmbagent.groupchat = Dummy()
-
-        # Now call display_cost without triggering the AttributeError
-        cmbagent.display_cost(name_append = f"step_{step}")
-
-        ## save the chat history and the final context
-        chat_full_path = os.path.join(current_context['work_dir'], "chats")
-        os.makedirs(chat_full_path, exist_ok=True)
-        chat_output_path = os.path.join(chat_full_path, f"chat_history_step_{step}.json")
-        with open(chat_output_path, 'w') as f:
-            json.dump(results['chat_history'], f, indent=2)
-        context_path = os.path.join(context_dir, f"context_step_{step}.pkl")
-        # with open(context_path, 'w') as f:
-        #     json.dump(current_context, f, indent=2)
-        with open(context_path, 'wb') as f:
-            pickle.dump(cmbagent.final_context, f)
-
-        # if step == 4:
-        #     break
-
-    ## delete empty folders during planning
-    database_full_path = os.path.join(current_context['work_dir'], current_context['database_path'])
-    codebase_full_path = os.path.join(current_context['work_dir'], current_context['codebase_path'])
-    for folder in [database_full_path, codebase_full_path]:
-        if not os.listdir(folder):
-            os.rmdir(folder)
-
-
-    return results
-
-def load_context(context_path):
-    with open(context_path, 'rb') as f:
-        context = pickle.load(f)
-    return context
-
-def planning_and_control(
-                            task,
-                            max_rounds_planning = 50,
-                            max_rounds_control = 100,
-                            max_plan_steps = 3,
-                            n_plan_reviews = 1,
-                            plan_instructions = '',
-                            engineer_instructions = '',
-                            researcher_instructions = '',
-                            hardware_constraints = '',
-                            max_n_attempts = 3,
-                            planner_model = default_agents_llm_model['planner'],
-                            plan_reviewer_model = default_agents_llm_model['plan_reviewer'],
-                            engineer_model = default_agents_llm_model['engineer'],
-                            researcher_model = default_agents_llm_model['researcher'],
-                            idea_maker_model = default_agents_llm_model['idea_maker'],
-                            idea_hater_model = default_agents_llm_model['idea_hater'],
-                            work_dir = work_dir_default,
-                            researcher_filename = shared_context_default['researcher_filename'],
-                            default_llm_model = default_llm_model_default,
-                            default_formatter_model = default_formatter_model_default,
-                            api_keys = None,
-                            ):
-
-    # Create work directory if it doesn't exist
-    Path(work_dir).expanduser().resolve().mkdir(parents=True, exist_ok=True)
-    
-
-    ## planning
-    planning_dir = Path(work_dir).expanduser().resolve() / "planning"
-    planning_dir.mkdir(parents=True, exist_ok=True)
-
-    start_time = time.time()
-    
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
-
-    planner_config = get_model_config(planner_model, api_keys)
-    plan_reviewer_config = get_model_config(plan_reviewer_model, api_keys)
-    
-    cmbagent = CMBAgent(work_dir = planning_dir,
-                        default_llm_model = default_llm_model,
-                        default_formatter_model = default_formatter_model,
-                        agent_llm_configs = {
-                            'planner': planner_config,
-                            'plan_reviewer': plan_reviewer_config,
-                        },
-                        api_keys = api_keys
-                        )
-    end_time = time.time()
-    initialization_time_planning = end_time - start_time
-
-
-
-    start_time = time.time()
-    cmbagent.solve(task,
-                max_rounds=max_rounds_planning,
-                initial_agent="plan_setter",
-                shared_context = {'feedback_left': n_plan_reviews,
-                                    'max_n_attempts': max_n_attempts,
-                                    'maximum_number_of_steps_in_plan': max_plan_steps,
-                                    'planner_append_instructions': plan_instructions,
-                                    'engineer_append_instructions': engineer_instructions,
-                                    'researcher_append_instructions': researcher_instructions,
-                                    'plan_reviewer_append_instructions': plan_instructions,
-                                    'hardware_constraints': hardware_constraints,
-                                    'researcher_filename': researcher_filename}
-                )
-    end_time = time.time()
-    execution_time_planning = end_time - start_time
-
-
-    # Create a dummy groupchat attribute if it doesn't exist
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-
-    # Now call display_cost without triggering the AttributeError
-    cmbagent.display_cost()
-
-    planning_output = copy.deepcopy(cmbagent.final_context)
-    outfile = save_final_plan(planning_output, planning_dir)
-    print(f"Structured plan written to {outfile}")
-    print(f"Planning took {execution_time_planning:.4f} seconds")
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time_planning': initialization_time_planning,
-        'execution_time_planning': execution_time_planning, 
-        'total_time': initialization_time_planning + execution_time_planning
-    }
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Save to JSON file in workdir
-    timing_path = os.path.join(planning_output['work_dir'], f"time/timing_report_planning_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-    
-    print(f"\nTiming report data saved to: {timing_path}\n")
-
-    ## delete empty folders during control
-    database_full_path = os.path.join(planning_output['work_dir'], planning_output['database_path'])
-    codebase_full_path = os.path.join(planning_output['work_dir'], planning_output['codebase_path'])
-    time_full_path = os.path.join(planning_output['work_dir'],'time')
-    for folder in [database_full_path, codebase_full_path, time_full_path]:
-        if not os.listdir(folder):
-            os.rmdir(folder)
-    
-    ## control
-    engineer_config = get_model_config(engineer_model, api_keys)
-    researcher_config = get_model_config(researcher_model, api_keys)
-    idea_maker_config = get_model_config(idea_maker_model, api_keys)
-    idea_hater_config = get_model_config(idea_hater_model, api_keys)
-        
-    control_dir = Path(work_dir).expanduser().resolve() / "control"
-    control_dir.mkdir(parents=True, exist_ok=True)
-
-    start_time = time.time()
-    cmbagent = CMBAgent(
-        work_dir = control_dir,
-        default_llm_model = default_llm_model,
-        default_formatter_model = default_formatter_model,
-        agent_llm_configs = {
-                            'engineer': engineer_config,
-                            'researcher': researcher_config,
-                            'idea_maker': idea_maker_config,
-                            'idea_hater': idea_hater_config,
-        },
-        api_keys = api_keys
-        )
-    
-
-    # print(f"in cmbagent.py: idea_maker_config: {idea_maker_config}")
-    # print(f"in cmbagent.py: idea_hater_config: {idea_hater_config}")
-    
-    end_time = time.time()
-    initialization_time_control = end_time - start_time
-        
-
-    start_time = time.time()    
-    cmbagent.solve(task,
-                    max_rounds=max_rounds_control,
-                    initial_agent="control",
-                    shared_context = planning_output
-                    )
-    end_time = time.time()
-    execution_time_control = end_time - start_time
-    
-    results = {'chat_history': cmbagent.chat_result.chat_history,
-               'final_context': cmbagent.final_context}
-    
-    results['initialization_time_planning'] = initialization_time_planning
-    results['execution_time_planning'] = execution_time_planning
-    results['initialization_time_control'] = initialization_time_control
-    results['execution_time_control'] = execution_time_control
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time_planning': initialization_time_planning,
-        'execution_time_planning': execution_time_planning, 
-        'initialization_time_control': initialization_time_control,
-        'execution_time_control': execution_time_control,
-        'total_time': initialization_time_planning + execution_time_planning + initialization_time_control + execution_time_control
-    }
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save to JSON file in workdir
-    timing_path = os.path.join(results['final_context']['work_dir'], f"time/timing_report_control_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-
-    
-    # Create a dummy groupchat attribute if it doesn't exist
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-
-    # Now call display_cost without triggering the AttributeError
-    cmbagent.display_cost()
-
-    ## delete empty folders during control
-    database_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['database_path'])
-    codebase_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['codebase_path'])
-    time_full_path = os.path.join(results['final_context']['work_dir'],'time')
-    for folder in [database_full_path, codebase_full_path, time_full_path]:
-        if not os.listdir(folder):
-            os.rmdir(folder)
-    return results
-
-
-def load_plan(plan_path):
-    """Load a plan from a JSON file into a dictionary"""
-    plan_path = os.path.expanduser(plan_path)  # Expands '~' 
-    with open(plan_path, 'r') as f:
-        plan_dict = json.load(f)
-    
-    return plan_dict
-
-
-def _parse_formatted_content(content):
-    """
-    Parse the formatted markdown content from summarizer_response_formatter to extract structured data.
-    The content is in markdown format with specific sections.
-    """
-    import re
-    
-    summary_data = {}
-    
-    try:
-        # Extract title (first heading)
-        title_match = re.search(r'^# (.+)', content, re.MULTILINE)
-        if title_match:
-            summary_data['title'] = title_match.group(1).strip()
-        
-        # Extract authors
-        authors_match = re.search(r'\*\*Authors:\*\*\s*(.+)', content)
-        if authors_match:
-            authors_text = authors_match.group(1).strip()
-            summary_data['authors'] = [author.strip() for author in authors_text.split(',')]
-        
-        # Extract date  
-        date_match = re.search(r'\*\*Date:\*\*\s*(.+)', content)
-        if date_match:
-            summary_data['date'] = date_match.group(1).strip()
-
-        # Extract journal
-        journal_match = re.search(r'\*\*Journal:\*\*\s*(.+)', content)
-        if journal_match:
-            summary_data['journal'] = journal_match.group(1).strip()
-        
-        # Extract abstract
-        abstract_match = re.search(r'\*\*Abstract:\*\*\s*(.+?)(?=\n\n\*\*|\n\*\*|\Z)', content, re.DOTALL)
-        if abstract_match:
-            summary_data['abstract'] = abstract_match.group(1).strip()
-        
-        # Extract keywords
-        keywords_match = re.search(r'\*\*Keywords:\*\*\s*(.+?)(?=\n\n\*\*|\n\*\*|\Z)', content, re.DOTALL)
-        if keywords_match:
-            keywords_text = keywords_match.group(1).strip()
-            summary_data['keywords'] = [keyword.strip() for keyword in keywords_text.split(',')]
-        
-        # Extract key findings
-        findings_match = re.search(r'\*\*Key Findings:\*\*\s*\n(.*?)(?=\n\n\*\*|\n\*\*|\Z)', content, re.DOTALL)
-        if findings_match:
-            findings_text = findings_match.group(1).strip()
-            findings_lines = [line.strip('- ').strip() for line in findings_text.split('\n') if line.strip() and line.strip().startswith('-')]
-            summary_data['key_findings'] = findings_lines
-        
-        # Extract scientific software
-        software_match = re.search(r'\*\*Scientific Software:\*\*\s*\n(.*?)(?=\n\n\*\*|\n\*\*|\Z)', content, re.DOTALL)
-        if software_match:
-            software_text = software_match.group(1).strip()
-            if software_text and not software_text.lower().startswith('none'):
-                software_lines = [line.strip('- ').strip() for line in software_text.split('\n') if line.strip() and line.strip().startswith('-')]
-                summary_data['scientific_software'] = software_lines
-            else:
-                summary_data['scientific_software'] = []
-        
-        # Extract data sources
-        sources_match = re.search(r'\*\*Data Sources:\*\*\s*\n(.*?)(?=\n\n\*\*|\n\*\*|\Z)', content, re.DOTALL)
-        if sources_match:
-            sources_text = sources_match.group(1).strip()
-            if sources_text and not sources_text.lower().startswith('none'):
-                sources_lines = [line.strip('- ').strip() for line in sources_text.split('\n') if line.strip() and line.strip().startswith('-')]
-                summary_data['data_sources'] = sources_lines
-            else:
-                summary_data['data_sources'] = []
-        
-        # Extract data sets
-        datasets_match = re.search(r'\*\*Data Sets:\*\*\s*\n(.*?)(?=\n\n\*\*|\n\*\*|\Z)', content, re.DOTALL)
-        if datasets_match:
-            datasets_text = datasets_match.group(1).strip()
-            if datasets_text and not datasets_text.lower().startswith('none'):
-                datasets_lines = [line.strip('- ').strip() for line in datasets_text.split('\n') if line.strip() and line.strip().startswith('-')]
-                summary_data['data_sets'] = datasets_lines
-            else:
-                summary_data['data_sets'] = []
-        
-        # Extract data analysis methods
-        methods_match = re.search(r'\*\*Data Analysis Methods:\*\*\s*\n(.*?)(?=\n\n\*\*|\n\*\*|\Z)', content, re.DOTALL)
-        if methods_match:
-            methods_text = methods_match.group(1).strip()
-            if methods_text:
-                methods_lines = [line.strip('- ').strip() for line in methods_text.split('\n') if line.strip() and line.strip().startswith('-')]
-                summary_data['data_analysis_methods'] = methods_lines
-            else:
-                summary_data['data_analysis_methods'] = []
-                
-    except Exception as e:
-        print(f"Warning: Error parsing formatted content: {e}")
-        return None
-    
-    return summary_data if summary_data else None
-
-
-def summarize_document(markdown_document_path, 
-                       work_dir = work_dir_default, 
-                       clear_work_dir = True,
-                       summarizer_model = default_agents_llm_model['summarizer'],
-                       summarizer_response_formatter_model = default_agents_llm_model['summarizer_response_formatter']):
-    
-    api_keys = get_api_keys_from_env()
-    # load the document from the document_path to markdown file:
-    with open(markdown_document_path, 'r') as f:
-        markdown_document = f.read()
-    
-    # Create work directory if it doesn't exist  
-    work_dir = Path(work_dir).expanduser().resolve()
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    if clear_work_dir:
-        clean_work_dir(work_dir)
-
-    summarizer_config = get_model_config(summarizer_model, api_keys)
-    summarizer_response_formatter_config = get_model_config(summarizer_response_formatter_model, api_keys)
-    cmbagent = CMBAgent(
-        work_dir = work_dir,
-        agent_llm_configs = {
-                            'summarizer': summarizer_config,
-                            'summarizer_response_formatter': summarizer_response_formatter_config,
-        },
-        api_keys = api_keys,
-    )
-
-    start_time = time.time()
-    cmbagent.solve(markdown_document,
-                    max_rounds=10,
-                    initial_agent="summarizer",
-                    shared_context = {'current_plan_step_number': 'document_summarizer' }
-                    )
-    end_time = time.time()
-    execution_time_summarization = end_time - start_time
-
-    # Extract the final result from the CMBAgent
-    final_context = cmbagent.final_context.data if hasattr(cmbagent.final_context, 'data') else cmbagent.final_context
-    chat_result = cmbagent.chat_result
-    
-    # Extract structured JSON from the chat result
-    document_summary = None
-    if hasattr(chat_result, 'chat_history'):
-        # Look for the summarizer_response_formatter response in the chat history
-        # This agent uses a Pydantic BaseModel with structured output
-        for message in chat_result.chat_history:
-            if isinstance(message, dict) and message.get('name') == 'summarizer_response_formatter':
-                # The response_format should contain the structured data
-                # Try to extract from tool_calls or parse the formatted content
-                if 'tool_calls' in message:
-                    # Try to get structured data from tool calls
-                    for tool_call in message.get('tool_calls', []):
-                        if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'arguments'):
-                            try:
-                                import json
-                                document_summary = json.loads(tool_call.function.arguments)
-                                break
-                            except:
-                                continue
-                
-                if not document_summary:
-                    # Fallback: parse the formatted content back to structured data
-                    formatter_content = message.get('content', '')
-                    document_summary = _parse_formatted_content(formatter_content)
-                break
-    
-    # Save structured summary to JSON if we have it
-    if document_summary and work_dir:
-        try:
-            import json
-            import os
-            summary_file = os.path.join(work_dir, 'document_summary.json')
-            with open(summary_file, 'w', encoding='utf-8') as f:
-                json.dump(document_summary, f, indent=2, ensure_ascii=False)
-            print(f"Document summary saved to: {summary_file}")
-        except Exception as e:
-            print(f"Warning: Could not save document_summary.json: {e}")
-    
-    # # Return structured output
-    # result = {
-    #     'chat_history': chat_result.chat_history if hasattr(chat_result, 'chat_history') else [],
-    #     'final_context': final_context,
-    #     'execution_time': execution_time_summarization,
-    #     'work_dir': work_dir,
-    #     'document_summary': document_summary,
-    # }
-    # pretty print the document_summary
-    print(json.dumps(document_summary, indent=4))
-
-    # delete codebase and database folders as they are not needed
-    shutil.rmtree(os.path.join(work_dir, final_context['codebase_path']), ignore_errors=True)
-    shutil.rmtree(os.path.join(work_dir, final_context['database_path']), ignore_errors=True)
-    
-    cmbagent.display_cost()
-
-
-    return document_summary
-
-
-def summarize_documents(folder_path, 
-                       work_dir_base = work_dir_default, 
-                       clear_work_dir = True,
-                       summarizer_model = default_agents_llm_model['summarizer'],
-                       summarizer_response_formatter_model = default_agents_llm_model['summarizer_response_formatter'],
-                       max_workers = 4,
-                       max_depth = 10):
-    """
-    Process multiple markdown documents in parallel, summarizing each one.
-    
-    Args:
-        folder_path (str): Path to folder containing markdown files
-        work_dir_base (str): Base working directory for output
-        clear_work_dir (bool): Whether to clear the working directory
-        summarizer_model: Model to use for summarizer agent
-        summarizer_response_formatter_model: Model to use for formatter agent
-        max_workers (int): Maximum number of parallel workers
-        max_depth (int): Maximum depth for recursive file search
-        
-    Returns:
-        Dict: Summary of processing results including individual document summaries
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    import glob
-    import json
-    import time
-    import os
-    
-    api_keys = get_api_keys_from_env()
-    folder_path = Path(folder_path).resolve()
-    
-    if not folder_path.exists():
-        raise FileNotFoundError(f"Folder not found: {folder_path}")
-    if not folder_path.is_dir():
-        raise ValueError(f"Path is not a directory: {folder_path}")
-        
-    print(f"📁 Scanning folder: {folder_path}")
-    print(f"🔍 Max depth: {max_depth}")
-    print(f"👥 Max workers: {max_workers}")
-    
-    # Collect all markdown files
-    markdown_files = _collect_markdown_files(folder_path, max_depth)
-    
-    if not markdown_files:
-        print("⚠️ No markdown files found in the specified folder.")
-        return {
-            "processed_files": 0,
-            "failed_files": 0,
-            "total_files": 0,
-            "results": [],
-            "folder_path": str(folder_path),
-            "work_dir_base": str(work_dir_base)
-        }
-    
-    print(f"📄 Found {len(markdown_files)} markdown files")
-    
-    # Create base work directory
-    work_dir_base = Path(work_dir_base).expanduser().resolve() 
-    work_dir_base.mkdir(parents=True, exist_ok=True)
-    
-    # Initialize results
-    results = {
-        "processed_files": 0,
-        "failed_files": 0,
-        "total_files": len(markdown_files),
-        "results": [],
-        "folder_path": str(folder_path),
-        "work_dir_base": str(work_dir_base)
-    }
-    
-    start_time = time.time()
-
-    if clear_work_dir:
-        clean_work_dir(work_dir_base)
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
-        future_to_markdown = {
-            executor.submit(
-                _process_single_markdown_with_error_handling,
-                markdown_path,
-                i + 1,  # 1-indexed
-                work_dir_base,
-                clear_work_dir,
-                summarizer_model,
-                summarizer_response_formatter_model
-            ): (markdown_path, i + 1) for i, markdown_path in enumerate(markdown_files)
-        }
-        
-        # Process completed tasks
-        for future in as_completed(future_to_markdown):
-            markdown_path, index = future_to_markdown[future]
-            
-            try:
-                result = future.result()
-                if result.get("success", False):
-                    results["processed_files"] += 1
-                    print(f"✓ Processed [{index:02d}]: {Path(markdown_path).name}")
-                else:
-                    results["failed_files"] += 1
-                    print(f"✗ Failed [{index:02d}]: {Path(markdown_path).name} - {result.get('error', 'Unknown error')}")
-                
-                results["results"].append(result)
-            except Exception as e:
-                results["failed_files"] += 1
-                print(f"✗ Failed [{index:02d}]: {Path(markdown_path).name} - {str(e)}")
-                results["results"].append({
-                    "markdown_path": str(markdown_path),
-                    "index": index,
-                    "success": False,
-                    "error": str(e)
-                })
-    
-    end_time = time.time()
-    total_time = end_time - start_time
-    
-    print(f"\n📋 Processing complete:")
-    print(f"  Successfully processed: {results['processed_files']} files")
-    print(f"  Failed: {results['failed_files']} files") 
-    print(f"  Total time: {total_time:.2f} seconds")
-    print(f"  Output directory: {results['work_dir_base']}")
-    
-    # Save overall summary
-    summary_file = work_dir_base / "processing_summary.json"
-    try:
-        results["processing_time"] = total_time
-        results["timestamp"] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
-        
-        with open(summary_file, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"📄 Overall summary saved to: {summary_file}")
-    except Exception as e:
-        print(f"⚠️ Warning: Could not save overall summary: {e}")
-    
-    return results
-
-
-def _collect_markdown_files(folder_path: Path, max_depth: int = 10) -> List[str]:
-    """Collect all markdown files from the folder and subfolders."""
-    markdown_files = []
-    
-    # Use glob to find all markdown files recursively
-    for ext in ['*.md', '*.markdown']:
-        pattern = str(folder_path / "**" / ext)
-        markdown_files.extend(glob.glob(pattern, recursive=True))
-    
-    # Filter by depth if needed
-    if max_depth < float('inf'):
-        filtered_files = []
-        for markdown_file in markdown_files:
-            relative_path = Path(markdown_file).relative_to(folder_path)
-            depth = len(relative_path.parts) - 1  # -1 because the file itself is not a directory
-            if depth <= max_depth:
-                filtered_files.append(markdown_file)
-        markdown_files = filtered_files
-    
-    return sorted(markdown_files)
-
-
-def _process_single_markdown_with_error_handling(markdown_path: str,
-                                               index: int,
-                                               work_dir_base: Path,
-                                               clear_work_dir: bool,
-                                               summarizer_model: str,
-                                               summarizer_response_formatter_model: str) -> Dict[str, Any]:
-    """Process a single markdown file with error handling."""
-    try:
-        # Create indexed work directory for this document
-        work_dir = work_dir_base / f"doc_{index:03d}_{Path(markdown_path).stem}"
-        
-        # Extract arXiv ID from filename if possible
-        import re
-        filename = Path(markdown_path).stem
-        arxiv_id_pattern = r'([0-9]+\.[0-9]+(?:v[0-9]+)?)'
-        arxiv_match = re.search(arxiv_id_pattern, filename)
-        arxiv_id = arxiv_match.group(1) if arxiv_match else None
-        
-        # time the summarize_document function
-        start_time = time.time()
-
-        # Call the individual summarize_document function
-        summary = summarize_document(
-            markdown_document_path=markdown_path,
-            work_dir=work_dir,
-            clear_work_dir=clear_work_dir,
-            summarizer_model=summarizer_model,
-            summarizer_response_formatter_model=summarizer_response_formatter_model
-        )
-        end_time = time.time()
-        execution_time_summarization = end_time - start_time
-        print(f"Execution time summarization: {execution_time_summarization}")
-
-        # save the timing report
-        timing_report = {
-            "execution_time_summarization": execution_time_summarization,
-            "arxiv_id": arxiv_id
-        }
-        timing_path = os.path.join(work_dir, "time/timing_report_summarization.json")
-        with open(timing_path, 'w') as f:
-            json.dump(timing_report, f, indent=2)
-        print(f"Timing report saved to {timing_path}")
-
-        return {
-            "markdown_path": str(markdown_path),
-            "index": index,
-            "work_dir": str(work_dir),
-            "success": True,
-            "document_summary": summary,
-            "filename": Path(markdown_path).name,
-            "arxiv_id": arxiv_id
-        }
-        
-    except Exception as e:
-        # Extract arXiv ID even in error case
-        import re
-        filename = Path(markdown_path).stem
-        arxiv_id_pattern = r'([0-9]+\.[0-9]+(?:v[0-9]+)?)'
-        arxiv_match = re.search(arxiv_id_pattern, filename)
-        arxiv_id = arxiv_match.group(1) if arxiv_match else None
-        
-        return {
-            "markdown_path": str(markdown_path),
-            "index": index,
-            "success": False,
-            "error": str(e),
-            "filename": Path(markdown_path).name,
-            "arxiv_id": arxiv_id
-        }
-
-
-def control(
-            task,
-            plan = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'plans', 'idea_plan.json'),
-            max_rounds = 100,
-            max_plan_steps = 3,
-            n_plan_reviews = 1,
-            plan_instructions = '',
-            engineer_instructions = '',
-            researcher_instructions = '',
-            hardware_constraints = '',
-            max_n_attempts = 3,
-            planner_model = default_agents_llm_model['planner'],
-            plan_reviewer_model = default_agents_llm_model['plan_reviewer'],
-            engineer_model = default_agents_llm_model['engineer'],
-            researcher_model = default_agents_llm_model['researcher'],
-            idea_maker_model = default_agents_llm_model['idea_maker'],
-            idea_hater_model = default_agents_llm_model['idea_hater'],
-            plot_judge_model = default_agents_llm_model['plot_judge'],
-            work_dir = work_dir_default,
-            clear_work_dir = True,
-            api_keys = None,
-            ):
-    
-    # check work_dir exists
-    if not os.path.exists(work_dir):
-        os.makedirs(work_dir)
-
-    planning_input = load_plan(plan)["sub_tasks"]
-
-    context = {'final_plan': planning_input,
-               "number_of_steps_in_plan": len(planning_input),
-               "agent_for_sub_task": planning_input[0]['sub_task_agent'],
-               "current_sub_task": planning_input[0]['sub_task'],
-               "current_instructions": ''}
-    for bullet in planning_input[0]['bullet_points']:
-        context["current_instructions"] += f"\t\t- {bullet}\n"
-
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
-
-    ## control
-    engineer_config = get_model_config(engineer_model, api_keys)
-    researcher_config = get_model_config(researcher_model, api_keys)
-    idea_maker_config = get_model_config(idea_maker_model, api_keys)
-    idea_hater_config = get_model_config(idea_hater_model, api_keys)
-    plot_judge_config = get_model_config(plot_judge_model, api_keys)        
-    control_dir = Path(work_dir).expanduser().resolve() / "control"
-    control_dir.mkdir(parents=True, exist_ok=True)
-
-    start_time = time.time()
-    cmbagent = CMBAgent(
-        work_dir = control_dir,
-        agent_llm_configs = {
-                            'engineer': engineer_config,
-                            'researcher': researcher_config,
-                            'idea_maker': idea_maker_config,
-                            'idea_hater': idea_hater_config,
-                            'plot_judge': plot_judge_config,
-        },
-        clear_work_dir = clear_work_dir,
-        api_keys = api_keys
-        )
-    
-    end_time = time.time()
-    initialization_time_control = end_time - start_time
-    
-    start_time = time.time()    
-    cmbagent.solve(task,
-                    max_rounds=max_rounds,
-                    initial_agent="control",
-                    shared_context = context
-                    )
-    end_time = time.time()
-    execution_time_control = end_time - start_time
-    
-    results = {'chat_history': cmbagent.chat_result.chat_history,
-               'final_context': cmbagent.final_context}
-    
-    results['initialization_time_control'] = initialization_time_control
-    results['execution_time_control'] = execution_time_control
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time_control': initialization_time_control,
-        'execution_time_control': execution_time_control,
-        'total_time': initialization_time_control + execution_time_control
-    }
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save to JSON file in workdir
-    timing_path = os.path.join(results['final_context']['work_dir'], f"time/timing_report_control_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-
-    # Create a dummy groupchat attribute if it doesn't exist
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-
-    # Now call display_cost without triggering the AttributeError
-    cmbagent.display_cost()
-    ## delete empty folders during control
-    database_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['database_path'])
-    codebase_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['codebase_path'])
-    time_full_path = os.path.join(results['final_context']['work_dir'],'time')
-    for folder in [database_full_path, codebase_full_path, time_full_path]:
-        if not os.listdir(folder):
-            os.rmdir(folder)
-
-    return results
-
-def one_shot(
-            task,
-            max_rounds = 50,
-            max_n_attempts = 3,
-            engineer_model = default_agents_llm_model['engineer'],
-            researcher_model = default_agents_llm_model['researcher'],
-            plot_judge_model = default_agents_llm_model['plot_judge'],
-            camb_context_model = default_agents_llm_model['camb_context'],
-            default_llm_model = default_llm_model_default,
-            default_formatter_model = default_formatter_model_default,
-            researcher_filename = shared_context_default['researcher_filename'],
-            agent = 'engineer',
-            work_dir = work_dir_default,
-            api_keys = None,
-            clear_work_dir = False,
-            evaluate_plots = False,
-            max_n_plot_evals = 1,
-            inject_wrong_plot: bool | str = False,
-            ):
-    start_time = time.time()
-    work_dir = os.path.expanduser(work_dir)
-    work_dir = Path(work_dir).expanduser().resolve()
-
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
-    
-    engineer_config = get_model_config(engineer_model, api_keys)
-    researcher_config = get_model_config(researcher_model, api_keys)
-    plot_judge_config = get_model_config(plot_judge_model, api_keys)
-    camb_context_config = get_model_config(camb_context_model, api_keys)
-
-    
-    cmbagent = CMBAgent(
-        mode = "one_shot",
-        work_dir = work_dir,
-        agent_llm_configs = {
-                            'engineer': engineer_config,
-                            'researcher': researcher_config,
-                            'plot_judge': plot_judge_config,
-                            'camb_context': camb_context_config,    
-        },
-        clear_work_dir = clear_work_dir,
-        api_keys = api_keys,
-
-        default_llm_model = default_llm_model,
-        default_formatter_model = default_formatter_model,
-        )
-        
-    end_time = time.time()
-    initialization_time = end_time - start_time
-
-    start_time = time.time()
-
-    shared_context = {'max_n_attempts': max_n_attempts, 'evaluate_plots': evaluate_plots, 'max_n_plot_evals': max_n_plot_evals, 'inject_wrong_plot': inject_wrong_plot}
-
-    if agent == 'camb_context':
-
-        # Fetch the file (30-second safety timeout)
-        resp = requests.get(camb_context_url, timeout=30) # use something different different... debug this lines
-        resp.raise_for_status()           # Raises an HTTPError for non-200 codes
-        camb_context = resp.text          # Whole document as one long string
-
-        shared_context["camb_context"] = camb_context
-
-
-    if agent == 'classy_context':
-
-        # Fetch the file (30-second safety timeout)
-        resp = requests.get(classy_context_url, timeout=30)
-        resp.raise_for_status()           # Raises an HTTPError for non-200 codes
-        classy_context = resp.text          # Whole document as one long string
-
-        shared_context["classy_context"] = classy_context
-
-
-    if researcher_filename is not None: 
-        shared_context["researcher_filename"] = researcher_filename
-
-    # print(f"shared_context: {shared_context}")
-    # import sys
-    # sys.exit()
-
-    cmbagent.solve(task,
-                    max_rounds=max_rounds,
-                    initial_agent=agent,
-                    mode = "one_shot",
-                    shared_context = shared_context
-                    )
-    
-    end_time = time.time()
-    execution_time = end_time - start_time
-    
-    # Create a dummy groupchat attribute if it doesn't exist
-    # print('creating groupchat for cost display...')
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-    # print('groupchat created for cost display')
-    # Now call display_cost without triggering the AttributeError
-    # print('displaying cost...')
-    cmbagent.display_cost()
-    # print('cost displayed')
-
-    results = {'chat_history': cmbagent.chat_result.chat_history,
-               'final_context': cmbagent.final_context,
-               'engineer':cmbagent.get_agent_object_from_name('engineer'),
-               'engineer_response_formatter':cmbagent.get_agent_object_from_name('engineer_response_formatter'),
-               'researcher':cmbagent.get_agent_object_from_name('researcher'),
-               'researcher_response_formatter':cmbagent.get_agent_object_from_name('researcher_response_formatter'),
-               'plot_judge':cmbagent.get_agent_object_from_name('plot_judge'),
-               'plot_debugger':cmbagent.get_agent_object_from_name('plot_debugger')}
-    
-    
-    results['initialization_time'] = initialization_time
-    results['execution_time'] = execution_time
-
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time': initialization_time,
-        'execution_time': execution_time,
-        'total_time': initialization_time + execution_time
-    }
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save to JSON file in workdir
-    timing_path = os.path.join(work_dir, f"time/timing_report_{timestamp}.json")
-
-
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-
-    print("\nTiming report saved to", timing_path)
-    print("\nTask took", f"{execution_time:.4f}", "seconds")
-
-    ## delete empty folders during control
-    database_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['database_path'])
-    codebase_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['codebase_path'])
-    time_full_path = os.path.join(results['final_context']['work_dir'],'time')
-    for folder in [database_full_path, codebase_full_path, time_full_path]:
-        if not os.listdir(folder):
-            os.rmdir(folder)
-
-    return results
-
-def human_in_the_loop(task,
-         work_dir = work_dir_default,
-         max_rounds = 50,
-         max_n_attempts = 3,
-         engineer_model = 'gpt-4o-2024-11-20',
-         researcher_model = 'gpt-4o-2024-11-20',
-         agent = 'engineer',
-         api_keys = None,
-         ):
-
-    ## control
-    start_time = time.time()
-
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
-
-    engineer_config = get_model_config(engineer_model, api_keys)
-    researcher_config = get_model_config(researcher_model, api_keys)
-
-    cmbagent = CMBAgent(
-        work_dir = work_dir,
-        agent_llm_configs = {
-                            'engineer': engineer_config,
-                            'researcher': researcher_config,
-        },
-        mode = "chat",
-        chat_agent = agent,
-        api_keys = api_keys
-        )
-        
-    end_time = time.time()
-    initialization_time = end_time - start_time
-
-    start_time = time.time()
-
-    cmbagent.solve(task,
-                    max_rounds=max_rounds,
-                    initial_agent=agent,
-                    shared_context = {'max_n_attempts': max_n_attempts},
-                    mode = "chat")
-    
-    end_time = time.time()
-    execution_time = end_time - start_time
-
-    results = {'chat_history': cmbagent.chat_result.chat_history,
-               'final_context': cmbagent.final_context,
-               'engineer':cmbagent.get_agent_object_from_name('engineer'),
-               'engineer_nest':cmbagent.get_agent_object_from_name('engineer_nest'),
-               'engineer_response_formatter':cmbagent.get_agent_object_from_name('engineer_response_formatter'),
-               'researcher':cmbagent.get_agent_object_from_name('researcher'),
-               'researcher_response_formatter':cmbagent.get_agent_object_from_name('researcher_response_formatter')}
-    
-    results['initialization_time'] = initialization_time
-    results['execution_time'] = execution_time
-
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-    # print('groupchat created for cost display')
-    # Now call display_cost without triggering the AttributeError
-    # print('displaying cost...')
-    cmbagent.display_cost()
-    # print('cost displayed')
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time': initialization_time,
-        'execution_time': execution_time,
-        'total_time': initialization_time + execution_time
-    }
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save to JSON file in workdir
-    timing_path = os.path.join(work_dir, f"timing_report_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)   
-
-    return results
-
-def get_keywords(input_text: str, n_keywords: int = 5, 
-                 work_dir = work_dir_default, 
-                 api_keys = get_api_keys_from_env(),
-                 kw_type = 'unesco'):
-    """
-    Get keywords from input text.
-
-    Args:
-        input_text (str): Text to extract keywords from
-        n_keywords (int, optional): Number of keywords to extract. Defaults to 5.
-        **kwargs: Additional keyword arguments
-
-    Returns:
-        dict: Dictionary of keywords
-    """
-    if kw_type == 'aas':
-        return get_aas_keywords(input_text, n_keywords, work_dir, api_keys)
-    elif kw_type == 'unesco':
-
-        aggregated_keywords = []
-
-        ukw = UnescoKeywords(unesco_taxonomy_path)
-        keywords_string = ', '.join(ukw.get_unesco_level1_names())
-        n_keywords_level1  = ukw.n_keywords_level1
-        domains = get_keywords_from_string(input_text, keywords_string, n_keywords_level1, work_dir, api_keys)
-
-        print('domains:')
-        print(domains)
-        domains.append('MATHEMATICS') if not 'MATHEMATICS' in domains else None
-        aggregated_keywords.extend(domains)
-
-        for domain in domains:
-            print('inside domain: ', domain)
-            if '&' in domain:
-                domain = domain.replace('&', '\\&')
-            keywords_string = ', '.join(ukw.get_unesco_level2_names(domain))
-            n_keywords_level2 = ukw.n_keywords_level2
-            sub_fields = get_keywords_from_string(input_text, keywords_string, n_keywords_level2, work_dir, api_keys)
-
-            print('sub_fields:')
-            print(sub_fields)
-            aggregated_keywords.extend(sub_fields)
-
-            for sub_field in sub_fields:
-                print('inside sub_field: ', sub_field)
-                keywords_string = ', '.join(ukw.get_unesco_level3_names(sub_field))
-                n_keywords_level3 = ukw.n_keywords_level3
-                specific_areas = get_keywords_from_string(input_text, keywords_string, n_keywords_level3, work_dir, api_keys)
-                print('specific_areas:')
-                print(specific_areas)
-                aggregated_keywords.extend(specific_areas)
-
-
-        aggregated_keywords = list(set(aggregated_keywords))
-        keywords_string = ', '.join(aggregated_keywords)
-        keywords = get_keywords_from_string(input_text, keywords_string, n_keywords, work_dir, api_keys)
-
-        print('keywords in unesco:')
-        print(keywords)
-        return keywords
-    elif kw_type == 'aaai':
-        return get_keywords_from_aaai(input_text, n_keywords, work_dir, api_keys)
-
-        
-        # return aas_keywords
-
-
-
-
-def get_keywords_from_aaai(input_text, n_keywords=6, work_dir=work_dir_default, api_keys=get_api_keys_from_env()):
-    start_time = time.time()
-    cmbagent = CMBAgent(work_dir = work_dir, api_keys = api_keys)
-    end_time = time.time()
-    initialization_time = end_time - start_time
-
-    PROMPT = f"""
-    {input_text}
-    """
-    start_time = time.time()
-
-    aaai_keywords = AaaiKeywords(aaai_keywords_path)
-
-    keywords_string = aaai_keywords.aaai_keywords_string
-
-    
-    cmbagent.solve(task="Find the relevant keywords in the provided list",
-            max_rounds=2,
-            initial_agent='aaai_keywords_finder',
-            mode = "one_shot",
-            shared_context={
-            'text_input_for_AAS_keyword_finder': PROMPT,
-            'AAS_keywords_string': keywords_string,
-            'N_AAS_keywords': n_keywords,
-                            }
-            )
-    end_time = time.time()
-    execution_time = end_time - start_time
-    # aas_keywords = cmbagent.final_context['aas_keywords'] ## here you get the dict with urls
-
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-    # print('groupchat created for cost display')
-    # Now call display_cost without triggering the AttributeError
-    # print('displaying cost...')
-    cmbagent.display_cost()
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time': initialization_time,
-        'execution_time': execution_time,
-        'total_time': initialization_time + execution_time
-    }   
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save to JSON file in workdir
-    timing_path = os.path.join(work_dir, f"timing_report_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-
-    # grab last user message with role "user"
-    user_msg = next(
-        (msg["content"] for msg in cmbagent.chat_result.chat_history if msg.get("role") == "user"),
-        ""
-    )
-
-    # extract lines starting with a dash
-    keywords = [line.lstrip("-").strip() for line in user_msg.splitlines() if line.startswith("-")]
-    return keywords
-
-
-def get_keywords_from_string(input_text,keywords_string, n_keywords, work_dir, api_keys):
-    start_time = time.time()
-    cmbagent = CMBAgent(work_dir = work_dir, api_keys = api_keys)
-    end_time = time.time()
-    initialization_time = end_time - start_time
-
-    PROMPT = f"""
-    {input_text}
-    """
-    start_time = time.time()
-
-    
-    cmbagent.solve(task="Find the relevant keywords in the provided list",
-            max_rounds=2,
-            initial_agent='list_keywords_finder',
-            mode = "one_shot",
-            shared_context={
-            'text_input_for_AAS_keyword_finder': PROMPT,
-            'AAS_keywords_string': keywords_string,
-            'N_AAS_keywords': n_keywords,
-                            }
-            )
-    end_time = time.time()
-    execution_time = end_time - start_time
-    # aas_keywords = cmbagent.final_context['aas_keywords'] ## here you get the dict with urls
-
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-    # print('groupchat created for cost display')
-    # Now call display_cost without triggering the AttributeError
-    # print('displaying cost...')
-    cmbagent.display_cost()
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time': initialization_time,
-        'execution_time': execution_time,
-        'total_time': initialization_time + execution_time
-    }   
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save to JSON file in workdir
-    timing_path = os.path.join(work_dir, f"timing_report_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-
-    # grab last user message with role "user"
-    user_msg = next(
-        (msg["content"] for msg in cmbagent.chat_result.chat_history if msg.get("role") == "user"),
-        ""
-    )
-
-    # extract lines starting with a dash
-    keywords = [line.lstrip("-").strip() for line in user_msg.splitlines() if line.startswith("-")]
-    return keywords
-
-def get_aas_keywords(input_text: str, n_keywords: int = 5, 
-                 work_dir = work_dir_default, 
-                 api_keys = get_api_keys_from_env()):
-    """
-    Get keywords from input text.
-
-    Args:
-        input_text (str): Text to extract keywords from
-        n_keywords (int, optional): Number of keywords to extract. Defaults to 5.
-        **kwargs: Additional keyword arguments
-
-    Returns:
-        dict: Dictionary of keywords
-    """
-    start_time = time.time()
-    cmbagent = CMBAgent(work_dir = work_dir, api_keys = api_keys)
-    end_time = time.time()
-    initialization_time = end_time - start_time
-
-    PROMPT = f"""
-    {input_text}
-    """
-    start_time = time.time()
-    cmbagent.solve(task="Find the relevant AAS keywords",
-            max_rounds=50,
-            initial_agent='aas_keyword_finder',
-            mode = "one_shot",
-            shared_context={
-            'text_input_for_AAS_keyword_finder': PROMPT,
-            'AAS_keywords_string': AAS_keywords_string,
-            'N_AAS_keywords': n_keywords,
-                            }
-            )
-    end_time = time.time()
-    execution_time = end_time - start_time
-    aas_keywords = cmbagent.final_context['aas_keywords'] ## here you get the dict with urls
-
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-    # print('groupchat created for cost display')
-    # Now call display_cost without triggering the AttributeError
-    # print('displaying cost...')
-    cmbagent.display_cost()
-
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time': initialization_time,
-        'execution_time': execution_time,
-        'total_time': initialization_time + execution_time
-    }   
-
-    # Add timestamp
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Save to JSON file in workdir
-    timing_path = os.path.join(work_dir, f"timing_report_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-
-    print('aas_keywords: ', aas_keywords)
-    
-    return aas_keywords
-
-
-
-def preprocess_task(text: str, 
-                   work_dir: str = work_dir_default,
-                   clear_work_dir: bool = True,
-                   max_workers: int = 4,
-                   max_depth: int = 10,
-                   summarizer_model: str = default_agents_llm_model['summarizer'],
-                   summarizer_response_formatter_model: str = default_agents_llm_model['summarizer_response_formatter'],
-                   skip_arxiv_download: bool = False,
-                   skip_ocr: bool = False,
-                   skip_summarization: bool = False) -> str:
-    """
-    Preprocess a task description by:
-    1. Extracting arXiv URLs and downloading PDFs
-    2. OCRing PDFs to markdown
-    3. Summarizing the papers
-    4. Appending contextual information to the original text
-    
-    Args:
-        text: The input task description text containing arXiv URLs
-        work_dir: Working directory for processing files
-        clear_work_dir: Whether to clear the work directory before starting
-        max_workers: Number of parallel workers for processing
-        max_depth: Maximum directory depth for file searching
-        skip_arxiv_download: Skip the arXiv download step
-        skip_ocr: Skip the OCR step
-        skip_summarization: Skip the summarization step
-        
-    Returns:
-        str: The original text with appended "Contextual Information and References" section
-    """
-    import os
-    from .arxiv_downloader import arxiv_filter
-    from .ocr import process_folder
-    
-    print(f"🔄 Starting task preprocessing...")
-    print(f"📁 Work directory: {work_dir}")
-
-    if clear_work_dir:
-        clean_work_dir(work_dir)
-    
-    # Step 1: Extract arXiv URLs and download PDFs
-    arxiv_results = None
-    if not skip_arxiv_download:
-        print(f"📥 Step 1: Downloading arXiv papers...")
-        try:
-            arxiv_results = arxiv_filter(text, work_dir=work_dir)
-            print(f"✅ Downloaded {arxiv_results['downloads_successful']} papers")
-            print(f"📋 Total papers available: {arxiv_results['downloads_successful'] + arxiv_results['downloads_skipped']} (including previously downloaded)")
-            
-            if arxiv_results['downloads_successful'] + arxiv_results['downloads_skipped'] == 0:
-                print("ℹ️ No arXiv papers found or available, skipping processing steps")
-                return text
-        except Exception as e:
-            print(f"❌ Error downloading arXiv papers: {e}")
-            return text
-    
-    # Get the docs folder path where PDFs were downloaded
-    docs_folder = os.path.join(work_dir, "docs")
-    if not os.path.exists(docs_folder):
-        print("ℹ️ No docs folder found, returning original text")
-        return text
-    
-    # Step 2: OCR PDFs to markdown
-    ocr_results = None
-    if not skip_ocr:
-        print(f"🔍 Step 2: Converting PDFs to markdown...")
-        try:
-            ocr_results = process_folder(
-                folder_path=docs_folder,
-                save_markdown=True,
-                save_json=False,  # We don't need JSON for summarization
-                save_text=False,
-                max_depth=max_depth,
-                max_workers=max_workers,
-                work_dir=work_dir
-            )
-            print(f"✅ OCR processed {ocr_results.get('processed_files', 0)} files")
-            if ocr_results.get('processed_files', 0) == 0:
-                print("ℹ️ No PDF files found for OCR, returning original text")
-                return text
-        except Exception as e:
-            print(f"❌ Error during OCR processing: {e}")
-            return text
-    
-    # Find the markdown output directory from OCR
-    docs_processed_folder = docs_folder + "_processed"
-    if not os.path.exists(docs_processed_folder):
-        print(f"ℹ️ No processed markdown folder found at {docs_processed_folder}, returning original text")
-        return text
-    
-    # Step 3: Summarize the markdown documents
-    summary_results = None
-    if not skip_summarization:
-        print(f"📝 Step 3: Summarizing papers...")
-        try:
-            # Create summaries directory in the main work directory
-            summaries_dir = os.path.join(work_dir, "summaries")
-            summary_results = summarize_documents(
-                folder_path=docs_processed_folder,
-                work_dir_base=summaries_dir,
-                clear_work_dir=clear_work_dir,
-                max_workers=max_workers,
-                max_depth=max_depth,
-                summarizer_model=summarizer_model,
-                summarizer_response_formatter_model=summarizer_response_formatter_model
-            )
-            print(f"✅ Summarized {summary_results.get('processed_files', 0)} documents")
-            
-            if summary_results.get('processed_files', 0) == 0:
-                print("ℹ️ No documents were summarized, returning original text")
-                return text
-            
-            # Step 4: Collect all summaries and format the contextual information
-            print(f"📋 Step 4: Formatting contextual information...")
-            contextual_info = []
-            
-            for result in summary_results.get('results', []):
-                if result.get('success', False) and 'document_summary' in result:
-                    summary = result['document_summary']
-                    arxiv_id = result.get('arxiv_id')
-                    
-                    # Format each summary
-                    title = summary.get('title', 'Unknown Title')
-                    authors = summary.get('authors', [])
-                    authors_str = ', '.join(authors) if authors else 'Unknown Authors'
-                    date = summary.get('date', 'Unknown Date')
-                    abstract = summary.get('abstract', 'No abstract available')
-                    keywords = summary.get('keywords', [])
-                    keywords_str = ', '.join(keywords) if keywords else 'No keywords'
-                    key_findings = summary.get('key_findings', [])
-                    
-                    # Add arXiv ID if available
-                    arxiv_info = f" (arXiv:{arxiv_id})" if arxiv_id else ""
-                    
-                    paper_info = f"""
-**{title}{arxiv_info}**
-- Authors: {authors_str}
-- Date: {date}
-- Keywords: {keywords_str}
-- Abstract: {abstract}"""
-                    
-                    if key_findings:
-                        paper_info += "\n- Key Findings:"
-                        for finding in key_findings:
-                            paper_info += f"\n  • {finding}"
-                    
-                    contextual_info.append(paper_info)
-            
-            # Step 5: Append the contextual information to the original text
-            if contextual_info:
-                footer = "\n\n## Contextual Information and References\n"
-                footer += "\n".join(contextual_info)
-                
-                enhanced_text = text + footer
-                
-                # Save enhanced text to enhanced_input.md
-                enhanced_input_path = os.path.join(work_dir, "enhanced_input.md")
-                try:
-                    with open(enhanced_input_path, 'w', encoding='utf-8') as f:
-                        f.write(enhanced_text)
-                    print(f"💾 Enhanced input saved to: {enhanced_input_path}")
-                except Exception as e:
-                    print(f"⚠️ Warning: Could not save enhanced input: {e}")
-                
-                print(f"✅ Task preprocessing completed successfully!")
-                print(f"📄 Added contextual information from {len(contextual_info)} papers")
-                return enhanced_text
-            else:
-                print("ℹ️ No valid summaries found, returning original text")
-                return text
-        except Exception as e:
-            print(f"❌ Error during summarization: {e}")
-            return text
-    
-    return text
+# Backward compatibility - import workflow utilities
+from cmbagent.workflows.utils import clean_work_dir, load_context, load_plan
+
+# Backward compatibility - import workflow functions
+from cmbagent.workflows import (
+    planning_and_control_context_carryover,
+    planning_and_control,
+    one_shot,
+    human_in_the_loop,
+    control,
+)
+
+# Alias for deep_research
+deep_research = planning_and_control_context_carryover
+
+# Import from keywords module for backward compatibility
+from cmbagent.keywords import (
+    get_keywords,
+    get_keywords_from_string,
+    get_keywords_from_aaai,
+    get_aas_keywords,
+)
+
+# Import from processing module for backward compatibility
+from cmbagent.processing.content_parser import (
+    parse_formatted_content as _parse_formatted_content,
+    collect_markdown_files as _collect_markdown_files,
+    process_single_markdown_with_error_handling as _process_single_markdown_with_error_handling,
+)
+from cmbagent.processing.document_summarizer import summarize_document, summarize_documents
+from cmbagent.processing.task_preprocessor import preprocess_task
+
+
+# Note: Workflow functions (planning_and_control_context_carryover, planning_and_control,
+# one_shot, human_in_the_loop, control) have been moved to cmbagent.workflows module.
+# They are imported above for backward compatibility.
+
+# END OF FILE

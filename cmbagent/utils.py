@@ -4,13 +4,11 @@ import autogen
 import pickle
 import logging
 from ruamel.yaml import YAML
-from autogen.cmbagent_utils import cmbagent_debug
+from .cmbagent_utils import cmbagent_debug
 from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='[%(name)s] %(message)s')
-
-cmbagent_debug = autogen.cmbagent_debug
 
 
 
@@ -35,13 +33,11 @@ path_to_agents = os.path.join(path_to_basedir, "agents/")
 # path_to_executor = os.path.join(path_to_basedir, "executor")
 # path_to_admin = os.path.join(path_to_basedir, "admin")
 
-if "site-packages" in path_to_basedir or "dist-packages" in path_to_basedir:
-    work_dir_default = os.path.join(os.getcwd(), "cmbagent_output")
-else:
-    work_dir_default = os.path.join(path_to_basedir, "../output")
+# Always use current working directory
+work_dir_default = os.path.join(os.getcwd(), "cmbagent_workdir")
 
-
-work_dir_default = Path(work_dir_default).expanduser().resolve()
+# Keep as string, don't convert to Path to avoid symlink resolution and / operator issues
+work_dir_default = os.path.abspath(os.path.expanduser(work_dir_default))
 
 if cmbagent_debug:
     print('\n\n\n\n\nwork_dir_default: ', work_dir_default)
@@ -106,7 +102,7 @@ In attendance are:
 # default_file_search_max_num_results = 20
 # The default is 20 for `gpt-4*` models and 5 for `gpt-3.5-turbo`. This number
 # should be between 1 and 50 inclusive.
-file_search_max_num_results = autogen.file_search_max_num_results
+from .cmbagent_utils import file_search_max_num_results
 
 default_max_round = 50
 

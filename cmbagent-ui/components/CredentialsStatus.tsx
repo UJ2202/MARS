@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Key, RefreshCw, AlertCircle, CheckCircle, XCircle, Settings } from 'lucide-react';
+import { getApiUrl } from '@/lib/config';
 
 interface CredentialTest {
   provider: string;
@@ -84,7 +85,7 @@ export const CredentialsStatus: React.FC<CredentialsStatusProps> = ({ onOpenCred
   const fetchCredentialsStatus = async () => {
     try {
       setLoading(true);
-      const response = await fetch('http://localhost:8000/api/credentials/status');
+      const response = await fetch(getApiUrl('/api/credentials/status'));
       if (response.ok) {
         const data: StatusResponse = await response.json();
         setStatus(data);

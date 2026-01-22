@@ -251,10 +251,43 @@ def main():
     
     # Deploy command (for Streamlit only - HuggingFace Spaces)
     subparsers.add_parser(
-        "deploy", 
+        "deploy",
         help="Launch Streamlit GUI with deployment settings for Hugging Face Spaces"
     )
-    
+
+    # Branch command
+    branch_parser = subparsers.add_parser(
+        "branch",
+        help="Create a branch from a specific workflow step"
+    )
+    branch_parser.add_argument("run_id", help="Workflow run ID to branch from")
+    branch_parser.add_argument("step_id", help="Step ID to branch from")
+    branch_parser.add_argument("--name", required=True, help="Branch name")
+    branch_parser.add_argument("--hypothesis", help="Hypothesis being tested")
+
+    # Play-from command
+    play_parser = subparsers.add_parser(
+        "play-from",
+        help="Resume execution from a specific node"
+    )
+    play_parser.add_argument("run_id", help="Workflow run ID")
+    play_parser.add_argument("node_id", help="Node ID to resume from")
+
+    # Compare command
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Compare two workflow branches"
+    )
+    compare_parser.add_argument("run_id_1", help="First run ID")
+    compare_parser.add_argument("run_id_2", help="Second run ID")
+
+    # Branch tree command
+    tree_parser = subparsers.add_parser(
+        "branch-tree",
+        help="Visualize branch tree for a workflow"
+    )
+    tree_parser.add_argument("run_id", help="Root workflow run ID")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -265,5 +298,64 @@ def main():
             run_streamlit_gui(False)
     elif args.command == "deploy":
         run_streamlit_gui(True)
+    elif args.command == "branch":
+        from cmbagent.database import get_db_session as get_session
+        from cmbagent.branching import BranchManager
+        import json
+
+        db_session = get_session()
+        manager = BranchManager(db_session, args.run_id)
+        new_run_id = manager.create_branch(
+            step_id=args.step_id,
+            branch_name=args.name,
+            hypothesis=args.hypothesis
+        )
+        db_session.close()
+
+        print(f"✅ Branch created successfully!")
+        print(f"Branch name: {args.name}")
+        print(f"New run ID: {new_run_id}")
+
+    elif args.command == "play-from":
+        from cmbagent.database import get_db_session as get_session
+        from cmbagent.branching import PlayFromNodeExecutor
+        import json
+
+        db_session = get_session()
+        executor = PlayFromNodeExecutor(db_session, args.run_id)
+        result = executor.play_from_node(args.node_id)
+        db_session.close()
+
+        print(f"✅ Workflow prepared for resumption")
+        print(f"Status: {result['status']}")
+        print(f"Message: {result['message']}")
+
+    elif args.command == "compare":
+        from cmbagent.database import get_db_session as get_session
+        from cmbagent.branching import BranchComparator
+        import json
+
+        db_session = get_session()
+        comparator = BranchComparator(db_session)
+        comparison = comparator.compare_branches(args.run_id_1, args.run_id_2)
+        db_session.close()
+
+        print("📊 Branch Comparison")
+        print("=" * 50)
+        print(json.dumps(comparison, indent=2))
+
+    elif args.command == "branch-tree":
+        from cmbagent.database import get_db_session as get_session
+        from cmbagent.branching import BranchComparator
+
+        db_session = get_session()
+        comparator = BranchComparator(db_session)
+        tree = comparator.visualize_branch_tree(args.run_id)
+        db_session.close()
+
+        print("🌳 Branch Tree")
+        print("=" * 50)
+        print(comparator._format_tree(tree))
+
     else:
         parser.print_help()

@@ -1,0 +1,161 @@
+
+================================================================================
+  CMBAGENT STAGES 1-9 COMPREHENSIVE TEST SUITE
+================================================================================
+
+Start Time: 2026-01-15T08:53:20.509166
+Database: /home/ujjwal/.cmbagent/cmbagent.db
+
+================================================================================
+  STAGE 1-2: FOUNDATION (AG2 Upgrade + Database)
+================================================================================
+
+  Testing: AG2 Import and Version... ✓ PASS
+
+  Testing: CMBAgent Utils Import... <IPython.core.display.Image object>
+<IPython.core.display.Markdown object>
+✓ PASS
+
+  Testing: Database Initialization... ✓ PASS
+
+  Testing: Database Models Import... ✓ PASS
+
+  Testing: Session Repository CRUD... ✓ PASS
+
+  Testing: Workflow Repository CRUD... ✓ PASS
+
+  Testing: Session Isolation... ✓ PASS
+
+================================================================================
+  STAGE 3-4: STATE MACHINE + DAG SYSTEM
+================================================================================
+
+  Testing: State Enumerations... ✓ PASS
+
+  Testing: State Machine Transitions... ✗ FAIL
+    Error: Unknown entity type: 31ce858c-1a4b-4b62-9512-19e41edb7e82
+
+  Testing: State History Tracking... ✗ FAIL
+    Error: Unknown entity type: 3a9b96e2-1be0-4b56-87a3-f774d7b79079
+
+  Testing: Workflow Controller (Pause/Resume)... ✓ PASS
+
+  Testing: DAG Builder... ✗ FAIL
+    Error: 'nodes'
+
+  Testing: Topological Sort... ✗ FAIL
+    Error: cannot import name 'DAGBuilder' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+
+  Testing: DAG Visualizer... ✗ FAIL
+    Error: cannot import name 'DAGBuilder' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+
+================================================================================
+  STAGE 5: WEBSOCKET PROTOCOL
+================================================================================
+
+  Testing: WebSocket Event Types... ✗ FAIL
+    Error: cannot import name 'EventType' from 'backend.websocket_events' (/srv/projects/mas/mars/denario/cmbagent/backend/websocket_events.py)
+
+  Testing: Event Queue... ✗ FAIL
+    Error: create_workflow_started_event() missing 2 required positional arguments: 'agent' and 'model'
+
+  Testing: Event Serialization... ✗ FAIL
+    Error: cannot import name 'create_step_completed_event' from 'backend.websocket_events' (/srv/projects/mas/mars/denario/cmbagent/backend/websocket_events.py)
+
+================================================================================
+  STAGE 6: HITL APPROVAL SYSTEM
+================================================================================
+
+  Testing: Approval Types... ✗ FAIL
+    Error: cannot import name 'ApprovalMode' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+
+  Testing: Approval Manager... ✗ FAIL
+    Error: cannot import name 'ApprovalManager' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+
+  Testing: Approval Resolution... ✗ FAIL
+    Error: cannot import name 'ApprovalManager' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+
+================================================================================
+  STAGE 7: CONTEXT-AWARE RETRY MECHANISM
+================================================================================
+
+  Testing: Error Pattern Analyzer... ✗ FAIL
+    Error: 'dict' object has no attribute 'suggestions'
+
+  Testing: Retry Context Creation... ✗ FAIL
+    Error: 1 validation error for RetryContext
+common_error
+  Input should be a valid boolean, unable to interpret input [type=bool_parsing, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.12/v/bool_parsing
+
+  Testing: Retry Context Manager... ✗ FAIL
+    Error: 'task_description' is an invalid keyword argument for WorkflowStep
+
+  Testing: Retry Metrics... ✗ FAIL
+    Error: 'RetryMetrics' object has no attribute 'get_statistics'
+
+================================================================================
+  STAGE 8: PARALLEL EXECUTION
+================================================================================
+
+  Testing: Dependency Graph... ✓ PASS
+
+  Testing: Work Directory Manager... ✗ FAIL
+    Error: 'WorkDirectoryManager' object has no attribute 'create_isolated_directory'
+
+  Testing: Resource Manager... ✗ FAIL
+    Error: ResourceManager.__init__() got an unexpected keyword argument 'max_parallel_tasks'
+
+  Testing: Execution Configuration... ✓ PASS
+
+================================================================================
+  STAGE 9: BRANCHING AND PLAY-FROM-NODE
+================================================================================
+
+  Testing: Branch Manager... ✗ FAIL
+    Error: 'task_description' is an invalid keyword argument for WorkflowStep
+
+  Testing: Branch Comparator... ✗ FAIL
+    Error: 
+
+  Testing: Play-from-Node Executor... ✗ FAIL
+    Error: DAGRepository.create_node() got multiple values for argument 'node_type'
+
+================================================================================
+  TEST EXECUTION SUMMARY
+================================================================================
+
+Total Tests: 31
+Passed: 11 ✓
+Failed: 20 ✗
+Skipped: 0
+
+Failed Tests:
+  - State Machine Transitions: Unknown entity type: 31ce858c-1a4b-4b62-9512-19e41edb7e82
+  - State History Tracking: Unknown entity type: 3a9b96e2-1be0-4b56-87a3-f774d7b79079
+  - DAG Builder: 'nodes'
+  - Topological Sort: cannot import name 'DAGBuilder' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+  - DAG Visualizer: cannot import name 'DAGBuilder' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+  - WebSocket Event Types: cannot import name 'EventType' from 'backend.websocket_events' (/srv/projects/mas/mars/denario/cmbagent/backend/websocket_events.py)
+  - Event Queue: create_workflow_started_event() missing 2 required positional arguments: 'agent' and 'model'
+  - Event Serialization: cannot import name 'create_step_completed_event' from 'backend.websocket_events' (/srv/projects/mas/mars/denario/cmbagent/backend/websocket_events.py)
+  - Approval Types: cannot import name 'ApprovalMode' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+  - Approval Manager: cannot import name 'ApprovalManager' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+  - Approval Resolution: cannot import name 'ApprovalManager' from 'cmbagent.database' (/srv/projects/mas/mars/denario/cmbagent/cmbagent/database/__init__.py)
+  - Error Pattern Analyzer: 'dict' object has no attribute 'suggestions'
+  - Retry Context Creation: 1 validation error for RetryContext
+common_error
+  Input should be a valid boolean, unable to interpret input [type=bool_parsing, input_value='', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.12/v/bool_parsing
+  - Retry Context Manager: 'task_description' is an invalid keyword argument for WorkflowStep
+  - Retry Metrics: 'RetryMetrics' object has no attribute 'get_statistics'
+  - Work Directory Manager: 'WorkDirectoryManager' object has no attribute 'create_isolated_directory'
+  - Resource Manager: ResourceManager.__init__() got an unexpected keyword argument 'max_parallel_tasks'
+  - Branch Manager: 'task_description' is an invalid keyword argument for WorkflowStep
+  - Branch Comparator: 
+  - Play-from-Node Executor: DAGRepository.create_node() got multiple values for argument 'node_type'
+
+Pass Rate: 35.5%
+
+✗ SOME TESTS FAILED
+================================================================================

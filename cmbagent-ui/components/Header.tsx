@@ -1,6 +1,12 @@
+'use client'
+
 import { Github } from 'lucide-react'
+import { ConnectionStatus } from '@/components/common/ConnectionStatus'
+import { useWebSocketContext } from '@/contexts/WebSocketContext'
 
 export default function Header() {
+  const { connected, reconnectAttempt, lastError, reconnect } = useWebSocketContext()
+
   return (
     <header className="bg-black/20 backdrop-blur-sm border-b border-white/10">
       <div className="container mx-auto px-4 py-4">
@@ -11,8 +17,14 @@ export default function Header() {
               <p className="text-sm text-gray-300">Autonomous Research Backend </p>
             </div>
           </div>
-          
+
           <div className="flex items-center space-x-4">
+            <ConnectionStatus
+              connected={connected}
+              reconnectAttempt={reconnectAttempt}
+              lastError={lastError}
+              onReconnect={reconnect}
+            />
 
             <a
               href="https://github.com/CMBAgents/cmbagent"

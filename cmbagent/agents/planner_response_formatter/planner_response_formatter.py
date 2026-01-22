@@ -149,8 +149,8 @@ def save_final_plan(final_context: Dict[str, Any], work_dir: str) -> Path:
         )
 
     # ---- Write the JSON ----------------------------------------------------
-    json_path = planning_dir / "final_plan.json"
-    with json_path.open("w", encoding="utf-8") as fp:
+    json_path = os.path.join(planning_dir, "final_plan.json")
+    with open(json_path, "w", encoding="utf-8") as fp:
         json.dump(plan_dict, fp, ensure_ascii=False, indent=4)
 
     return json_path

@@ -90,7 +90,9 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
     saveText: false,
     maxWorkers: 4,
     maxDepth: 10,
-    ocrOutputDir: ''
+    ocrOutputDir: '',
+    // ArXiv specific options
+    summarizerModel: 'gpt-4.1-2025-04-14'
   })
 
   // Default plan instructions for different modes
