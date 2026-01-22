@@ -32,6 +32,10 @@ class DAGTracker:
         self.node_event_map = {}
         self.execution_order_counter = 0
 
+        # Track current workflow phase (planning, control, execution)
+        self.current_phase = "execution"
+        self.current_step_number = None
+
         # Try to initialize database connection
         try:
             from cmbagent.database import get_db_session as get_session, init_database
@@ -378,6 +382,21 @@ class DAGTracker:
                 node_info = node
                 break
 
+        # Auto-detect phase from node_id when node starts running
+        if new_status == "running":
+            if node_id == "planning" or node_id == "init":
+                self.set_phase("planning", None)
+            elif node_id.startswith("step_"):
+                try:
+                    step_num = int(node_id.split("_")[1])
+                    self.set_phase("control", step_num)
+                except (ValueError, IndexError):
+                    self.set_phase("control", None)
+            elif node_id == "execute":
+                self.set_phase("execution", None)
+            elif node_id == "terminator":
+                pass  # Keep current phase
+
         if new_status == "completed" and work_dir:
             self.track_files_in_work_dir(work_dir, node_id)
 
@@ -499,6 +518,25 @@ class DAGTracker:
                 return node["id"]
         return None
 
+    def set_phase(self, phase: str, step_number: int = None):
+        """Set the current workflow phase and optional step number.
+
+        Args:
+            phase: One of 'planning', 'control', 'execution'
+            step_number: Optional step number for control phase
+        """
+        self.current_phase = phase
+        self.current_step_number = step_number
+        print(f"[DAGTracker] Phase set to: {phase}, step: {step_number}")
+
+    def get_current_phase(self) -> str:
+        """Get the current workflow phase."""
+        return self.current_phase
+
+    def get_current_step_number(self) -> Optional[int]:
+        """Get the current step number."""
+        return self.current_step_number
+
     def track_files_in_work_dir(self, work_dir: str, node_id: str = None, step_id: str = None):
         """Scan work directory and track generated files in the database."""
         if not self.db_session or not self.run_id:
@@ -510,6 +548,7 @@ class DAGTracker:
             event_id = self.node_event_map.get(node_id) if node_id else None
 
             db_step_id = step_id
+            # Only associate with a step if we're in control phase and have a step node
             if not db_step_id and node_id and node_id.startswith("step_"):
                 try:
                     step_num = int(node_id.split("_")[1])
@@ -520,6 +559,17 @@ class DAGTracker:
                     if step:
                         db_step_id = step.id
                 except (ValueError, IndexError):
+                    pass
+            # Also try to get step from current_step_number if available
+            elif not db_step_id and self.current_step_number and self.current_phase == "control":
+                try:
+                    step = self.db_session.query(WorkflowStep).filter(
+                        WorkflowStep.run_id == self.run_id,
+                        WorkflowStep.step_number == self.current_step_number
+                    ).first()
+                    if step:
+                        db_step_id = step.id
+                except Exception:
                     pass
 
             # Extended directory list to track all output locations
@@ -595,14 +645,18 @@ class DAGTracker:
                         else:
                             file_type = "other"
 
-                        # Determine workflow phase from path
+                        # Determine workflow phase - use path first, then fall back to tracked phase
                         workflow_phase = None
                         if 'planning' in rel_parts:
+                            # Files in planning/ directory are always from planning phase
                             workflow_phase = "planning"
                         elif 'control' in rel_parts:
+                            # Files in control/ directory are always from control phase
                             workflow_phase = "control"
                         else:
-                            workflow_phase = "execution"
+                            # For files in shared directories (data/, codebase/, etc.),
+                            # use the currently tracked phase from the DAGTracker
+                            workflow_phase = self.current_phase or "execution"
 
                         # Determine if this is a final output (primary deliverable)
                         is_final_output = file_type in ["plot", "data", "code", "plan"]

@@ -155,6 +155,9 @@ def planning_and_control_context_carryover(
         output_manager.set_phase("planning")
         output_manager.set_agent("planner")
 
+        # Notify callbacks of phase change
+        callbacks.invoke_phase_change("planning", None)
+
         start_time = time.time()
 
         planner_config = get_model_config(planner_model, api_keys)
@@ -397,6 +400,9 @@ def planning_and_control_context_carryover(
         # Set file tracking context for control phase
         output_manager.set_phase("control")
         output_manager.set_step(step)
+
+        # Notify callbacks of phase change
+        callbacks.invoke_phase_change("control", step)
 
         start_time = time.time()
         cmbagent = CMBAgent(

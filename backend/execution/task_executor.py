@@ -101,6 +101,12 @@ async def execute_cmbagent_task(
         dag_data = dag_tracker.create_dag_for_mode(task, config)
         effective_run_id = dag_tracker.run_id or task_id
 
+        # Set initial phase based on mode
+        if mode in ["planning-control", "idea-generation"]:
+            dag_tracker.set_phase("planning", None)
+        else:
+            dag_tracker.set_phase("execution", None)
+
         # Emit DAG created event
         await send_ws_event(
             websocket,
@@ -224,12 +230,23 @@ async def execute_cmbagent_task(
 
                     dag_tracker._persist_dag_nodes_to_db()
 
+                    # Get current phase and step from DAGTracker
+                    current_phase = dag_tracker.get_current_phase()
+                    current_step = dag_tracker.get_current_step_number()
+
+                    # Add phase info to meta
+                    meta = kwargs.pop('meta', {}) or {}
+                    meta['workflow_phase'] = current_phase
+                    if current_step is not None:
+                        meta['step_number'] = current_step
+
                     dag_tracker.event_repo.create_event(
                         run_id=dag_tracker.run_id,
                         node_id=current_node_id,
                         event_type=event_type,
                         execution_order=dag_tracker.execution_order_counter,
                         agent_name=agent_name,
+                        meta=meta,
                         **kwargs
                     )
                 except Exception as e:
@@ -248,7 +265,7 @@ async def execute_cmbagent_task(
                     status="completed",
                     inputs={"role": role, "message": content[:500] if content else ""},
                     outputs={"full_content": content[:3000] if content else ""},
-                    meta={"has_code": len(code_blocks) > 0}
+                    meta={"has_code": len(code_blocks) > 0, **(metadata or {})}
                 )
             except Exception as e:
                 print(f"Error in on_agent_msg callback: {e}")
@@ -283,10 +300,33 @@ async def execute_cmbagent_task(
             except Exception as e:
                 print(f"Error in on_tool callback: {e}")
 
+        def on_phase_change(phase: str, step_number: int = None):
+            """Handle phase change events from the workflow"""
+            if dag_tracker:
+                dag_tracker.set_phase(phase, step_number)
+                print(f"[TaskExecutor] Phase changed to: {phase}, step: {step_number}")
+
+        def on_planning_complete_tracking(plan_info):
+            """Track files after planning phase completes"""
+            if dag_tracker:
+                # Track files created during planning
+                dag_tracker.track_files_in_work_dir(task_work_dir, "planning")
+                print(f"[TaskExecutor] Tracked planning files")
+
+        def on_step_complete_tracking(step_info):
+            """Track files after each step completes"""
+            if dag_tracker:
+                step_node_id = f"step_{step_info.step_number}"
+                dag_tracker.track_files_in_work_dir(task_work_dir, step_node_id)
+                print(f"[TaskExecutor] Tracked files for step {step_info.step_number}")
+
         event_tracking_callbacks = WorkflowCallbacks(
             on_agent_message=on_agent_msg,
             on_code_execution=on_code_exec,
-            on_tool_call=on_tool
+            on_tool_call=on_tool,
+            on_phase_change=on_phase_change,
+            on_planning_complete=on_planning_complete_tracking,
+            on_step_complete=on_step_complete_tracking
         )
 
         pause_callbacks = WorkflowCallbacks(

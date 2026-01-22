@@ -128,6 +128,25 @@ class WorkflowCallbacks:
     # Signature: on_tool_call(agent: str, tool_name: str, arguments: Dict, result: Optional[Any])
     on_tool_call: Optional[Callable[[str, str, Dict[str, Any], Optional[Any]], None]] = None
 
+    # Phase change callback - called when workflow phase changes
+    # Signature: on_phase_change(phase: str, step_number: Optional[int])
+    # phase is one of: 'planning', 'control', 'execution'
+    on_phase_change: Optional[Callable[[str, Optional[int]], None]] = None
+
+    def invoke_phase_change(self, phase: str, step_number: Optional[int] = None) -> None:
+        """
+        Safely invoke on_phase_change callback when workflow phase changes.
+
+        Args:
+            phase: New workflow phase ('planning', 'control', 'execution')
+            step_number: Optional step number for control phase
+        """
+        if self.on_phase_change:
+            try:
+                self.on_phase_change(phase, step_number)
+            except Exception as e:
+                print(f"Error in on_phase_change callback: {e}")
+
     def invoke_planning_start(self, task: str, config: Dict[str, Any]) -> None:
         """Safely invoke on_planning_start callback"""
         if self.on_planning_start:
@@ -366,7 +385,8 @@ def merge_callbacks(*callbacks_list: WorkflowCallbacks) -> WorkflowCallbacks:
         "on_workflow_start", "on_workflow_complete", "on_workflow_failed",
         "on_progress", "on_agent_start", "on_agent_complete",
         "on_cost_update",  # Include cost callback in merge
-        "on_agent_message", "on_code_execution", "on_tool_call"  # Comprehensive logging callbacks
+        "on_agent_message", "on_code_execution", "on_tool_call",  # Comprehensive logging callbacks
+        "on_phase_change"  # Phase tracking callback
     ]
 
     merged_dict = {name: make_merged_callback(name) for name in callback_names}
@@ -573,6 +593,15 @@ def create_websocket_callbacks(
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
 
+    def on_phase_change(phase: str, step_number: Optional[int]) -> None:
+        """Emit phase_change WebSocket event"""
+        send_event_func("phase_change", {
+            "run_id": run_id,
+            "phase": phase,
+            "step_number": step_number,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+
     return WorkflowCallbacks(
         on_planning_start=on_planning_start,
         on_planning_complete=on_planning_complete,
@@ -584,7 +613,8 @@ def create_websocket_callbacks(
         on_cost_update=on_cost_update,
         on_agent_message=on_agent_message,
         on_code_execution=on_code_execution,
-        on_tool_call=on_tool_call
+        on_tool_call=on_tool_call,
+        on_phase_change=on_phase_change
     )
 
 
