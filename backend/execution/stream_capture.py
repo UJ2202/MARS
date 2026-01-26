@@ -52,6 +52,14 @@ class AG2IOStreamCapture:
                     self.loop
                 )
             message.print(self._original_print)
+        except AttributeError as e:
+            # Silently ignore fileno-related errors - AG2 checking for terminal capabilities
+            if 'fileno' not in str(e):
+                self._original_print(f"Error in AG2IOStreamCapture.send: {e}")
+            try:
+                message.print(self._original_print)
+            except:
+                pass
         except Exception as e:
             self._original_print(f"Error in AG2IOStreamCapture.send: {e}")
             try:
@@ -221,37 +229,9 @@ class StreamCapture:
     async def _detect_cost_updates(self, text: str):
         """Detect cost information from output and emit WebSocket events"""
         text_lower = text.lower()
-        cost_pattern = r'\$([0-9]+\.[0-9]+)'
-
-        if 'cost ($)' in text_lower or '$' in text and any(
-            x in text_lower for x in ['total', 'gpt', 'gemini', 'engineer', 'researcher']
-        ):
-            costs = re.findall(cost_pattern, text)
-            if costs:
-                try:
-                    new_cost = float(costs[-1])
-                    current_time = time.time()
-                    if new_cost > self.total_cost and (current_time - self.last_cost_report_time) > 1.0:
-                        cost_delta = new_cost - self.total_cost
-                        self.total_cost = new_cost
-                        self.last_cost_report_time = current_time
-
-                        await self.send_event(
-                            self.websocket,
-                            "cost_update",
-                            {
-                                "run_id": self.task_id,
-                                "step_id": f"step_{self.current_step}" if self.current_step > 0 else None,
-                                "model": "unknown",
-                                "tokens": 0,
-                                "cost_usd": cost_delta,
-                                "total_cost_usd": self.total_cost
-                            },
-                            run_id=self.task_id
-                        )
-                except (ValueError, IndexError):
-                    pass
-
+        
+        # Only process when we have actual cost report files (with complete data)
+        # Don't send incomplete "unknown" model data from real-time detection
         if 'cost report data saved to:' in text_lower:
             await self._parse_cost_report(text)
 
@@ -260,42 +240,84 @@ class StreamCapture:
         match = re.search(r'cost report data saved to: (.+\.json)', text, re.IGNORECASE)
         if match:
             cost_file = match.group(1).strip()
+            print(f"📄 Parsing cost report file: {cost_file}")
             if os.path.exists(cost_file):
                 try:
                     with open(cost_file, 'r') as f:
                         cost_data = json.load(f)
 
-                    total_cost = 0.0
+                    print(f"📊 Cost report has {len(cost_data)} entries")
+                    
+                    # Reset total cost to recalculate from report (avoid accumulation issues)
+                    report_total_cost = 0.0
+                    
+                    # Send individual cost events for each agent/model entry
                     for entry in cost_data:
                         if entry.get('Agent') != 'Total':
+                            agent_name = entry.get('Agent', 'unknown')
+                            model_name = entry.get('Model', 'unknown')
                             cost_str = str(entry.get('Cost ($)', '$0.0'))
                             cost_value = float(cost_str.replace('$', ''))
-                            total_cost += cost_value
+                            
+                            # Get token counts
+                            prompt_tokens = int(float(str(entry.get('Prompt Tokens', 0))))
+                            completion_tokens = int(float(str(entry.get('Completion Tokens', 0))))
+                            total_tokens = int(float(str(entry.get('Total Tokens', 0))))
+                            
+                            report_total_cost += cost_value
+                            
+                            print(f"  🔸 Agent: {agent_name}, Model: {model_name}, Cost: ${cost_value:.6f}, Tokens: {total_tokens}")
+                            
+                            # Send cost update for this agent/model
+                            await self.send_event(
+                                self.websocket,
+                                "cost_update",
+                                {
+                                    "run_id": self.task_id,
+                                    "step_id": f"{agent_name}_step",
+                                    "model": model_name,
+                                    "tokens": total_tokens,
+                                    "input_tokens": prompt_tokens,
+                                    "output_tokens": completion_tokens,
+                                    "cost_usd": cost_value,
+                                    "total_cost_usd": report_total_cost
+                                },
+                                run_id=self.task_id
+                            )
+                            
+                            # Save cost to database
+                            try:
+                                from cmbagent.database import CostRepository, get_db_session
+                                from cmbagent.database.models import WorkflowRun
+                                
+                                db = get_db_session()
+                                if db:
+                                    try:
+                                        # Get session_id from workflow run
+                                        run = db.query(WorkflowRun).filter(WorkflowRun.id == self.task_id).first()
+                                        if run:
+                                            cost_repo = CostRepository(db, run.session_id)
+                                            cost_repo.record_cost(
+                                                run_id=self.task_id,
+                                                model=model_name,
+                                                prompt_tokens=prompt_tokens,
+                                                completion_tokens=completion_tokens,
+                                                cost_usd=cost_value,
+                                                step_id=f"{agent_name}_step"
+                                            )
+                                    finally:
+                                        db.close()
+                            except Exception as db_err:
+                                print(f"  ⚠️  Failed to save cost to database: {db_err}")
+                    
+                    print(f"✅ Total cost from report: ${report_total_cost:.6f}")
+                    # Update our tracked total to match the report
+                    self.total_cost = report_total_cost
 
-                    if total_cost > 0:
-                        self.total_cost = total_cost
-                        total_tokens = 0
-                        for e in cost_data:
-                            if e.get('Agent') != 'Total':
-                                tokens_val = e.get('Total Tokens', 0)
-                                if tokens_val:
-                                    total_tokens += int(float(str(tokens_val)))
-
-                        await self.send_event(
-                            self.websocket,
-                            "cost_update",
-                            {
-                                "run_id": self.task_id,
-                                "step_id": f"step_{self.current_step}" if self.current_step > 0 else None,
-                                "model": "aggregate",
-                                "tokens": total_tokens,
-                                "cost_usd": total_cost,
-                                "total_cost_usd": total_cost
-                            },
-                            run_id=self.task_id
-                        )
                 except Exception as e:
-                    print(f"Error parsing cost report: {e}")
+                    print(f"❌ Error parsing cost report: {e}")
+                    import traceback
+                    traceback.print_exc()
 
     async def _detect_agent_activity(self, text: str):
         """Detect agent messages, code blocks, and tool calls"""

@@ -168,6 +168,15 @@ class AG2IOStreamCapture:
 
             # Also call the original print method of the event
             message.print(self._original_print)
+        except AttributeError as e:
+            # Silently ignore fileno-related errors - AG2 checking for terminal capabilities
+            if 'fileno' not in str(e):
+                self._original_print(f"Error in AG2IOStreamCapture.send: {e}")
+            # Fallback: try to print the message
+            try:
+                message.print(self._original_print)
+            except:
+                pass
         except Exception as e:
             self._original_print(f"Error in AG2IOStreamCapture.send: {e}")
             # Fallback: try to print the message
@@ -3403,10 +3412,12 @@ async def execute_cmbagent_task(websocket: WebSocket, task_id: str, task: str, c
                     if self.original:
                         self.original.flush()
                 
-                def isatty(self):
-                    return False
-            
-            try:
+                def fileno(self):
+                    """Return file descriptor if available, otherwise raise AttributeError"""
+                    if hasattr(self.original, 'fileno'):
+                        return self.original.fileno()
+                    raise AttributeError("fileno not available")
+
                 # Redirect stdout and stderr
                 sys.stdout = StreamWrapper(original_stdout, stream_capture, loop)
                 sys.stderr = StreamWrapper(original_stderr, stream_capture, loop)

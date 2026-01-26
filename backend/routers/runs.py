@@ -224,3 +224,97 @@ async def get_run_files(run_id: str):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{run_id}/costs")
+async def get_run_costs(run_id: str):
+    """Get cost breakdown for a workflow run from the database.
+
+    Args:
+        run_id: The workflow run ID (can be task_id, will be resolved to db_run_id)
+    
+    Returns:
+        Cost summary including total cost, tokens, and breakdowns by model and step
+    """
+    try:
+        # Resolve task_id to database run_id
+        effective_run_id = _resolve_run_id(run_id)
+        if _check_services():
+            print(f"[API] Resolved task_id {run_id} to db_run_id {effective_run_id}")
+
+        from cmbagent.database import get_db_session
+        from cmbagent.database.models import CostRecord
+
+        db = get_db_session()
+
+        # Query cost records for this run
+        cost_records = db.query(CostRecord).filter(
+            CostRecord.run_id == effective_run_id
+        ).order_by(CostRecord.timestamp).all()
+
+        # Calculate totals and breakdowns
+        total_cost = 0.0
+        total_tokens = 0
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        
+        model_breakdown = {}
+        step_breakdown = {}
+        
+        for record in cost_records:
+            # Totals
+            total_cost += float(record.cost_usd)
+            total_tokens += record.total_tokens
+            total_prompt_tokens += record.prompt_tokens
+            total_completion_tokens += record.completion_tokens
+            
+            # Model breakdown
+            if record.model not in model_breakdown:
+                model_breakdown[record.model] = {
+                    "model": record.model,
+                    "cost": 0.0,
+                    "tokens": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "call_count": 0
+                }
+            model_breakdown[record.model]["cost"] += float(record.cost_usd)
+            model_breakdown[record.model]["tokens"] += record.total_tokens
+            model_breakdown[record.model]["prompt_tokens"] += record.prompt_tokens
+            model_breakdown[record.model]["completion_tokens"] += record.completion_tokens
+            model_breakdown[record.model]["call_count"] += 1
+            
+            # Step breakdown
+            step_id = record.step_id or "unknown"
+            if step_id not in step_breakdown:
+                step_breakdown[step_id] = {
+                    "step_id": step_id,
+                    "cost": 0.0,
+                    "tokens": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0
+                }
+            step_breakdown[step_id]["cost"] += float(record.cost_usd)
+            step_breakdown[step_id]["tokens"] += record.total_tokens
+            step_breakdown[step_id]["prompt_tokens"] += record.prompt_tokens
+            step_breakdown[step_id]["completion_tokens"] += record.completion_tokens
+
+        db.close()
+
+        return {
+            "run_id": run_id,
+            "resolved_run_id": effective_run_id,
+            "total_cost_usd": round(total_cost, 6),
+            "total_tokens": total_tokens,
+            "total_prompt_tokens": total_prompt_tokens,
+            "total_completion_tokens": total_completion_tokens,
+            "record_count": len(cost_records),
+            "model_breakdown": list(model_breakdown.values()),
+            "step_breakdown": list(step_breakdown.values())
+        }
+
+    except Exception as e:
+        print(f"Error getting run costs: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -31,6 +31,8 @@ def control(
     plan_reviewer_model=default_agents_llm_model['plan_reviewer'],
     engineer_model=default_agents_llm_model['engineer'],
     researcher_model=default_agents_llm_model['researcher'],
+    web_surfer_model=default_agents_llm_model.get('web_surfer', default_agents_llm_model['researcher']),
+    retrieve_assistant_model=default_agents_llm_model.get('retrieve_assistant', default_agents_llm_model['researcher']),
     idea_maker_model=default_agents_llm_model['idea_maker'],
     idea_hater_model=default_agents_llm_model['idea_hater'],
     plot_judge_model=default_agents_llm_model['plot_judge'],
@@ -59,6 +61,8 @@ def control(
         plan_reviewer_model: Model for plan reviewer agent
         engineer_model: Model for engineer agent
         researcher_model: Model for researcher agent
+        web_surfer_model: Model for web_surfer agent
+        retrieve_assistant_model: Model for retrieve_assistant agent
         idea_maker_model: Model for idea maker agent
         idea_hater_model: Model for idea hater agent
         plot_judge_model: Model for plot judge agent
@@ -97,6 +101,8 @@ def control(
     # control
     engineer_config = get_model_config(engineer_model, api_keys)
     researcher_config = get_model_config(researcher_model, api_keys)
+    web_surfer_config = get_model_config(web_surfer_model, api_keys)
+    retrieve_assistant_config = get_model_config(retrieve_assistant_model, api_keys)
     idea_maker_config = get_model_config(idea_maker_model, api_keys)
     idea_hater_config = get_model_config(idea_hater_model, api_keys)
     plot_judge_config = get_model_config(plot_judge_model, api_keys)
@@ -110,6 +116,8 @@ def control(
         agent_llm_configs={
             'engineer': engineer_config,
             'researcher': researcher_config,
+            'web_surfer': web_surfer_config,
+            'retrieve_assistant': retrieve_assistant_config,
             'idea_maker': idea_maker_config,
             'idea_hater': idea_hater_config,
             'plot_judge': plot_judge_config,

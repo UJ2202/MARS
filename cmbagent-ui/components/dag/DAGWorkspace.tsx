@@ -29,6 +29,7 @@ import { DAGTimelineView } from './DAGTimelineView';
 import { DAGFilesView } from './DAGFilesView';
 import { CostDashboard } from '@/components/metrics';
 import { CostSummary, CostTimeSeries } from '@/types/cost';
+import { useCostData } from '@/hooks/useCostData';
 
 interface DAGWorkspaceProps {
   dagData: { run_id?: string; nodes: any[]; edges: any[] } | null;
@@ -45,6 +46,12 @@ type TabType = 'graph' | 'timeline' | 'history' | 'files' | 'cost';
 export function DAGWorkspace({ dagData, onNodeSelect, onPlayFromNode, runId, costSummary, costTimeSeries = [], filesUpdatedCounter }: DAGWorkspaceProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('graph');
+  
+  // Fetch cost data from database API as fallback
+  const { costSummary: dbCostSummary, loading: costLoading } = useCostData(runId || null);
+  
+  // Use WebSocket cost data if available, otherwise fall back to database
+  const effectiveCostSummary = costSummary || dbCostSummary;
   const [showStats, setShowStats] = useState(true);
   const [showMinimap, setShowMinimap] = useState(true);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -428,11 +435,15 @@ export function DAGWorkspace({ dagData, onNodeSelect, onPlayFromNode, runId, cos
 
           {activeTab === 'cost' && (
             <div className="h-full overflow-hidden bg-gray-900">
-              {costSummary ? (
+              {effectiveCostSummary ? (
                 <CostDashboard 
-                  summary={costSummary}
+                  summary={effectiveCostSummary}
                   timeSeries={costTimeSeries}
                 />
+              ) : costLoading ? (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-gray-400">Loading cost data from database...</p>
+                </div>
               ) : (
                 <div className="h-full flex items-center justify-center">
                   <p className="text-gray-400">No cost data available yet</p>

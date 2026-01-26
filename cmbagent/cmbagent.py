@@ -105,6 +105,8 @@ class CMBAgent:
                  chat_agent = None,
                  api_keys = None,
                  approval_config = None,  # Optional ApprovalConfig for HITL control
+                 enable_ag2_free_tools = True,  # Enable AG2 free tools by default (LangChain + CrewAI)
+                 enable_mcp_client = False,  # Enable MCP client for external MCP servers (GitHub, filesystem, etc.)
                 #  make_new_rag_agents = False, ## can be a list of names for new rag agents to be created
                  **kwargs):
         """
@@ -120,6 +122,7 @@ class CMBAgent:
             agent_list (list of strings, optional): List of agents to include in the conversation. Defaults to all agents.
             chunking_strategy (dict, optional): Chunking strategy for vector stores. Defaults to None.
             make_new_rag_agents (list of strings, optional): List of names for new rag agents to be created. Defaults to False.
+            enable_ag2_free_tools (bool, optional): Enable AG2 free tools from LangChain and CrewAI. Defaults to True.
             
             **kwargs: Additional keyword arguments.
 
@@ -140,6 +143,9 @@ class CMBAgent:
             default_llm_config_list = [get_model_config(default_llm_model, api_keys)]
 
         self.kwargs = kwargs
+        
+        self.enable_ag2_free_tools = enable_ag2_free_tools
+        self.enable_mcp_client = enable_mcp_client
 
         self.skip_executor = skip_executor
 
@@ -281,6 +287,31 @@ class CMBAgent:
                 self.approval_manager = None
                 self.retry_manager = None
                 self.retry_metrics = None
+
+        # MCP Client initialization (optional, controlled by parameter)
+        self.mcp_client_manager = None
+        self.mcp_tool_integration = None
+        if self.enable_mcp_client:
+            try:
+                from cmbagent.mcp import MCPClientManager, MCPToolIntegration
+                import asyncio
+                
+                self.mcp_client_manager = MCPClientManager()
+                # Connect to all enabled MCP servers asynchronously
+                asyncio.run(self.mcp_client_manager.connect_all())
+                
+                # Create tool integration helper
+                self.mcp_tool_integration = MCPToolIntegration(self.mcp_client_manager)
+                
+                connected_servers = len(self.mcp_client_manager.sessions)
+                if cmbagent_debug or self.verbose:
+                    print(f"MCP client initialized. Connected to {connected_servers} servers.")
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize MCP client: {e}. Continuing without MCP.")
+                self.enable_mcp_client = False
+                self.mcp_client_manager = None
+                self.mcp_tool_integration = None
 
         self.path_to_assistants = path_to_assistants
 

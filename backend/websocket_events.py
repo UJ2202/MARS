@@ -230,6 +230,8 @@ class CostUpdateData(BaseModel):
     step_id: Optional[str] = None
     model: str
     tokens: int
+    input_tokens: Optional[int] = 0
+    output_tokens: Optional[int] = 0
     cost_usd: float
     total_cost_usd: float
 

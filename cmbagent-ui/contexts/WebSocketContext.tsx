@@ -144,6 +144,17 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     onWorkflowStarted: (data) => {
       setWorkflowStatus('executing');
       addConsoleOutput(`🚀 Workflow started: ${data.task_description}`);
+      // Reset cost tracking for new workflow
+      setCostSummary({
+        total_cost: 0,
+        total_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        model_breakdown: [],
+        agent_breakdown: [],
+        step_breakdown: [],
+      });
+      setCostTimeSeries([]);
     },
     onWorkflowStateChanged: (data) => {
       setWorkflowStatus(data.status);
@@ -203,34 +214,115 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       addConsoleOutput(`📁 ${data.files_tracked} file(s) tracked for node ${data.node_id || 'unknown'}`);
     },
     onCostUpdate: (data: CostUpdateData) => {
+      // Debug: Log all incoming cost updates to investigate "unknown" model
+      console.log('🔍 Cost Update Received:', {
+        model: data.model,
+        step_id: data.step_id,
+        cost_usd: data.cost_usd,
+        total_cost_usd: data.total_cost_usd,
+        tokens: data.tokens,
+        input_tokens: data.input_tokens,
+        output_tokens: data.output_tokens
+      });
+
       // Update cost summary
       setCostSummary(prev => {
+        // Use provided input/output tokens if available, otherwise estimate
+        const inputTokens = data.input_tokens || (data.tokens > 0 ? Math.floor(data.tokens * 0.7) : 0);
+        const outputTokens = data.output_tokens || (data.tokens > 0 ? data.tokens - inputTokens : 0);
+
+        // Update model breakdown
         const newModelBreakdown = [...prev.model_breakdown];
         const modelIndex = newModelBreakdown.findIndex(m => m.model === data.model);
         
         if (modelIndex >= 0) {
+          // Update existing model entry
           newModelBreakdown[modelIndex] = {
             ...newModelBreakdown[modelIndex],
             cost: newModelBreakdown[modelIndex].cost + data.cost_usd,
             tokens: newModelBreakdown[modelIndex].tokens + data.tokens,
+            input_tokens: newModelBreakdown[modelIndex].input_tokens + inputTokens,
+            output_tokens: newModelBreakdown[modelIndex].output_tokens + outputTokens,
             call_count: newModelBreakdown[modelIndex].call_count + 1,
           };
         } else {
+          // Add new model entry
           newModelBreakdown.push({
             model: data.model,
             cost: data.cost_usd,
             tokens: data.tokens,
-            input_tokens: 0,
-            output_tokens: 0,
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
             call_count: 1,
           });
         }
 
+        // Update agent breakdown (extract agent from step_id)
+        const newAgentBreakdown = [...prev.agent_breakdown];
+        // step_id format is "AgentName_step" e.g., "engineer_step", "planner_step"
+        // Extract the agent name by removing "_step" suffix
+        const agentName = data.step_id 
+          ? data.step_id.replace(/_step$/, '') 
+          : 'unknown';
+        
+        const agentIndex = newAgentBreakdown.findIndex(a => a.agent === agentName);
+        
+        if (agentIndex >= 0) {
+          newAgentBreakdown[agentIndex] = {
+            ...newAgentBreakdown[agentIndex],
+            cost: newAgentBreakdown[agentIndex].cost + data.cost_usd,
+            tokens: newAgentBreakdown[agentIndex].tokens + data.tokens,
+            call_count: newAgentBreakdown[agentIndex].call_count + 1,
+          };
+        } else {
+          newAgentBreakdown.push({
+            agent: agentName,
+            cost: data.cost_usd,
+            tokens: data.tokens,
+            call_count: 1,
+          });
+        }
+
+        // Update step breakdown
+        const newStepBreakdown = [...prev.step_breakdown];
+        if (data.step_id) {
+          const stepIndex = newStepBreakdown.findIndex(s => s.step_id === data.step_id);
+          
+          if (stepIndex >= 0) {
+            newStepBreakdown[stepIndex] = {
+              ...newStepBreakdown[stepIndex],
+              cost: newStepBreakdown[stepIndex].cost + data.cost_usd,
+              tokens: newStepBreakdown[stepIndex].tokens + data.tokens,
+            };
+          } else {
+            // Extract agent name for better description
+            const stepNumber = newStepBreakdown.length + 1;
+            newStepBreakdown.push({
+              step_id: data.step_id,
+              step_number: stepNumber,
+              description: `${agentName} (Step ${stepNumber})`,
+              cost: data.cost_usd,
+              tokens: data.tokens,
+            });
+          }
+        }
+
+        console.log('📊 Updated Cost Summary:', {
+          total_cost: data.total_cost_usd,
+          model_breakdown_count: newModelBreakdown.length,
+          agent_breakdown_count: newAgentBreakdown.length,
+          models: newModelBreakdown.map(m => m.model)
+        });
+
+        // Use the total_cost_usd from the event as the authoritative total
         return {
-          ...prev,
           total_cost: data.total_cost_usd,
           total_tokens: prev.total_tokens + data.tokens,
+          input_tokens: prev.input_tokens + inputTokens,
+          output_tokens: prev.output_tokens + outputTokens,
           model_breakdown: newModelBreakdown,
+          agent_breakdown: newAgentBreakdown,
+          step_breakdown: newStepBreakdown,
         };
       });
 
@@ -241,6 +333,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
           timestamp: new Date().toISOString(),
           cumulative_cost: data.total_cost_usd,
           step_cost: data.cost_usd,
+          step_number: data.step_id ? parseInt(data.step_id.replace(/\D/g, '')) : undefined,
         },
       ]);
     },

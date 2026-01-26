@@ -221,6 +221,19 @@ class DAGTracker:
             return
 
         try:
+            # Check if session is in a valid state for new operations
+            # SQLAlchemy 2.0+ uses in_transaction(), older versions use is_active
+            if hasattr(self.db_session, 'in_transaction'):
+                if self.db_session.in_transaction():
+                    print("[DAGTracker] Skipping persist - transaction already in progress")
+                    return
+            elif hasattr(self.db_session, 'is_active'):
+                # For older SQLAlchemy - check transaction state
+                if self.db_session.is_active and hasattr(self.db_session, 'transaction'):
+                    if self.db_session.transaction and self.db_session.transaction.is_active:
+                        print("[DAGTracker] Skipping persist - transaction already active")
+                        return
+
             from cmbagent.database.models import DAGNode, DAGEdge
 
             for idx, node in enumerate(self.nodes):
@@ -259,11 +272,24 @@ class DAGTracker:
             print(f"Persisted {len(self.nodes)} nodes and {len(self.edges)} edges to database")
 
         except Exception as e:
-            print(f"Error persisting DAG to database: {e}")
-            import traceback
-            traceback.print_exc()
+            # Check if it's a transaction state error - if so, just log and skip
+            error_msg = str(e).lower()
+            if 'prepared' in error_msg or 'transaction' in error_msg or 'commit' in error_msg:
+                print(f"[DAGTracker] Skipping persist due to concurrent transaction: {e}")
+            else:
+                print(f"Error persisting DAG to database: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            # Only rollback if session is not already in a problematic state
             if self.db_session:
-                self.db_session.rollback()
+                try:
+                    if hasattr(self.db_session, 'is_active') and self.db_session.is_active:
+                        self.db_session.rollback()
+                except Exception as rollback_error:
+                    # If rollback also fails due to state issues, just log it
+                    if 'prepared' not in str(rollback_error).lower():
+                        print(f"Could not rollback session: {rollback_error}")
 
     async def add_step_nodes(self, steps: list):
         """Dynamically add step nodes after planning completes."""
@@ -403,7 +429,11 @@ class DAGTracker:
         # Create ExecutionEvent in database
         if self.event_repo and node_info:
             try:
-                self._persist_dag_nodes_to_db()
+                # Try to persist DAG nodes first (only if not already in transaction)
+                try:
+                    self._persist_dag_nodes_to_db()
+                except Exception as persist_error:
+                    print(f"[DAGTracker] Could not persist DAG nodes: {persist_error}")
 
                 agent_name = node_info.get("agent", "unknown")
 
@@ -697,17 +727,25 @@ class DAGTracker:
 
                 try:
                     effective_run_id = self.run_id or self.task_id
-                    asyncio.create_task(self.send_event(
-                        self.websocket,
-                        "files_updated",
-                        {
-                            "run_id": effective_run_id,
-                            "node_id": node_id,
-                            "step_id": db_step_id,
-                            "files_tracked": files_tracked
-                        },
-                        run_id=effective_run_id
-                    ))
+                    # Check if we're in an async context with a running event loop
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # We have a running loop, create task
+                        asyncio.create_task(self.send_event(
+                            self.websocket,
+                            "files_updated",
+                            {
+                                "run_id": effective_run_id,
+                                "node_id": node_id,
+                                "step_id": db_step_id,
+                                "files_tracked": files_tracked
+                            },
+                            run_id=effective_run_id
+                        ))
+                    except RuntimeError:
+                        # No running event loop, skip the websocket event
+                        # This is acceptable as file tracking is still saved to database
+                        pass
                 except Exception as ws_err:
                     print(f"[DAGTracker] Error sending files_updated event: {ws_err}")
 

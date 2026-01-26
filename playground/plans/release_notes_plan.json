@@ -1,0 +1,61 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Access the Git repository (local path or remote URL).",
+                "Fetch all commits between the specified version tags or date range.",
+                "If using GitHub/GitLab API, authenticate and fetch PR and issue data.",
+                "Extract commit messages, authors, dates, and changed files.",
+                "Collect associated PR numbers and issue references."
+            ],
+            "sub_task": "Fetch and parse Git history data from the repository.",
+            "sub_task_agent": "researcher"
+        },
+        {
+            "bullet_points": [
+                "If include PRs is enabled, fetch pull request details from GitHub/GitLab API.",
+                "Extract PR titles, descriptions, labels, and merge information.",
+                "If include issues is enabled, fetch closed issues within the date range.",
+                "Link commits to their associated PRs and issues.",
+                "Gather contributor information if requested."
+            ],
+            "sub_task": "Collect pull requests and issues data from repository API.",
+            "sub_task_agent": "researcher"
+        },
+        {
+            "bullet_points": [
+                "Analyze commit messages and PR titles to categorize changes.",
+                "Categories: Features, Bug Fixes, Technical Improvements, Breaking Changes, Documentation.",
+                "Use AI to understand intent if categorization mode is 'auto'.",
+                "Use labels if categorization mode is 'labels'.",
+                "Use conventional commit format parsing if mode is 'conventional'.",
+                "Identify breaking changes by keywords or semver-major labels."
+            ],
+            "sub_task": "Categorize all commits and PRs into appropriate sections.",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "Generate a compelling highlight section (2-3 sentences) summarizing the release.",
+                "Identify the most significant features and improvements.",
+                "Calculate statistics: total commits, PRs merged, issues closed, contributors.",
+                "Create user-friendly descriptions for each change item.",
+                "Format PR and issue references with links."
+            ],
+            "sub_task": "Generate highlights, statistics, and user-friendly descriptions.",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "Structure the release notes with clear sections: Highlights, Features, Bug Fixes, Technical, Breaking Changes.",
+                "Format according to selected output format (Markdown, HTML, Changelog.md).",
+                "Add proper headings, bullet points, and emphasis.",
+                "Include contributor attribution with @mentions.",
+                "Add version numbers, dates, and metadata.",
+                "Ensure professional and consistent formatting throughout."
+            ],
+            "sub_task": "Format and structure the final release notes document.",
+            "sub_task_agent": "engineer"
+        }
+    ]
+}

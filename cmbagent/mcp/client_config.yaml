@@ -1,0 +1,64 @@
+# MCP Client Configuration
+# Defines which external MCP servers to connect to and how to configure them
+
+mcp_servers:
+  # Filesystem server - Local file operations
+  filesystem:
+    enabled: true
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp", "/srv/projects"]
+    env: {}
+    description: "File system operations (read, write, search, list)"
+    
+  # GitHub server - GitHub API operations
+  github:
+    enabled: false  # Enable when GITHUB_TOKEN is set
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-github"]
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_TOKEN}"
+    description: "GitHub API operations (repos, issues, PRs, search)"
+    
+  # Brave Search - Premium web search
+  brave_search:
+    enabled: false  # Requires API key
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    env:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    description: "Web search using Brave Search API"
+    
+  # Puppeteer - Browser automation
+  puppeteer:
+    enabled: false
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-puppeteer"]
+    env: {}
+    description: "Browser automation and web scraping"
+    
+  # PostgreSQL - Database operations
+  postgres:
+    enabled: false
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-postgres"]
+    env:
+      DATABASE_URL: "${POSTGRES_URL}"
+    description: "PostgreSQL database operations"
+    
+  # Slack - Workspace communication
+  slack:
+    enabled: false
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-slack"]
+    env:
+      SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
+    description: "Slack messaging and workspace operations"
+
+# Global settings
+settings:
+  auto_discover_tools: true   # Automatically discover tools on connection
+  cache_tool_schemas: true    # Cache tool schemas
+  timeout_seconds: 60         # Tool execution timeout
+  max_retries: 3              # Retry failed tool calls
+  fallback_on_error: true     # Continue if external tool fails
+  log_tool_calls: true        # Log all tool calls to database

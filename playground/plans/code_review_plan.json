@@ -1,0 +1,82 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "If source is PR URL, fetch the pull request data from GitHub/GitLab API.",
+                "If source is file upload or paste, parse the diff content.",
+                "Extract file changes, additions, deletions, and modifications.",
+                "Identify programming language(s) from file extensions or auto-detect.",
+                "Calculate basic metrics: files changed, lines added/removed."
+            ],
+            "sub_task": "Fetch and parse the code changes to be reviewed.",
+            "sub_task_agent": "researcher"
+        },
+        {
+            "bullet_points": [
+                "If focus includes 'security', scan for common vulnerabilities (SQL injection, XSS, hardcoded secrets, etc.).",
+                "Check for OWASP Top 10 security issues relevant to the language.",
+                "Identify insecure patterns: eval usage, unsafe deserialization, weak crypto.",
+                "Flag potential data leaks and authentication issues.",
+                "Assign severity levels: Critical, High, Medium, Low based on exploitability and impact."
+            ],
+            "sub_task": "Perform security analysis and identify vulnerabilities.",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "If focus includes 'quality', check code quality metrics.",
+                "Analyze code complexity, duplication, and maintainability.",
+                "Check for code smells: long methods, too many parameters, deep nesting.",
+                "Verify proper error handling and logging.",
+                "Assess naming conventions and code organization."
+            ],
+            "sub_task": "Analyze code quality and identify improvement areas.",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "If focus includes 'performance', identify performance issues.",
+                "Check for inefficient algorithms, N+1 queries, memory leaks.",
+                "Analyze loop complexity and unnecessary computations.",
+                "Identify blocking operations and concurrency issues.",
+                "Suggest optimizations for database queries and API calls."
+            ],
+            "sub_task": "Analyze performance implications and identify bottlenecks.",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "If focus includes 'practices', check adherence to best practices.",
+                "Verify language-specific idioms and patterns.",
+                "Check for proper use of frameworks and libraries.",
+                "Assess code structure and architectural patterns.",
+                "Verify proper dependency management and imports."
+            ],
+            "sub_task": "Evaluate adherence to best practices and coding standards.",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "For each identified issue, generate detailed explanation of the problem.",
+                "Provide specific code examples showing the issue.",
+                "Generate concrete solution with corrected code.",
+                "Include references to documentation or security standards (OWASP, CWE).",
+                "Prioritize issues by severity and impact."
+            ],
+            "sub_task": "Generate detailed recommendations and code solutions for each issue.",
+            "sub_task_agent": "engineer"
+        },
+        {
+            "bullet_points": [
+                "Calculate overall review score and category scores (Quality, Security, Performance).",
+                "Determine review status: Approve, Approve with Changes, Request Changes, Reject.",
+                "Identify positive highlights (good practices, well-written code).",
+                "Format the final report with clear sections: Critical, Warnings, Suggestions, Highlights.",
+                "Include file locations, line numbers, and clickable references.",
+                "Generate executive summary with key statistics."
+            ],
+            "sub_task": "Compile and format the comprehensive code review report.",
+            "sub_task_agent": "engineer"
+        }
+    ]
+}

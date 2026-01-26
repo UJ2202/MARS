@@ -57,7 +57,14 @@ export function CostBreakdown({
       <div className="p-4">
         {activeView === 'model' && (
           <div className="space-y-3">
-            {modelBreakdown.map((model) => (
+            {modelBreakdown.length === 0 ? (
+              <div className="text-center py-8 text-gray-400">
+                <Cpu className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No model cost data yet</p>
+                <p className="text-xs mt-1">Cost breakdown will appear as the workflow executes</p>
+              </div>
+            ) : (
+              modelBreakdown.map((model) => (
               <div key={model.model} className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
@@ -84,13 +91,21 @@ export function CostBreakdown({
                   <span>{model.call_count} calls</span>
                 </div>
               </div>
-            ))}
+              ))
+            )}
           </div>
         )}
 
         {activeView === 'agent' && (
           <div className="space-y-3">
-            {agentBreakdown.map((agent) => (
+            {agentBreakdown.length === 0 ? (
+              <div className="text-center py-8 text-gray-400">
+                <Bot className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No agent cost data yet</p>
+                <p className="text-xs mt-1">Cost breakdown will appear as agents execute</p>
+              </div>
+            ) : (
+              agentBreakdown.map((agent) => (
               <div key={agent.agent} className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2">
@@ -117,13 +132,21 @@ export function CostBreakdown({
                   <span>{agent.call_count} calls</span>
                 </div>
               </div>
-            ))}
+              ))
+            )}
           </div>
         )}
 
         {activeView === 'step' && (
           <div className="space-y-2 max-h-64 overflow-y-auto">
-            {stepBreakdown.map((step) => (
+            {stepBreakdown.length === 0 ? (
+              <div className="text-center py-8 text-gray-400">
+                <Layers className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No step cost data yet</p>
+                <p className="text-xs mt-1">Cost breakdown will appear as steps complete</p>
+              </div>
+            ) : (
+              stepBreakdown.map((step) => (
               <div
                 key={step.step_id}
                 className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg"
@@ -145,7 +168,8 @@ export function CostBreakdown({
                   </span>
                 </div>
               </div>
-            ))}
+              ))
+            )}
           </div>
         )}
       </div>

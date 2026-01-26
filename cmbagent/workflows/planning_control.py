@@ -44,6 +44,8 @@ def planning_and_control_context_carryover(
     plan_reviewer_model=default_agents_llm_model['plan_reviewer'],
     engineer_model=default_agents_llm_model['engineer'],
     researcher_model=default_agents_llm_model['researcher'],
+    web_surfer_model=default_agents_llm_model.get('web_surfer', default_agents_llm_model['researcher']),
+    retrieve_assistant_model=default_agents_llm_model.get('retrieve_assistant', default_agents_llm_model['researcher']),
     idea_maker_model=default_agents_llm_model['idea_maker'],
     idea_hater_model=default_agents_llm_model['idea_hater'],
     camb_context_model=default_agents_llm_model['camb_context'],
@@ -82,6 +84,8 @@ def planning_and_control_context_carryover(
         plan_reviewer_model: Model to use for plan reviewer agent
         engineer_model: Model to use for engineer agent
         researcher_model: Model to use for researcher agent
+        web_surfer_model: Model to use for web_surfer agent
+        retrieve_assistant_model: Model to use for retrieve_assistant agent
         idea_maker_model: Model to use for idea maker agent
         idea_hater_model: Model to use for idea hater agent
         camb_context_model: Model to use for CAMB context agent
@@ -374,6 +378,8 @@ def planning_and_control_context_carryover(
     # control
     engineer_config = get_model_config(engineer_model, api_keys)
     researcher_config = get_model_config(researcher_model, api_keys)
+    web_surfer_config = get_model_config(web_surfer_model, api_keys)
+    retrieve_assistant_config = get_model_config(retrieve_assistant_model, api_keys)
     camb_context_config = get_model_config(camb_context_model, api_keys)
     idea_maker_config = get_model_config(idea_maker_model, api_keys)
     idea_hater_config = get_model_config(idea_hater_model, api_keys)
@@ -414,6 +420,8 @@ def planning_and_control_context_carryover(
             agent_llm_configs={
                 'engineer': engineer_config,
                 'researcher': researcher_config,
+                'web_surfer': web_surfer_config,
+                'retrieve_assistant': retrieve_assistant_config,
                 'idea_maker': idea_maker_config,
                 'idea_hater': idea_hater_config,
                 'camb_context': camb_context_config,
@@ -657,6 +665,8 @@ def planning_and_control(
     plan_reviewer_model=default_agents_llm_model['plan_reviewer'],
     engineer_model=default_agents_llm_model['engineer'],
     researcher_model=default_agents_llm_model['researcher'],
+    web_surfer_model=default_agents_llm_model.get('web_surfer', default_agents_llm_model['researcher']),
+    retrieve_assistant_model=default_agents_llm_model.get('retrieve_assistant', default_agents_llm_model['researcher']),
     idea_maker_model=default_agents_llm_model['idea_maker'],
     idea_hater_model=default_agents_llm_model['idea_hater'],
     work_dir=work_dir_default,
@@ -801,6 +811,8 @@ def planning_and_control(
 
     engineer_config = get_model_config(engineer_model, api_keys)
     researcher_config = get_model_config(researcher_model, api_keys)
+    web_surfer_config = get_model_config(web_surfer_model, api_keys)
+    retrieve_assistant_config = get_model_config(retrieve_assistant_model, api_keys)
     idea_maker_config = get_model_config(idea_maker_model, api_keys)
     idea_hater_config = get_model_config(idea_hater_model, api_keys)
 
@@ -816,6 +828,8 @@ def planning_and_control(
         agent_llm_configs={
             'engineer': engineer_config,
             'researcher': researcher_config,
+            'web_surfer': web_surfer_config,
+            'retrieve_assistant': retrieve_assistant_config,
             'idea_maker': idea_maker_config,
             'idea_hater': idea_hater_config,
         },

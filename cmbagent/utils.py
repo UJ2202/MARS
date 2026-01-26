@@ -126,6 +126,8 @@ default_agents_llm_model ={
     # "terminator": "gpt-5",
     # "terminator": "gemini-2.5-pro-preview-03-25",
     "researcher": "gpt-4.1-2025-04-14",
+    "web_surfer": "gpt-4.1-2025-04-14",
+    "retrieve_assistant": "gpt-4.1-2025-04-14",
     "perplexity": "o3-mini-2025-01-31",
     "planner": "gpt-4.1-2025-04-14",
     # "plan_reviewer": "claude-3-7-sonnet-20250219",

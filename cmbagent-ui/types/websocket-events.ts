@@ -187,6 +187,8 @@ export interface CostUpdateData {
   step_id?: string;
   model: string;
   tokens: number;
+  input_tokens?: number;
+  output_tokens?: number;
   cost_usd: number;
   total_cost_usd: number;
 }

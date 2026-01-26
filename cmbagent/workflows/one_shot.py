@@ -30,6 +30,7 @@ def one_shot(
     max_n_attempts=3,
     engineer_model=default_agents_llm_model['engineer'],
     researcher_model=default_agents_llm_model['researcher'],
+    web_surfer_model=default_agents_llm_model.get('web_surfer', default_agents_llm_model['researcher']),
     plot_judge_model=default_agents_llm_model['plot_judge'],
     camb_context_model=default_agents_llm_model['camb_context'],
     default_llm_model=default_llm_model_default,
@@ -52,6 +53,7 @@ def one_shot(
         max_n_attempts: Maximum attempts before failure
         engineer_model: Model for engineer agent
         researcher_model: Model for researcher agent
+        web_surfer_model: Model for web_surfer agent
         plot_judge_model: Model for plot judge agent
         camb_context_model: Model for CAMB context agent
         default_llm_model: Default LLM model
@@ -87,6 +89,7 @@ def one_shot(
 
     engineer_config = get_model_config(engineer_model, api_keys)
     researcher_config = get_model_config(researcher_model, api_keys)
+    web_surfer_config = get_model_config(web_surfer_model, api_keys)
     plot_judge_config = get_model_config(plot_judge_model, api_keys)
     camb_context_config = get_model_config(camb_context_model, api_keys)
 
@@ -97,6 +100,7 @@ def one_shot(
         agent_llm_configs={
             'engineer': engineer_config,
             'researcher': researcher_config,
+            'web_surfer': web_surfer_config,
             'plot_judge': plot_judge_config,
             'camb_context': camb_context_config,
         },
@@ -211,6 +215,7 @@ def human_in_the_loop(
     max_n_attempts=3,
     engineer_model='gpt-4o-2024-11-20',
     researcher_model='gpt-4o-2024-11-20',
+    web_surfer_model='gpt-4o-2024-11-20',
     agent='engineer',
     api_keys=None,
 ):
@@ -223,8 +228,7 @@ def human_in_the_loop(
         max_rounds: Maximum conversation rounds
         max_n_attempts: Maximum attempts before failure
         engineer_model: Model for engineer agent
-        researcher_model: Model for researcher agent
-        agent: Which agent to use
+        researcher_model: Model for researcher agent        web_surfer_model: Model for web_surfer agent        agent: Which agent to use
         api_keys: API keys dictionary
 
     Returns:
@@ -239,6 +243,7 @@ def human_in_the_loop(
 
     engineer_config = get_model_config(engineer_model, api_keys)
     researcher_config = get_model_config(researcher_model, api_keys)
+    web_surfer_config = get_model_config(web_surfer_model, api_keys)
 
     cmbagent = CMBAgent(
         cache_seed=42,
@@ -246,6 +251,7 @@ def human_in_the_loop(
         agent_llm_configs={
             'engineer': engineer_config,
             'researcher': researcher_config,
+            'web_surfer': web_surfer_config,
         },
         mode="chat",
         chat_agent=agent,

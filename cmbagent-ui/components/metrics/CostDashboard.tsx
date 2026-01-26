@@ -21,7 +21,7 @@ export function CostDashboard({
   previousRunCost,
 }: CostDashboardProps) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6 h-full overflow-y-auto">
       {/* Budget Warning */}
       {budget && budget.current_usage > budget.warning_threshold && (
         <div className={`p-4 rounded-lg border ${
@@ -51,7 +51,9 @@ export function CostDashboard({
       />
 
       {/* Chart */}
-      <CostChart data={timeSeries} height={200} />
+      {timeSeries.length > 0 && (
+        <CostChart data={timeSeries} height={200} />
+      )}
 
       {/* Breakdown */}
       <CostBreakdown

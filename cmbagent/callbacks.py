@@ -15,6 +15,7 @@ from typing import Callable, Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
 import time
+from sqlalchemy.orm import Session
 
 
 class WorkflowPhase(Enum):
@@ -547,7 +548,8 @@ def create_websocket_callbacks(
         })
 
     def on_cost_update(cost_data: Dict[str, Any]) -> None:
-        """Emit cost_update WebSocket event"""
+        """Emit cost_update WebSocket event and save to database"""
+        # Send WebSocket event
         send_event_func("cost_update", {
             "run_id": run_id,
             "step_id": cost_data.get("step_id"),
@@ -559,6 +561,73 @@ def create_websocket_callbacks(
             "agent_breakdown": cost_data.get("agent_breakdown", []),
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
+        
+        # Save cost records to database
+        try:
+            from cmbagent.database import CostRepository, get_db_session
+            
+            # Get database session
+            db = get_db_session()
+            if not db:
+                return
+            
+            try:
+                # Get session_id from workflow run
+                from cmbagent.database.models import WorkflowRun
+                run = db.query(WorkflowRun).filter(WorkflowRun.id == run_id).first()
+                if not run:
+                    print(f"Warning: Could not find run {run_id} for cost recording")
+                    return
+                
+                cost_repo = CostRepository(db, run.session_id)
+                step_id = cost_data.get("step_id")
+                
+                # Save individual model breakdown entries
+                model_breakdown = cost_data.get("model_breakdown", [])
+                if model_breakdown:
+                    for entry in model_breakdown:
+                        model = entry.get("model", "unknown")
+                        cost_usd = float(entry.get("cost", 0))
+                        total_tokens = int(entry.get("tokens", 0))
+                        
+                        # Estimate prompt/completion split if not provided
+                        # Typically ~70% input, 30% output for most use cases
+                        prompt_tokens = int(total_tokens * 0.7)
+                        completion_tokens = total_tokens - prompt_tokens
+                        
+                        if cost_usd > 0 or total_tokens > 0:
+                            cost_repo.record_cost(
+                                run_id=run_id,
+                                model=model,
+                                prompt_tokens=prompt_tokens,
+                                completion_tokens=completion_tokens,
+                                cost_usd=cost_usd,
+                                step_id=step_id
+                            )
+                
+                # If no model breakdown, save aggregate cost
+                elif cost_data.get("total_cost", 0) > 0 or cost_data.get("total_tokens", 0) > 0:
+                    model = cost_data.get("model", "unknown")
+                    cost_usd = float(cost_data.get("total_cost", 0))
+                    total_tokens = int(cost_data.get("total_tokens", 0))
+                    prompt_tokens = int(total_tokens * 0.7)
+                    completion_tokens = total_tokens - prompt_tokens
+                    
+                    cost_repo.record_cost(
+                        run_id=run_id,
+                        model=model,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        cost_usd=cost_usd,
+                        step_id=step_id
+                    )
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            print(f"Warning: Failed to save cost to database: {e}")
+            # Continue execution - don't fail workflow if DB save fails
 
     def on_agent_message(agent: str, role: str, content: str, metadata: Dict[str, Any]) -> None:
         """Emit agent_message WebSocket event for comprehensive logging"""

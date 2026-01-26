@@ -363,6 +363,12 @@ async def execute_cmbagent_task(
                     if self.original:
                         self.original.flush()
 
+                def fileno(self):
+                    """Return file descriptor if available, otherwise raise AttributeError"""
+                    if hasattr(self.original, 'fileno'):
+                        return self.original.fileno()
+                    raise AttributeError("fileno not available")
+
                 def isatty(self):
                     return False
 
