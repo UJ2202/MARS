@@ -1,9 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { Newspaper, GitBranch, Code2, ArrowLeft } from 'lucide-react'
-import Link from 'next/link'
-import AIWeeklyTask from '@/components/tasks/AIWeeklyTask'
+import { Newspaper, GitBranch, Code2 } from 'lucide-react'
+import TopNavigation from '@/components/TopNavigation'
+import AIWeeklyTaskEnhanced from '@/components/tasks/AIWeeklyTaskEnhanced'
 import ReleaseNotesTask from '@/components/tasks/ReleaseNotesTask'
 import CodeReviewTask from '@/components/tasks/CodeReviewTask'
 
@@ -16,7 +16,7 @@ export default function ToolsPage() {
     {
       id: 'ai-weekly' as const,
       name: 'AI Weekly Report',
-      description: 'Generate comprehensive weekly AI technology reports',
+      description: 'Generate comprehensive weekly AI technology reports with HITL',
       icon: Newspaper,
       color: 'from-blue-500 to-purple-500'
     },
@@ -37,7 +37,7 @@ export default function ToolsPage() {
   ]
 
   if (activeTool === 'ai-weekly') {
-    return <AIWeeklyTask onBack={() => setActiveTool(null)} />
+    return <AIWeeklyTaskEnhanced onBack={() => setActiveTool(null)} />
   }
 
   if (activeTool === 'release-notes') {
@@ -50,6 +50,8 @@ export default function ToolsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
+      <TopNavigation />
+      
       {/* Header */}
       <header className="bg-black/20 backdrop-blur-sm border-b border-white/10">
         <div className="container mx-auto px-4 py-4">
@@ -60,13 +62,6 @@ export default function ToolsPage() {
               </h1>
               <p className="text-sm text-gray-300">AI-Powered Development Automation</p>
             </div>
-            <Link
-              href="/"
-              className="flex items-center space-x-2 px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors text-white"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Back to Research</span>
-            </Link>
           </div>
         </div>
       </header>

@@ -5,6 +5,7 @@ import TaskInput from '@/components/TaskInput'
 import ConsoleOutput from '@/components/ConsoleOutput'
 import ResultDisplay from '@/components/ResultDisplay'
 import Header from '@/components/Header'
+import TopNavigation from '@/components/TopNavigation'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import { WorkflowDashboard } from '@/components/workflow'
 import { DAGWorkspace } from '@/components/dag'
@@ -310,6 +311,7 @@ export default function Home() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
+      <TopNavigation />
       <Header />
 
       <main ref={containerRef} className="flex-1 flex flex-col min-h-0">

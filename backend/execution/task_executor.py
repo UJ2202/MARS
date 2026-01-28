@@ -66,6 +66,12 @@ async def execute_cmbagent_task(
     dag_tracker = None
 
     try:
+        # Debug logging
+        print(f"[DEBUG] execute_cmbagent_task called")
+        print(f"[DEBUG] Task ID: {task_id}")
+        print(f"[DEBUG] Mode: {config.get('mode', 'NOT SET')}")
+        print(f"[DEBUG] Config keys: {list(config.keys())}")
+        
         await send_ws_event(
             websocket, "status",
             {"message": "Initializing CMBAgent..."},
@@ -80,6 +86,8 @@ async def execute_cmbagent_task(
 
         # Map frontend config to CMBAgent parameters
         mode = config.get("mode", "one-shot")
+        print(f"[DEBUG] Detected mode: {mode}")
+        
         engineer_model = config.get("model", "gpt-4o")
         max_rounds = config.get("maxRounds", 25)
         max_attempts = config.get("maxAttempts", 6)
@@ -400,6 +408,24 @@ async def execute_cmbagent_task(
 
                 # Execute based on mode
                 if mode == "planning-control":
+                    # Set up approval configuration for HITL
+                    approval_config = None
+                    approval_mode = config.get("approvalMode", "none")
+                    
+                    if approval_mode != "none":
+                        from cmbagent.database.approval_types import ApprovalMode, ApprovalConfig
+                        
+                        if approval_mode == "after_planning":
+                            approval_config = ApprovalConfig(mode=ApprovalMode.AFTER_PLANNING)
+                        elif approval_mode == "before_each_step":
+                            approval_config = ApprovalConfig(mode=ApprovalMode.BEFORE_EACH_STEP)
+                        elif approval_mode == "on_error":
+                            approval_config = ApprovalConfig(mode=ApprovalMode.ON_ERROR)
+                        elif approval_mode == "manual":
+                            approval_config = ApprovalConfig(mode=ApprovalMode.MANUAL)
+                        
+                        print(f"[TaskExecutor] HITL enabled with mode: {approval_mode}")
+                    
                     results = cmbagent.planning_and_control_context_carryover(
                         task=task,
                         max_rounds_control=max_rounds,
@@ -416,7 +442,8 @@ async def execute_cmbagent_task(
                         clear_work_dir=False,
                         default_formatter_model=default_formatter_model,
                         default_llm_model=default_llm_model,
-                        callbacks=workflow_callbacks
+                        callbacks=workflow_callbacks,
+                        approval_config=approval_config
                     )
                 elif mode == "idea-generation":
                     results = cmbagent.planning_and_control_context_carryover(

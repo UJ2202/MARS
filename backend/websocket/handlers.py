@@ -57,6 +57,12 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
         task = data.get("task", "")
         config = data.get("config", {})
 
+        # Debug logging
+        print(f"[DEBUG] WebSocket received data for task {task_id}")
+        print(f"[DEBUG] Task: {task[:100]}...")
+        print(f"[DEBUG] Config mode: {config.get('mode', 'NOT SET')}")
+        print(f"[DEBUG] Config keys: {list(config.keys())}")
+
         if not task:
             await send_ws_event(websocket, "error", {"message": "No task provided"}, run_id=task_id)
             return
@@ -161,11 +167,21 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
         else:
             await send_ws_event(websocket, "pong", {}, run_id=task_id)
 
-    elif msg_type == "resolve_approval":
+    elif msg_type in ["resolve_approval", "approval_response"]:
         # Handle approval resolution (Stage 6: HITL)
         approval_id = message.get("approval_id")
-        resolution = message.get("resolution")
-        feedback = message.get("feedback")
+        
+        # Support both 'resolution' and 'approved' formats
+        if "approved" in message:
+            resolution = "approved" if message.get("approved") else "rejected"
+        else:
+            resolution = message.get("resolution", "rejected")
+        
+        feedback = message.get("feedback", "")
+        modifications = message.get("modifications", "")
+        
+        # Combine feedback and modifications
+        full_feedback = f"{feedback}\n\nModifications: {modifications}" if modifications else feedback
 
         try:
             from cmbagent.database import get_db_session
@@ -180,6 +196,11 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
 
                 if not approval:
                     print(f"Approval {approval_id} not found")
+                    await send_ws_event(
+                        websocket, "error",
+                        {"message": f"Approval {approval_id} not found"},
+                        run_id=task_id
+                    )
                     return
 
                 run = db.query(WorkflowRun).filter(
@@ -194,16 +215,32 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
                 approval_manager.resolve_approval(
                     approval_id=approval_id,
                     resolution=resolution,
-                    user_feedback=feedback
+                    user_feedback=full_feedback
                 )
 
-                print(f"Approval {approval_id} resolved as {resolution}")
+                print(f"✅ Approval {approval_id} resolved as {resolution}")
+                
+                # Send confirmation back to client
+                await send_ws_event(
+                    websocket, "approval_received",
+                    {
+                        "approval_id": approval_id,
+                        "approved": resolution == "approved",
+                        "feedback": full_feedback
+                    },
+                    run_id=task_id
+                )
 
             finally:
                 db.close()
 
         except Exception as e:
             print(f"Error resolving approval: {e}")
+            await send_ws_event(
+                websocket, "error",
+                {"message": f"Failed to resolve approval: {str(e)}"},
+                run_id=task_id
+            )
 
     elif msg_type == "pause":
         print(f"Pause requested for task {task_id}")

@@ -100,8 +100,9 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
   const heartbeatIntervalRef = useRef<NodeJS.Timeout>();
   const shouldReconnect = useRef<boolean>(false);
-  const lastMessageTimestamp = useRef<number>(Date.now());
-
+  const lastMessageTimestamp = useRef<number>(Date.now());  
+  // Store task and config for reconnection
+  const taskDataRef = useRef<{ task: string; config: any } | null>(null);
   // Console helpers
   const addConsoleOutput = useCallback((output: string) => {
     setConsoleOutput(prev => [...prev, output]);
@@ -170,11 +171,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     onWorkflowCompleted: () => {
       setWorkflowStatus('completed');
       setIsRunning(false);
+      shouldReconnect.current = false; // Stop reconnection on completion
       addConsoleOutput('✅ Workflow completed');
     },
     onWorkflowFailed: (error) => {
       setWorkflowStatus('failed');
       setIsRunning(false);
+      shouldReconnect.current = false; // Stop reconnection on failure
       addConsoleOutput(`❌ Workflow failed: ${error}`);
     },
     onDAGCreated: (data: DAGCreatedData) => {
@@ -200,6 +203,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     onComplete: () => {
       setWorkflowStatus('completed');
       setIsRunning(false);
+      shouldReconnect.current = false; // Stop reconnection on completion
       addConsoleOutput('✅ Task execution completed');
     },
     onError: (data) => {
@@ -390,7 +394,9 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
           addConsoleOutput('🔌 WebSocket connected');
 
           // Send task data
-          ws.send(JSON.stringify({ task, config }));
+          const taskData = { task, config };
+          taskDataRef.current = taskData; // Store for reconnection
+          ws.send(JSON.stringify(taskData));
 
           // Start heartbeat
           startHeartbeat(ws);
@@ -457,11 +463,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
                   setLastError(null);
                   addConsoleOutput('🔌 WebSocket reconnected');
 
-                  // Request missed events
-                  newWs.send(JSON.stringify({
-                    type: 'request_state',
-                    since: lastMessageTimestamp.current
-                  }));
+                  // Resend task data on reconnection
+                  if (taskDataRef.current) {
+                    console.log('[WebSocket] Resending task data on reconnection');
+                    newWs.send(JSON.stringify(taskDataRef.current));
+                  }
 
                   startHeartbeat(newWs);
                 };
