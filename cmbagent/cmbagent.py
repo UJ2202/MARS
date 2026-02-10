@@ -107,6 +107,9 @@ class CMBAgent:
                  approval_config = None,  # Optional ApprovalConfig for HITL control
                  enable_ag2_free_tools = True,  # Enable AG2 free tools by default (LangChain + CrewAI)
                  enable_mcp_client = False,  # Enable MCP client for external MCP servers (GitHub, filesystem, etc.)
+                 managed_mode = False,  # Skip DB init when managed by parent phase
+                 parent_session_id = None,  # Use parent's session ID
+                 parent_db_session = None,  # Use parent's DB session
                 #  make_new_rag_agents = False, ## can be a list of names for new rag agents to be created
                  **kwargs):
         """
@@ -210,7 +213,7 @@ class CMBAgent:
         # add the work_dir to the python path so we can import modules from it
         sys.path.append(self.work_dir)
 
-        # Database initialization (optional, controlled by environment variable)
+        # Database initialization (optional, controlled by environment variable and managed_mode)
         self.use_database = os.getenv("CMBAGENT_USE_DATABASE", "true").lower() == "true"
         self.db_session: Optional[Any] = None
         self.session_id: Optional[str] = None
@@ -224,7 +227,20 @@ class CMBAgent:
         self.retry_manager: Optional[Any] = None
         self.retry_metrics: Optional[Any] = None
 
-        if self.use_database:
+        # Skip DB initialization if in managed mode
+        if managed_mode:
+            if cmbagent_debug:
+                print(f"[CMBAgent] Running in managed_mode, skipping DB initialization")
+
+            # Use parent's session/DB if provided
+            self.session_id = parent_session_id
+            self.db_session = parent_db_session
+
+            # Note: workflow_repo, persistence, etc. are left as None
+            # The parent phase manages all tracking/persistence
+            self.use_database = False  # Disable DB operations in solve()
+
+        elif self.use_database:
             try:
                 from cmbagent.database import get_db_session, init_database
                 from cmbagent.database.repository import WorkflowRepository

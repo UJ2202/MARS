@@ -17,6 +17,7 @@ Available Phases:
 - IdeaGenerationPhase: Generate and review ideas
 - HITLPlanningPhase: Interactive planning with human feedback
 - HITLControlPhase: Step-by-step execution with human approval
+- CopilotPhase: Flexible assistant that adapts to task complexity
 
 Workflow Context:
 - WorkflowContext: Master context for entire workflow
@@ -54,6 +55,7 @@ from cmbagent.phases.hitl_checkpoint import HITLCheckpointPhase, HITLCheckpointC
 from cmbagent.phases.idea_generation import IdeaGenerationPhase, IdeaGenerationPhaseConfig
 from cmbagent.phases.hitl_planning import HITLPlanningPhase, HITLPlanningPhaseConfig
 from cmbagent.phases.hitl_control import HITLControlPhase, HITLControlPhaseConfig
+from cmbagent.phases.copilot_phase import CopilotPhase, CopilotPhaseConfig
 
 
 # Register all phases with the registry
@@ -64,6 +66,7 @@ PhaseRegistry.register_class("hitl_checkpoint", HITLCheckpointPhase)
 PhaseRegistry.register_class("idea_generation", IdeaGenerationPhase)
 PhaseRegistry.register_class("hitl_planning", HITLPlanningPhase)
 PhaseRegistry.register_class("hitl_control", HITLControlPhase)
+PhaseRegistry.register_class("copilot", CopilotPhase)
 
 
 __all__ = [
@@ -108,6 +111,10 @@ __all__ = [
     # HITL Control
     'HITLControlPhase',
     'HITLControlPhaseConfig',
+
+    # Copilot
+    'CopilotPhase',
+    'CopilotPhaseConfig',
 
     # Execution manager
     'PhaseExecutionManager',

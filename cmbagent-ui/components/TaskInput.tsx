@@ -33,7 +33,7 @@ interface TaskInputProps {
 export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = false, onOpenDirectory }: TaskInputProps) {
   const [task, setTask] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [mode, setMode] = useState<'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive'>('one-shot')
+  const [mode, setMode] = useState<'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive' | 'copilot'>('one-shot')
   const [showOcrDropdown, setShowOcrDropdown] = useState(false)
   const [showCredentialsModal, setShowCredentialsModal] = useState(false)
   const [showOpenAIError, setShowOpenAIError] = useState(false)
@@ -70,7 +70,7 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
     maxAttempts: 1,
     agent: 'engineer',
     workDir: '~/cmbagent_workdir',
-    mode: 'one-shot' as 'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive',
+    mode: 'one-shot' as 'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive' | 'copilot',
     // Global model options
     defaultModel: 'gpt-4.1-2025-04-14',
     defaultFormatterModel: 'o3-mini-2025-01-31',
@@ -79,7 +79,7 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
     nPlanReviews: 1,
     planInstructions: '',
     plannerModel: 'gpt-4.1-2025-04-14',
-    researcherModel: 'gpt-4.1-2025-04-14', 
+    researcherModel: 'gpt-4.1-2025-04-14',
     planReviewerModel: 'o3-mini-2025-01-31',
     // Idea Generation specific options
     ideaMakerModel: 'gpt-4.1-2025-04-14',
@@ -92,6 +92,15 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
     allowStepSkip: true,
     allowStepRetry: true,
     showStepContext: true,
+    // Copilot specific options
+    availableAgents: ['engineer', 'researcher'],
+    enablePlanning: true,
+    complexityThreshold: 50,
+    continuousMode: false,
+    maxTurns: 20,
+    autoApproveSimple: true,
+    engineerInstructions: '',
+    researcherInstructions: '',
     // OCR specific options
     saveMarkdown: true,
     saveJson: true,
@@ -129,7 +138,7 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
     if (mode === 'idea-generation') {
       return [
         'Bank customer data during covid-19',
-        'Galaxy cluster observations from Hubble telescope', 
+        'Galaxy cluster observations from Hubble telescope',
         'Climate change temperature records 1900-2020'
       ]
     } else if (mode === 'hitl-interactive') {
@@ -137,6 +146,12 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
         'Analyze CMB power spectrum with custom parameters and plot results',
         'Build a market impact model incorporating order flow and volatility',
         'Process astronomical data from JWST and identify candidate exoplanets'
+      ]
+    } else if (mode === 'copilot') {
+      return [
+        'Help me analyze this dataset and create visualizations',
+        'Build a simple web scraper for news articles',
+        'Create a Python script that processes CSV files and generates a summary report'
       ]
     } else if (mode === 'ocr') {
       return [
@@ -260,8 +275,8 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
             <button
               onClick={() => {
                 setMode('hitl-interactive')
-                setConfig(prev => ({ 
-                  ...prev, 
+                setConfig(prev => ({
+                  ...prev,
                   mode: 'hitl-interactive',
                   maxPlanSteps: 5,
                   maxHumanIterations: 3,
@@ -276,6 +291,38 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               🤝 HITL Interactive
+            </button>
+          </Tooltip>
+          <Tooltip text="Flexible AI copilot - automatically routes simple tasks to direct execution, complex tasks to planning" wide position="bottom">
+            <button
+              onClick={() => {
+                setMode('copilot')
+                setConfig(prev => ({
+                  ...prev,
+                  mode: 'copilot',
+                  enablePlanning: true,
+                  availableAgents: ['engineer', 'researcher'],
+                  approvalMode: 'after_step',
+                  autoApproveSimple: true,
+                }))
+                // Trigger copilot mode UI immediately with empty task
+                onSubmit('', {
+                  mode: 'copilot',
+                  enablePlanning: true,
+                  availableAgents: ['engineer', 'researcher'],
+                  approvalMode: 'after_step',
+                  autoApproveSimple: true,
+                  _enterCopilotMode: true  // Special flag to just enter UI mode
+                })
+              }}
+              disabled={isRunning}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                mode === 'copilot'
+                  ? 'bg-purple-600 text-white shadow-sm'
+                  : 'bg-black/30 text-gray-300 hover:text-white hover:bg-black/50'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              🚀 Copilot
             </button>
           </Tooltip>
           {/* More Tools Dropdown */}
@@ -763,6 +810,131 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
                     <select
                       value={config.researcherModel || 'gpt-4.1-2025-04-14'}
                       onChange={(e) => setConfig({...config, researcherModel: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="gpt-4o">GPT-4o</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="gpt-4.1-2025-04-14">GPT-4.1</option>
+                      <option value="gpt-5-2025-08-07">GPT-5</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                      <option value="o3-mini-2025-01-31">o3-mini</option>
+                    </select>
+                  </div>
+                </>
+              ) : mode === 'copilot' ? (
+                /* Copilot Configuration */
+                <>
+                  <div>
+                    <Tooltip text="Enable automatic planning for complex tasks" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Auto Planning</label>
+                    </Tooltip>
+                    <select
+                      value={config.enablePlanning ? 'true' : 'false'}
+                      onChange={(e) => setConfig({...config, enablePlanning: e.target.value === 'true'})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="true">Enabled (auto-plan complex tasks)</option>
+                      <option value="false">Disabled (direct execution)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="When to request human approval during execution" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Approval Mode</label>
+                    </Tooltip>
+                    <select
+                      value={config.approvalMode}
+                      onChange={(e) => setConfig({...config, approvalMode: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="after_step">After Each Step</option>
+                      <option value="before_step">Before Each Step</option>
+                      <option value="both">Before & After Each Step</option>
+                      <option value="none">No Approval (Auto)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="Skip approval for simple one-shot tasks" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Auto-approve Simple</label>
+                    </Tooltip>
+                    <select
+                      value={config.autoApproveSimple ? 'true' : 'false'}
+                      onChange={(e) => setConfig({...config, autoApproveSimple: e.target.value === 'true'})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="true">Yes (skip approval for simple tasks)</option>
+                      <option value="false">No (always require approval)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="Maximum plan steps for complex tasks" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Max Plan Steps</label>
+                    </Tooltip>
+                    <input
+                      type="number"
+                      value={config.maxPlanSteps}
+                      onChange={(e) => setConfig({...config, maxPlanSteps: parseInt(e.target.value)})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      min="1"
+                      max="10"
+                      disabled={isRunning}
+                    />
+                  </div>
+
+                  <div>
+                    <Tooltip text="Agent for code execution and technical tasks" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Engineer Model</label>
+                    </Tooltip>
+                    <select
+                      value={config.model}
+                      onChange={(e) => setConfig({...config, model: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="gpt-4o">GPT-4o</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="gpt-4.1-2025-04-14">GPT-4.1</option>
+                      <option value="gpt-5-2025-08-07">GPT-5</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                      <option value="o3-mini-2025-01-31">o3-mini</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="Agent for research and analysis tasks" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Researcher Model</label>
+                    </Tooltip>
+                    <select
+                      value={config.researcherModel}
+                      onChange={(e) => setConfig({...config, researcherModel: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="gpt-4o">GPT-4o</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="gpt-4.1-2025-04-14">GPT-4.1</option>
+                      <option value="gpt-5-2025-08-07">GPT-5</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                      <option value="o3-mini-2025-01-31">o3-mini</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="Agent for task planning" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Planner Model</label>
+                    </Tooltip>
+                    <select
+                      value={config.plannerModel}
+                      onChange={(e) => setConfig({...config, plannerModel: e.target.value})}
                       className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
                       disabled={isRunning}
                     >

@@ -142,8 +142,16 @@ class WebSocketApprovalManager:
             print(f"  - approval_id: {request.id}")
             print(f"  - step_id: {step_id}")
             print(f"  - checkpoint_type: {checkpoint_type}")
-            print(f"  - message: {message[:100]}...")
+            print(f"  - message preview: {message[:200]}...")
             print(f"  - options: {request.options}")
+
+            # Debug: Print plan from context_snapshot
+            if 'plan' in context_snapshot:
+                plan_data = context_snapshot['plan']
+                print(f"  - context_snapshot plan: {len(plan_data) if isinstance(plan_data, list) else 'not a list'} steps")
+                if isinstance(plan_data, list) and len(plan_data) > 0:
+                    first_step = plan_data[0]
+                    print(f"  - first step preview: {first_step.get('sub_task', str(first_step))[:150] if isinstance(first_step, dict) else str(first_step)[:150]}")
 
             # Sanitize context to make it JSON serializable
             def make_json_serializable(obj):
@@ -257,20 +265,39 @@ class WebSocketApprovalManager:
             ValueError: If approval not found
             TimeoutError: If timeout exceeded
         """
+        print(f"[WebSocketApprovalManager] wait_for_approval_async called for {approval_id}")
+
         with self._lock:
             request = WebSocketApprovalManager._pending.get(approval_id)
+            pending_count = len(WebSocketApprovalManager._pending)
+            pending_ids = list(WebSocketApprovalManager._pending.keys())
+
+        print(f"[WebSocketApprovalManager] Pending approvals count: {pending_count}")
+        print(f"[WebSocketApprovalManager] Pending IDs: {pending_ids}")
 
         if not request:
+            print(f"[WebSocketApprovalManager] ERROR: Approval {approval_id} not found in pending!")
             raise ValueError(f"Approval {approval_id} not found")
 
+        print(f"[WebSocketApprovalManager] Found request, starting wait loop...")
+        print(f"[WebSocketApprovalManager] Request status: {request.status}, event.is_set(): {request._event.is_set()}")
+
         start = time.time()
+        poll_count = 0
         while not request._event.is_set():
-            if time.time() - start > timeout_seconds:
+            poll_count += 1
+            elapsed = time.time() - start
+            if poll_count % 10 == 0:  # Log every 10 seconds
+                print(f"[WebSocketApprovalManager] Still waiting... elapsed={elapsed:.1f}s, polls={poll_count}")
+            if elapsed > timeout_seconds:
+                print(f"[WebSocketApprovalManager] TIMEOUT after {timeout_seconds}s")
                 raise TimeoutError(
                     f"Approval timeout after {timeout_seconds}s for {approval_id}"
                 )
             await asyncio.sleep(1.0)
 
+        elapsed = time.time() - start
+        print(f"[WebSocketApprovalManager] Wait completed! elapsed={elapsed:.1f}s, resolution={request.resolution}")
         return request
 
     @classmethod
@@ -295,11 +322,19 @@ class WebSocketApprovalManager:
         Returns:
             True if resolved, False if approval not found
         """
+        print(f"[WebSocketApprovalManager] resolve() called: id={approval_id}, resolution={resolution}")
+
         with cls._lock:
             request = cls._pending.get(approval_id)
+            pending_count = len(cls._pending)
+
+        print(f"[WebSocketApprovalManager] resolve() pending count: {pending_count}")
 
         if not request:
+            print(f"[WebSocketApprovalManager] resolve() ERROR: approval {approval_id} not found!")
             return False
+
+        print(f"[WebSocketApprovalManager] resolve() found request, setting resolution...")
 
         request.status = resolution
         request.resolution = resolution
@@ -308,17 +343,14 @@ class WebSocketApprovalManager:
 
         # Signal the waiting thread
         request._event.set()
+        print(f"[WebSocketApprovalManager] resolve() event.set() called, event.is_set()={request._event.is_set()}")
 
         logger.info(f"Resolved approval {approval_id} as {resolution}")
 
-        # Clean up after a short delay (let the waiter read the result first)
-        def cleanup():
-            time.sleep(2)
-            with cls._lock:
-                cls._pending.pop(approval_id, None)
-
-        cleanup_thread = threading.Thread(target=cleanup, daemon=True)
-        cleanup_thread.start()
+        # Clean up immediately since the waiter already read the result
+        # (the waiter exits the loop once event is set, before we get here)
+        with cls._lock:
+            cls._pending.pop(approval_id, None)
 
         return True
 

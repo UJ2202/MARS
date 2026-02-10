@@ -216,17 +216,3 @@ default_config = ExecutionConfig()
 def get_config() -> ExecutionConfig:
     """Get current execution configuration"""
     return default_config
-
-
-def set_config(config: ExecutionConfig) -> None:
-    """Set global execution configuration"""
-    global default_config
-    default_config = config
-    logger.info(f"Execution configuration updated: {config}")
-
-
-def reset_config() -> None:
-    """Reset to default configuration"""
-    global default_config
-    default_config = ExecutionConfig()
-    logger.info("Execution configuration reset to defaults")

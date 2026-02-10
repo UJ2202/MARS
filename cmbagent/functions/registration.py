@@ -6,6 +6,7 @@ from .keywords import setup_keyword_functions
 from .planning import setup_planning_functions
 from .execution_control import setup_execution_control_functions
 from .status import setup_status_functions
+from .copilot import setup_copilot_functions
 
 
 def register_functions_to_agents(cmbagent_instance):
@@ -189,3 +190,11 @@ def register_functions_to_agents(cmbagent_instance):
     setup_planning_functions(cmbagent_instance, cmbagent_disable_display)
     setup_execution_control_functions(cmbagent_instance)
     setup_status_functions(cmbagent_instance)
+
+    # Register copilot functions (only if copilot_control agent exists)
+    try:
+        available_agents = getattr(cmbagent_instance, 'copilot_available_agents', None)
+        setup_copilot_functions(cmbagent_instance, available_agents)
+    except Exception as e:
+        # Copilot control agent not present - skip silently
+        pass

@@ -21,6 +21,7 @@ class ApprovalMode(str, Enum):
     BEFORE_EACH_STEP = "before_each_step"  # Approval before each major step
     ON_ERROR = "on_error"                  # Approval only when errors occur
     MANUAL = "manual"                      # User can pause anytime via UI
+    COPILOT = "copilot"                    # Approval for code/file/command operations
     CUSTOM = "custom"                      # Custom approval checkpoints
 
 
@@ -31,6 +32,11 @@ class CheckpointType(str, Enum):
     ON_ERROR = "on_error"
     MANUAL_PAUSE = "manual_pause"
     CUSTOM = "custom"
+    # Copilot-specific checkpoints
+    BEFORE_CODE_EXECUTION = "before_code_execution"
+    BEFORE_FILE_EDIT = "before_file_edit"
+    BEFORE_FILE_DELETE = "before_file_delete"
+    BEFORE_COMMAND_EXECUTION = "before_command_execution"
 
 
 class ApprovalResolution(str, Enum):
@@ -118,6 +124,10 @@ class ApprovalConfig:
         """Check if approval required on errors"""
         return self.mode in [ApprovalMode.ON_ERROR, ApprovalMode.BEFORE_EACH_STEP]
 
+    def requires_copilot_approvals(self) -> bool:
+        """Check if copilot-style approvals required (code, files, commands)"""
+        return self.mode == ApprovalMode.COPILOT
+
 
 # Default approval configurations for common scenarios
 DEFAULT_CONFIGS = {
@@ -132,6 +142,10 @@ DEFAULT_CONFIGS = {
     ),
     "error_recovery": ApprovalConfig(
         mode=ApprovalMode.ON_ERROR
+    ),
+    "copilot": ApprovalConfig(
+        mode=ApprovalMode.COPILOT,
+        auto_approve_patterns=["read_file", "search", "list_files"]  # Auto-approve read-only ops
     ),
 }
 

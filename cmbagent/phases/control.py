@@ -245,6 +245,7 @@ class ControlPhase(Phase):
                     },
                     mode="planning_and_control_context_carryover",
                     api_keys=context.api_keys,
+                    **manager.get_managed_cmbagent_kwargs()
                 )
                 init_time = time.time() - init_start
 

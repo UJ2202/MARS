@@ -4,7 +4,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react';
 import { useEventHandler } from '@/hooks/useEventHandler';
-import { WebSocketEvent, DAGCreatedData, DAGNodeStatusChangedData, ApprovalRequestedData, DAGNodeData, DAGEdgeData, CostUpdateData, FilesUpdatedData } from '@/types/websocket-events';
+import { WebSocketEvent, DAGCreatedData, DAGNodeStatusChangedData, ApprovalRequestedData, DAGNodeData, DAGEdgeData, CostUpdateData, FilesUpdatedData, AgentMessageData } from '@/types/websocket-events';
 import { getWsUrl } from '@/lib/config';
 import { CostSummary, CostTimeSeries, ModelCost, AgentCost, StepCost } from '@/types/cost';
 
@@ -56,6 +56,10 @@ interface WebSocketContextValue {
 
   // Files update trigger (increment to trigger refresh in DAGFilesView)
   filesUpdatedCounter: number;
+
+  // Agent messages for copilot chat
+  agentMessages: AgentMessageData[];
+  clearAgentMessages: () => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextValue | undefined>(undefined);
@@ -94,6 +98,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
   // Files update counter - incremented when files_updated event is received
   const [filesUpdatedCounter, setFilesUpdatedCounter] = useState(0);
+
+  // Agent messages for copilot chat
+  const [agentMessages, setAgentMessages] = useState<AgentMessageData[]>([]);
+
+  const clearAgentMessages = useCallback(() => {
+    setAgentMessages([]);
+  }, []);
 
   // WebSocket refs
   const wsRef = useRef<WebSocket | null>(null);
@@ -217,6 +228,10 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       // Increment counter to trigger file refresh in DAGFilesView
       setFilesUpdatedCounter(prev => prev + 1);
       addConsoleOutput(`📁 ${data.files_tracked} file(s) tracked for node ${data.node_id || 'unknown'}`);
+    },
+    onAgentMessage: (data: AgentMessageData) => {
+      // Store agent messages for copilot chat view
+      setAgentMessages(prev => [...prev, data]);
     },
     onCostUpdate: (data: CostUpdateData) => {
       // Debug: Log all incoming cost updates to investigate "unknown" model
@@ -584,6 +599,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     costSummary,
     costTimeSeries,
     filesUpdatedCounter,
+    agentMessages,
+    clearAgentMessages,
   };
 
   return (

@@ -163,20 +163,6 @@ def register_specific_external_tools(
             print(f"Warning: Could not register tools with agent {agent_name}: {e}")
 
 
-def list_available_external_tools(verbose: bool = True) -> str:
-    """
-    List all available external tools in the registry.
-    
-    Args:
-        verbose: If True, includes tool descriptions
-        
-    Returns:
-        Formatted string of available tools
-    """
-    registry = get_global_registry()
-    return registry.list_tools(verbose=verbose)
-
-
 def add_custom_tool_to_registry(
     tool_name: str,
     tool_function: callable,

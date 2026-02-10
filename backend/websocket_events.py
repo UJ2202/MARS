@@ -106,38 +106,6 @@ class WorkflowStateChangedData(BaseModel):
     error: Optional[str] = None
 
 
-class StepStartedData(BaseModel):
-    """Data for step_started event"""
-    step_id: str
-    step_number: int
-    goal: str  # Step goal/description
-    task: str  # Deprecated: use goal instead
-
-
-class StepProgressData(BaseModel):
-    """Data for step_progress event"""
-    step_id: str
-    step_number: int
-    progress_percentage: int
-    message: str
-
-
-class StepCompletedData(BaseModel):
-    """Data for step_completed event"""
-    step_id: str
-    step_number: int
-    result: Optional[str] = None
-    output: Optional[str] = None
-
-
-class StepFailedData(BaseModel):
-    """Data for step_failed event"""
-    step_id: str
-    step_number: int
-    error: str
-    traceback: Optional[str] = None
-
-
 class StepRetryStartedData(BaseModel):
     """Data for step_retry_started event"""
     step_id: str
@@ -339,48 +307,6 @@ def create_error_event(run_id: str, error_type: str, message: str, step_id: Opti
             error_type=error_type,
             message=message,
             step_id=step_id,
-            traceback=traceback
-        ).dict()
-    )
-
-
-def create_step_started_event(run_id: str, step_id: str, step_number: int, goal: str, task: str = "") -> WebSocketEvent:
-    """Create a step_started event"""
-    return WebSocketEvent(
-        event_type=WebSocketEventType.STEP_STARTED,
-        run_id=run_id,
-        data=StepStartedData(
-            step_id=step_id,
-            step_number=step_number,
-            goal=goal,
-            task=task or goal
-        ).dict()
-    )
-
-
-def create_step_completed_event(run_id: str, step_id: str, step_number: int, result: Optional[Dict[str, Any]] = None, output: Optional[str] = None) -> WebSocketEvent:
-    """Create a step_completed event"""
-    return WebSocketEvent(
-        event_type=WebSocketEventType.STEP_COMPLETED,
-        run_id=run_id,
-        data=StepCompletedData(
-            step_id=step_id,
-            step_number=step_number,
-            result=str(result) if result else None,
-            output=output
-        ).dict()
-    )
-
-
-def create_step_failed_event(run_id: str, step_id: str, step_number: int, error: str, traceback: Optional[str] = None) -> WebSocketEvent:
-    """Create a step_failed event"""
-    return WebSocketEvent(
-        event_type=WebSocketEventType.STEP_FAILED,
-        run_id=run_id,
-        data=StepFailedData(
-            step_id=step_id,
-            step_number=step_number,
-            error=error,
             traceback=traceback
         ).dict()
     )

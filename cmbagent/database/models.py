@@ -16,15 +16,6 @@ from sqlalchemy.sql import func
 from cmbagent.database.base import Base
 
 
-def get_json_type():
-    """Get appropriate JSON type for current database."""
-    # PostgreSQL uses JSONB, SQLite uses JSON
-    try:
-        return JSONB
-    except:
-        return JSON
-
-
 # Helper function to generate UUIDs
 def generate_uuid():
     return str(uuid.uuid4())
@@ -163,17 +154,20 @@ class DAGNode(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
     session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_node_id = Column(String(36), ForeignKey("dag_nodes.id", ondelete="CASCADE"), nullable=True, index=True)
     node_type = Column(String(50), nullable=False, index=True)
-    # Node types: planning, control, agent, approval, parallel_group, terminator
+    # Node types: planning, control, agent, approval, parallel_group, terminator, sub_agent, branch_point
     agent = Column(String(100), nullable=True)
     status = Column(String(50), nullable=False, default="pending", index=True)
     # Status: pending, running, completed, failed, skipped
     order_index = Column(Integer, nullable=False)
+    depth = Column(Integer, nullable=False, default=0)
     meta = Column(JSON, nullable=True)
 
     # Relationships
     run = relationship("WorkflowRun", back_populates="dag_nodes")
     session = relationship("Session", back_populates="dag_nodes")
+    parent_node = relationship("DAGNode", remote_side=[id], backref="child_nodes")
     outgoing_edges = relationship("DAGEdge", foreign_keys="DAGEdge.from_node_id", back_populates="from_node", cascade="all, delete-orphan")
     incoming_edges = relationship("DAGEdge", foreign_keys="DAGEdge.to_node_id", back_populates="to_node", cascade="all, delete-orphan")
     execution_events = relationship("ExecutionEvent", back_populates="node", cascade="all, delete-orphan")
@@ -183,6 +177,7 @@ class DAGNode(Base):
     __table_args__ = (
         Index("idx_dag_nodes_run_order", "run_id", "order_index"),
         Index("idx_dag_nodes_type_status", "node_type", "status"),
+        Index("idx_dag_nodes_parent", "parent_node_id"),
     )
 
 

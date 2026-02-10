@@ -52,6 +52,7 @@ class HITLControlPhaseConfig(PhaseConfig):
     # Execution parameters
     max_rounds: int = 100
     max_n_attempts: int = 3
+    max_redos: int = 2  # Maximum number of redo attempts per step
 
     # Step handling
     execute_all_steps: bool = True
@@ -118,6 +119,9 @@ class HITLControlPhase(Phase):
             config = HITLControlPhaseConfig()
         super().__init__(config)
         self.config: HITLControlPhaseConfig = config
+        # Initialize feedback state (set properly in execute(), safe defaults here)
+        self._accumulated_feedback = ""
+        self._step_feedback = []
 
     @property
     def phase_type(self) -> str:
@@ -261,16 +265,7 @@ class HITLControlPhase(Phase):
                     elif isinstance(approval_result, dict):  # Approved with feedback
                         if 'feedback' in approval_result:
                             feedback = approval_result['feedback']
-                            self._step_feedback.append({
-                                'step': step_num,
-                                'timing': 'before',
-                                'feedback': feedback,
-                            })
-                            # Add to accumulated feedback
-                            if self._accumulated_feedback:
-                                self._accumulated_feedback += f"\n\n**Step {step_num} guidance:** {feedback}"
-                            else:
-                                self._accumulated_feedback = f"**Step {step_num} guidance:** {feedback}"
+                            self._add_feedback(step_num, "guidance", feedback, "before")
                             print(f"-> Human feedback for step {step_num}: {feedback}\n")
                     # else: True (approved without feedback)
 
@@ -278,180 +273,249 @@ class HITLControlPhase(Phase):
                 step_desc = step.get('sub_task', f'Step {step_num}')
                 manager.start_step(step_num, step_desc)
 
-                # Execute step
-                success = False
-                attempt = 0
-                step_result = None
-                step_error = None
-                cmbagent = None
+                # Redo loop wraps the entire execution + review cycle
+                max_redos = self.config.max_redos  # Use configurable max_redos
+                redo_count = 0
+                step_accepted = False
 
-                while attempt < self.config.max_n_attempts and not success:
-                    attempt += 1
+                while not step_accepted and redo_count <= max_redos:
+                    if redo_count > 0:
+                        print(f"\n-> Redoing step {step_num} (redo #{redo_count})...")
 
-                    try:
-                        print(f"Executing step {step_num} (attempt {attempt}/{self.config.max_n_attempts})...")
-
-                        # Determine starter agent (matches standard ControlPhase)
-                        clear_work_dir = (step_num == 1)
-                        starter_agent = "control" if step_num == 1 else "control_starter"
-
-                        # Initialize fresh CMBAgent for each step (matches standard ControlPhase)
-                        cmbagent = CMBAgent(
-                            cache_seed=42,
-                            work_dir=control_dir,
-                            clear_work_dir=clear_work_dir,
-                            agent_llm_configs=agent_llm_configs,
-                            mode="planning_and_control_context_carryover",
-                            api_keys=api_keys,
+                        # Create redo branch in DAG
+                        manager.create_redo_branch(
+                            step_number=step_num,
+                            redo_number=redo_count,
+                            hypothesis=self._accumulated_feedback or f"Redo attempt {redo_count}"
                         )
 
-                        # Configure AG2 HITL handoffs (if enabled)
-                        if self.config.use_ag2_handoffs:
-                            from cmbagent.handoffs import register_all_hand_offs, enable_websocket_for_hitl
+                    # Execute step (attempt loop)
+                    success = False
+                    attempt = 0
+                    step_result = None
+                    step_error = None
+                    cmbagent = None
 
-                            hitl_config = {
-                                'mandatory_checkpoints': self.config.ag2_mandatory_checkpoints,
-                                'smart_approval': self.config.ag2_smart_approval,
-                                'smart_criteria': self.config.ag2_smart_criteria,
-                            }
+                    while attempt < self.config.max_n_attempts and not success:
+                        attempt += 1
 
-                            # Register handoffs with HITL config
-                            register_all_hand_offs(cmbagent, hitl_config=hitl_config)
-                            print(f"→ AG2 HITL handoffs enabled: {hitl_config}")
+                        try:
+                            print(f"Executing step {step_num} (attempt {attempt}/{self.config.max_n_attempts})...")
 
-                            # Enable WebSocket for AG2 handoffs so they appear in UI
-                            if approval_manager:
-                                try:
-                                    enable_websocket_for_hitl(cmbagent, approval_manager, context.run_id)
-                                    print(f"→ AG2 WebSocket integration enabled ✓")
-                                except Exception as e:
-                                    print(f"⚠ Warning: Could not enable WebSocket for AG2 handoffs: {e}")
-                                    import traceback
-                                    traceback.print_exc()
-                            else:
-                                print(f"⚠ Warning: No approval_manager - AG2 handoffs will use console input")
+                            # Determine starter agent (matches standard ControlPhase)
+                            # Only clear work dir on very first execution of step 1
+                            clear_work_dir = (step_num == 1 and redo_count == 0)
+                            starter_agent = "control" if step_num == 1 else "control_starter"
 
-                        # Get agent for this step
-                        if step_num == 1 and plan_steps:
-                            agent_for_step = plan_steps[0].get('sub_task_agent')
-                        else:
-                            agent_for_step = current_context.get('agent_for_sub_task')
+                            # Initialize fresh CMBAgent for each attempt (matches standard ControlPhase)
+                            cmbagent = CMBAgent(
+                                cache_seed=42,
+                                work_dir=control_dir,
+                                clear_work_dir=clear_work_dir,
+                                agent_llm_configs=agent_llm_configs,
+                                mode="planning_and_control_context_carryover",
+                                api_keys=api_keys,
+                                **manager.get_managed_cmbagent_kwargs()
+                            )
 
-                        # Prepare step context (matches standard ControlPhase)
-                        step_shared_context = copy.deepcopy(current_context)
-                        step_shared_context['current_plan_step_number'] = step_num
-                        step_shared_context['n_attempts'] = attempt - 1
-                        step_shared_context['agent_for_sub_task'] = agent_for_step
-                        step_shared_context['engineer_append_instructions'] = self.config.engineer_instructions
-                        step_shared_context['researcher_append_instructions'] = self.config.researcher_instructions
+                            # Configure AG2 HITL handoffs (if enabled)
+                            if self.config.use_ag2_handoffs:
+                                from cmbagent.handoffs import register_all_hand_offs, enable_websocket_for_hitl
 
-                        # Execute with control agent (use original task, not a custom one)
-                        cmbagent.solve(
-                            task=context.task,
-                            initial_agent=starter_agent,
-                            max_rounds=self.config.max_rounds,
-                            shared_context=step_shared_context,
-                            step=step_num,
-                        )
+                                hitl_config = {
+                                    'mandatory_checkpoints': self.config.ag2_mandatory_checkpoints,
+                                    'smart_approval': self.config.ag2_smart_approval,
+                                    'smart_criteria': self.config.ag2_smart_criteria,
+                                }
 
-                        # Check for failures (matches standard ControlPhase logic)
-                        n_failures = cmbagent.final_context.get('n_attempts', 0)
-                        if n_failures >= self.config.max_n_attempts:
-                            success = False
-                            step_error = f"Max attempts ({n_failures}) exceeded"
-                        else:
-                            success = True
-                            step_result = cmbagent.final_context
+                                # Register handoffs with HITL config
+                                register_all_hand_offs(cmbagent, hitl_config=hitl_config)
 
-                            # Extract step summary (matches standard ControlPhase)
-                            this_step_summary = None
-                            for msg in cmbagent.chat_result.chat_history[::-1]:
-                                if 'name' in msg and agent_for_step:
-                                    agent_clean = agent_for_step.removesuffix("_context").removesuffix("_agent")
-                                    if msg['name'] in [agent_clean, f"{agent_clean}_nest", f"{agent_clean}_response_formatter"]:
-                                        this_step_summary = msg['content']
-                                        summary = f"### Step {step_num}\n{this_step_summary.strip()}"
-                                        step_summaries.append(summary)
-                                        cmbagent.final_context['previous_steps_execution_summary'] = "\n\n".join(
-                                            s if isinstance(s, str) else str(s) for s in step_summaries
-                                        )
-                                        break
-
-                            # Update context for next step
-                            current_context = copy.deepcopy(cmbagent.final_context)
-
-                        if success:
-                            print(f"Step {step_num} completed successfully")
-                        else:
-                            print(f"Step {step_num} failed: {step_error}")
-
-                    except Exception as e:
-                        success = False
-                        step_error = str(e)
-                        print(f"Step {step_num} error: {step_error}")
-
-                    # On error, ask for human intervention if configured
-                    if not success and self.config.approval_mode in ["on_error", "both"]:
-                        action = await self._request_error_handling(
-                            approval_manager,
-                            context,
-                            step,
-                            step_num,
-                            step_error,
-                            attempt,
-                            manager
-                        )
-
-                        if action == "retry":
-                            print(f"-> Retrying step {step_num}...")
-                            continue
-                        elif action == "skip":
-                            print(f"-> Skipping step {step_num}")
-                            skipped_steps.append(step_num)
-                            success = True  # Treat as success to continue
-                            break
-                        elif action == "abort":
-                            return manager.fail(f"Aborted by human at step {step_num}", None)
-
-                # Check final success
-                if not success:
-                    manager.fail_step(step_num, step_error or "Max attempts exceeded")
-                    return manager.fail(
-                        f"Step {step_num} failed after {self.config.max_n_attempts} attempts",
-                        step_error
-                    )
-
-                # After-step approval/review
-                if self.config.approval_mode in ["after_step", "both"]:
-                    if not (self.config.auto_approve_successful_steps and success):
-                        review_result = await self._request_step_review(
-                            approval_manager,
-                            context,
-                            step,
-                            step_num,
-                            step_result,
-                            manager
-                        )
-
-                        if review_result is False:  # Abort
-                            return manager.fail(f"Step {step_num} review rejected by human", None)
-                        elif review_result is None:  # Redo
-                            # Could implement redo logic here
-                            pass
-                        elif isinstance(review_result, dict):  # Continue with feedback
-                            if 'feedback' in review_result:
-                                feedback = review_result['feedback']
-                                self._step_feedback.append({
-                                    'step': step_num,
-                                    'timing': 'after',
-                                    'feedback': feedback,
-                                })
-                                # Add to accumulated feedback
-                                if self._accumulated_feedback:
-                                    self._accumulated_feedback += f"\n\n**Step {step_num} notes:** {feedback}"
+                                # Enable WebSocket for AG2 handoffs so they appear in UI
+                                if approval_manager:
+                                    try:
+                                        enable_websocket_for_hitl(cmbagent, approval_manager, context.run_id)
+                                    except Exception as e:
+                                        print(f"Warning: Could not enable WebSocket for AG2 handoffs: {e}")
                                 else:
-                                    self._accumulated_feedback = f"**Step {step_num} notes:** {feedback}"
-                                print(f"-> Human notes for step {step_num}: {feedback}\n")
+                                    print(f"Warning: No approval_manager - AG2 handoffs will use console input")
+
+                            # Get agent for this step
+                            if step_num == 1 and plan_steps:
+                                agent_for_step = plan_steps[0].get('sub_task_agent')
+                            else:
+                                agent_for_step = current_context.get('agent_for_sub_task')
+
+                            # Prepare step context (matches standard ControlPhase)
+                            step_shared_context = copy.deepcopy(current_context)
+                            step_shared_context['current_plan_step_number'] = step_num
+                            step_shared_context['n_attempts'] = attempt - 1
+                            step_shared_context['agent_for_sub_task'] = agent_for_step
+
+                            # Build agent instructions: static config + accumulated HITL feedback
+                            engineer_instructions = self.config.engineer_instructions or ""
+                            researcher_instructions = self.config.researcher_instructions or ""
+
+                            if self._accumulated_feedback:
+                                safe_feedback = self._truncate_feedback(self._accumulated_feedback)
+                                hitl_section = (
+                                    "\n\n## Human-in-the-Loop Feedback\n"
+                                    "The human reviewer has provided the following guidance. "
+                                    "You MUST follow these instructions:\n\n"
+                                    f"{safe_feedback}\n"
+                                )
+                                engineer_instructions += hitl_section
+                                researcher_instructions += hitl_section
+
+                            # Inject step-specific before-feedback (current step only)
+                            current_step_before = [
+                                f for f in self._step_feedback
+                                if f['step'] == step_num and f['timing'] == 'before'
+                            ]
+                            if current_step_before:
+                                step_guidance = "\n\n## Specific Guidance for This Step\n"
+                                for fb in current_step_before:
+                                    step_guidance += f"- {fb['feedback']}\n"
+                                engineer_instructions += step_guidance
+                                researcher_instructions += step_guidance
+
+                            step_shared_context['engineer_append_instructions'] = engineer_instructions
+                            step_shared_context['researcher_append_instructions'] = researcher_instructions
+
+                            # Execute with control agent
+                            cmbagent.solve(
+                                task=context.task,
+                                initial_agent=starter_agent,
+                                max_rounds=self.config.max_rounds,
+                                shared_context=step_shared_context,
+                                step=step_num,
+                            )
+
+                            # Check for failures (matches standard ControlPhase logic)
+                            n_failures = cmbagent.final_context.get('n_attempts', 0)
+                            if n_failures >= self.config.max_n_attempts:
+                                success = False
+                                step_error = f"Max attempts ({n_failures}) exceeded"
+                            else:
+                                success = True
+                                step_result = cmbagent.final_context
+
+                                # Extract step summary (matches standard ControlPhase)
+                                this_step_summary = None
+                                for msg in cmbagent.chat_result.chat_history[::-1]:
+                                    if 'name' in msg and agent_for_step:
+                                        agent_clean = agent_for_step.removesuffix("_context").removesuffix("_agent")
+                                        if msg['name'] in [agent_clean, f"{agent_clean}_nest", f"{agent_clean}_response_formatter"]:
+                                            this_step_summary = msg['content']
+                                            summary = f"### Step {step_num}\n{this_step_summary.strip()}"
+                                            # On redo, replace previous summary for this step
+                                            step_summaries = [
+                                                s for s in step_summaries
+                                                if not s.startswith(f"### Step {step_num}\n")
+                                            ]
+                                            step_summaries.append(summary)
+                                            cmbagent.final_context['previous_steps_execution_summary'] = "\n\n".join(
+                                                s if isinstance(s, str) else str(s) for s in step_summaries
+                                            )
+                                            break
+
+                                # Update context for next step
+                                current_context = copy.deepcopy(cmbagent.final_context)
+
+                            if success:
+                                print(f"Step {step_num} completed successfully")
+                            else:
+                                print(f"Step {step_num} failed: {step_error}")
+
+                        except Exception as e:
+                            success = False
+                            step_error = str(e)
+                            print(f"Step {step_num} error: {step_error}")
+
+                        # On error, ask for human intervention if configured
+                        if not success and self.config.approval_mode in ["on_error", "both"]:
+                            action = await self._request_error_handling(
+                                approval_manager,
+                                context,
+                                step,
+                                step_num,
+                                step_error,
+                                attempt,
+                                manager
+                            )
+
+                            if action == "retry":
+                                print(f"-> Retrying step {step_num}...")
+                                continue
+                            elif action == "skip":
+                                print(f"-> Skipping step {step_num}")
+                                skipped_steps.append(step_num)
+                                success = True  # Treat as success to continue
+                                break
+                            elif action == "abort":
+                                return manager.fail(f"Aborted by human at step {step_num}", None)
+
+                    # -- END attempt loop --
+
+                    # Check final success
+                    if not success:
+                        manager.fail_step(step_num, step_error or "Max attempts exceeded")
+                        return manager.fail(
+                            f"Step {step_num} failed after {self.config.max_n_attempts} attempts",
+                            step_error
+                        )
+
+                    # After-step approval/review
+                    if self.config.approval_mode in ["after_step", "both"]:
+                        if not (self.config.auto_approve_successful_steps and success):
+                            review_result = await self._request_step_review(
+                                approval_manager,
+                                context,
+                                step,
+                                step_num,
+                                step_result,
+                                manager
+                            )
+
+                            if review_result is False:  # Abort
+                                return manager.fail(f"Step {step_num} review rejected by human", None)
+
+                            elif review_result is None or (isinstance(review_result, dict) and review_result.get('redo')):
+                                # Redo requested
+                                redo_count += 1
+
+                                # Capture redo feedback if provided
+                                if isinstance(review_result, dict) and review_result.get('feedback'):
+                                    redo_feedback = review_result['feedback']
+                                    self._add_feedback(step_num, "redo requested", redo_feedback, "redo")
+                                    print(f"-> Redo step {step_num} with feedback: {redo_feedback}")
+
+                                if redo_count > max_redos:
+                                    print(f"-> Max redos ({max_redos}) reached for step {step_num}, continuing")
+                                    step_accepted = True
+                                else:
+                                    human_interventions.append({
+                                        'step': step_num,
+                                        'action': 'redo',
+                                        'redo_count': redo_count,
+                                        'feedback': review_result.get('feedback') if isinstance(review_result, dict) else None,
+                                    })
+                                    continue  # Re-enter redo loop
+
+                            elif isinstance(review_result, dict):  # Continue with feedback
+                                if 'feedback' in review_result:
+                                    feedback = review_result['feedback']
+                                    self._add_feedback(step_num, "notes", feedback, "after")
+                                    print(f"-> Human notes for step {step_num}: {feedback}\n")
+                                step_accepted = True
+                            else:
+                                step_accepted = True
+                        else:
+                            step_accepted = True
+                    else:
+                        step_accepted = True
+
+                # -- END redo loop --
 
                 # Record step result with chat history
                 step_chat_history = []
@@ -464,12 +528,13 @@ class HITLControlPhase(Phase):
                     'success': success,
                     'result': step_result,
                     'attempts': attempt,
+                    'redos': redo_count,
                     'chat_history': step_chat_history,
                 })
 
                 # Save step context (filter non-picklable items)
                 context_path = os.path.join(context_dir, f"context_step_{step_num}.pkl")
-                
+
                 # Filter out non-picklable items before saving
                 filtered_context = {}
                 for key, value in current_context.items():
@@ -480,7 +545,7 @@ class HITLControlPhase(Phase):
                         filtered_context[key] = value
                     except (TypeError, pickle.PicklingError, AttributeError):
                         print(f"[HITL] Skipping non-picklable context key: {key}")
-                
+
                 with open(context_path, 'wb') as f:
                     pickle.dump(filtered_context, f)
                 manager.track_file(context_path)
@@ -582,6 +647,43 @@ class HITLControlPhase(Phase):
                 return plan
         return []
 
+    def _add_feedback(self, step_num: int, label: str, feedback: str, timing: str):
+        """Add feedback to both accumulated string and structured list.
+
+        Args:
+            step_num: Step number this feedback relates to
+            label: Label for the feedback (e.g. "guidance", "redo requested", "notes")
+            feedback: The actual feedback text
+            timing: When this feedback was given ("before", "after", "redo")
+        """
+        entry = f"**Step {step_num} {label}:** {feedback}"
+        if self._accumulated_feedback:
+            self._accumulated_feedback += f"\n\n{entry}"
+        else:
+            self._accumulated_feedback = entry
+        self._step_feedback.append({
+            'step': step_num,
+            'timing': timing,
+            'feedback': feedback,
+        })
+
+    def _truncate_feedback(self, feedback: str, max_chars: int = 4000) -> str:
+        """Truncate accumulated feedback to prevent context overflow.
+
+        Keeps the most recent feedback (end of string) since it is
+        most relevant to the current step being executed.
+        """
+        if not feedback or len(feedback) <= max_chars:
+            return feedback
+
+        truncated = feedback[-(max_chars):]
+        # Find first complete section boundary to avoid mid-sentence cut
+        boundary = truncated.find('\n\n**Step')
+        if boundary > 0:
+            truncated = truncated[boundary:]
+
+        return f"[Earlier feedback truncated]\n{truncated}"
+
     async def _request_step_approval(
         self,
         approval_manager,
@@ -608,14 +710,18 @@ class HITLControlPhase(Phase):
             print(f"{'='*60}")
             print(f"Task: {step.get('sub_task')}")
             print(f"{'='*60}")
-            response = input("\nApprove step? (y/n/s=skip): ").strip().lower()
+            response = input("\nAction? (y=approve/n=reject/s=skip/[feedback text to approve with]): ").strip()
 
-            if response == 'y' or response == 'yes':
+            lower = response.lower()
+            if lower in ('y', 'yes'):
                 return True
-            elif response == 's' or response == 'skip':
+            elif lower in ('s', 'skip'):
                 return None
-            else:
+            elif lower in ('n', 'no'):
                 return False
+            else:
+                # Treat any other text as "approve with feedback"
+                return {'approved': True, 'feedback': response}
 
         # Use approval manager
         message = self._build_step_approval_message(step, step_num, accumulated_context)
@@ -664,24 +770,36 @@ class HITLControlPhase(Phase):
         step_result: Dict,
         manager: PhaseExecutionManager
     ) -> Optional[bool]:
-        """Request human review after executing a step."""
-        print(f"[_request_step_review] Called with approval_manager: {approval_manager}")
-        print(f"[_request_step_review] approval_manager type: {type(approval_manager)}")
+        """Request human review after executing a step.
 
+        Returns:
+            True: Continue to next step
+            False: Abort workflow
+            None: Redo step (without feedback)
+            dict with 'redo': Redo step with feedback
+            dict with 'continue': Continue with feedback
+        """
         if not approval_manager:
-            print(f"[_request_step_review] No approval_manager - falling back to console input")
             print(f"\n{'='*60}")
             print(f"STEP {step_num} REVIEW")
             print(f"{'='*60}")
             print("Step completed successfully")
             print(f"{'='*60}")
-            response = input("\nContinue? (y/n): ").strip().lower()
-            return response == 'y' or response == 'yes'
+            response = input("\nAction? (c=continue/r=redo/a=abort/[feedback text]): ").strip()
 
-        print(f"[_request_step_review] Using WebSocket approval manager")
+            lower = response.lower()
+            if lower in ('c', 'continue', 'y', 'yes'):
+                return True
+            elif lower in ('r', 'redo'):
+                return None
+            elif lower in ('a', 'abort', 'n', 'no'):
+                return False
+            else:
+                # Treat any other input as "continue with feedback"
+                return {'continue': True, 'feedback': response}
+
         message = self._build_step_review_message(step, step_num, step_result)
 
-        print(f"[_request_step_review] Creating approval request...")
         approval_request = approval_manager.create_approval_request(
             run_id=context.run_id,
             step_id=f"{context.phase_id}_step_{step_num}_review",
@@ -713,7 +831,11 @@ class HITLControlPhase(Phase):
                 return {'continue': True, 'feedback': resolved.user_feedback}
             return True
         elif resolved.resolution == "redo":
-            return None
+            # Capture redo feedback so agents know what to fix on re-execution
+            redo_feedback = getattr(resolved, 'user_feedback', None) or ''
+            if redo_feedback:
+                return {'redo': True, 'feedback': redo_feedback}
+            return None  # Redo without specific feedback
         else:
             return False
 
@@ -781,7 +903,7 @@ class HITLControlPhase(Phase):
         return resolved.resolution
 
     def _build_step_approval_message(self, step: Dict, step_num: int, context: Dict) -> str:
-        """Build message for step approval."""
+        """Build message for step approval with context from previous steps."""
         parts = [
             f"**Step {step_num}**",
             "",
@@ -789,9 +911,22 @@ class HITLControlPhase(Phase):
             "",
         ]
 
-        if self.config.show_step_context:
+        if self.config.show_step_context and step_num > 1:
+            prev_summary = context.get('previous_steps_execution_summary', '')
+            if prev_summary:
+                # Truncate to keep message readable
+                summary_text = prev_summary[-500:] if len(prev_summary) > 500 else prev_summary
+                parts.extend([
+                    "**Previous Steps Summary:**",
+                    summary_text,
+                    "",
+                ])
+
+        if self._accumulated_feedback:
+            truncated_fb = self._accumulated_feedback[-300:] if len(self._accumulated_feedback) > 300 else self._accumulated_feedback
             parts.extend([
-                "**Context:** Previous steps completed successfully",
+                "**Accumulated Human Feedback:**",
+                truncated_fb,
                 "",
             ])
 
@@ -800,21 +935,35 @@ class HITLControlPhase(Phase):
             "- **Approve**: Execute this step",
             "- **Skip**: Skip this step and continue",
             "- **Reject**: Cancel the workflow",
+            "",
+            "You can also provide feedback text that will guide the agent during execution.",
         ])
 
         return "\n".join(parts)
 
     def _build_step_review_message(self, step: Dict, step_num: int, result: Dict) -> str:
-        """Build message for step review."""
+        """Build message for step review with result details."""
+        # Extract meaningful result info
+        result_summary = ""
+        if result and isinstance(result, dict):
+            summary = result.get('previous_steps_execution_summary', '')
+            if summary:
+                # Get only this step's summary
+                lines = summary.split(f"### Step {step_num}\n")
+                if len(lines) > 1:
+                    step_text = lines[-1].split("### Step")[0].strip()
+                    if step_text:
+                        result_summary = f"\n**Result Summary:**\n{step_text[:1000]}\n"
+
         return f"""**Step {step_num} Review**
 
 **Task:** {step.get('sub_task', 'Unknown')}
 
 **Status:** Completed successfully
-
+{result_summary}
 **Options:**
 - **Continue**: Proceed to next step
-- **Redo**: Re-execute this step
+- **Redo**: Re-execute this step (optionally provide feedback on what to change)
 - **Abort**: Cancel the workflow
 """
 

@@ -110,7 +110,7 @@ async def execute_cmbagent_task(
         effective_run_id = dag_tracker.run_id or task_id
 
         # Set initial phase based on mode
-        if mode in ["planning-control", "idea-generation", "hitl-interactive"]:
+        if mode in ["planning-control", "idea-generation", "hitl-interactive", "copilot"]:
             dag_tracker.set_phase("planning", None)
         else:
             dag_tracker.set_phase("execution", None)
@@ -132,7 +132,7 @@ async def execute_cmbagent_task(
         planner_model = config.get("plannerModel", "gpt-4.1-2025-04-14")
         plan_reviewer_model = config.get("planReviewerModel", "o3-mini-2025-01-31")
         researcher_model = config.get("researcherModel", "gpt-4.1-2025-04-14")
-        max_plan_steps = config.get("maxPlanSteps", 6 if mode == "idea-generation" else 2)
+        max_plan_steps = config.get("maxPlanSteps", 10 if mode == "idea-generation" else 10)  # Dynamic: allow up to 10 steps
         n_plan_reviews = config.get("nPlanReviews", 1)
         plan_instructions = config.get("planInstructions", "")
 
@@ -182,6 +182,12 @@ async def execute_cmbagent_task(
                 {"message": f"⚙️ Configuration: Save Markdown={save_markdown}, Max Workers={max_workers}"},
                 run_id=task_id
             )
+        elif mode == "copilot":
+            await send_ws_event(
+                websocket, "output",
+                {"message": f"⚙️ Configuration: Agents={config.get('availableAgents', ['engineer', 'researcher'])}, Planning={config.get('enablePlanning', True)}"},
+                run_id=task_id
+            )
 
         start_time = time.time()
         loop = asyncio.get_event_loop()
@@ -189,7 +195,8 @@ async def execute_cmbagent_task(
         # Create stream capture with DAG tracking
         stream_capture = StreamCapture(
             websocket, task_id, send_ws_event,
-            dag_tracker=dag_tracker, loop=loop, work_dir=task_work_dir
+            dag_tracker=dag_tracker, loop=loop, work_dir=task_work_dir,
+            mode=mode  # Pass mode so StreamCapture knows if it's HITL
         )
 
         # Create callbacks
@@ -210,12 +217,15 @@ async def execute_cmbagent_task(
                     send_ws_event(websocket, event_type, data, run_id=task_id),
                     loop
                 )
-                # Wait for a short time to ensure it's queued
+                # Wait for send to complete (increased timeout for stability)
                 try:
-                    result = future.result(timeout=2.0)
-                    print(f"[ws_send_event] ✓ Event {event_type} sent successfully")
+                    result = future.result(timeout=10.0)
+                    if result:
+                        print(f"[ws_send_event] ✓ Event {event_type} sent successfully")
+                    else:
+                        print(f"[ws_send_event] ⚠ Event {event_type} send returned False (connection may be closed)")
                 except TimeoutError:
-                    print(f"[ws_send_event] ⚠ Event {event_type} queued but not confirmed within 2s")
+                    print(f"[ws_send_event] ⚠ Event {event_type} queued but not confirmed within 10s")
                 except Exception as e:
                     print(f"[ws_send_event] ✗ Event {event_type} failed: {e}")
                     import traceback
@@ -240,7 +250,12 @@ async def execute_cmbagent_task(
                     return False
             return True
 
-        ws_callbacks = create_websocket_callbacks(ws_send_event, task_id)
+        # Determine HITL mode for proper DAG node handling
+        hitl_mode = None
+        if mode == "hitl-interactive":
+            hitl_mode = config.get("hitlVariant", "full_interactive")
+
+        ws_callbacks = create_websocket_callbacks(ws_send_event, task_id, hitl_mode=hitl_mode)
 
         # Create execution event tracking callbacks
         def create_execution_event(event_type: str, agent_name: str, **kwargs):
@@ -335,18 +350,48 @@ async def execute_cmbagent_task(
                 print(f"[TaskExecutor] Phase changed to: {phase}, step: {step_number}")
 
         def on_planning_complete_tracking(plan_info):
-            """Track files after planning phase completes"""
+            """Track files and sync DAGTracker after planning phase completes"""
             if dag_tracker:
+                # Sync DAGTracker internal state with the dynamically added step nodes
+                # This ensures DAGTracker.nodes stays consistent for subsequent updates
+                if plan_info and plan_info.steps:
+                    asyncio.run_coroutine_threadsafe(
+                        dag_tracker.add_step_nodes(plan_info.steps), loop
+                    ).result(timeout=5.0)
+                    # Mark planning as completed in tracker
+                    asyncio.run_coroutine_threadsafe(
+                        dag_tracker.update_node_status("planning", "completed"), loop
+                    ).result(timeout=5.0)
+                    # Note: Human review is tracked as events within the planning phase, not a separate node
                 # Track files created during planning
                 dag_tracker.track_files_in_work_dir(task_work_dir, "planning")
-                print(f"[TaskExecutor] Tracked planning files")
+                print(f"[TaskExecutor] Tracked planning files and synced DAG")
 
-        def on_step_complete_tracking(step_info):
-            """Track files after each step completes"""
+        def on_step_start_tracking(step_info):
+            """Update DAGTracker when step starts"""
             if dag_tracker:
                 step_node_id = f"step_{step_info.step_number}"
+                asyncio.run_coroutine_threadsafe(
+                    dag_tracker.update_node_status(step_node_id, "running"), loop
+                ).result(timeout=5.0)
+
+        def on_step_complete_tracking(step_info):
+            """Track files and update DAGTracker after each step completes"""
+            if dag_tracker:
+                step_node_id = f"step_{step_info.step_number}"
+                asyncio.run_coroutine_threadsafe(
+                    dag_tracker.update_node_status(step_node_id, "completed", work_dir=task_work_dir), loop
+                ).result(timeout=5.0)
                 dag_tracker.track_files_in_work_dir(task_work_dir, step_node_id)
                 print(f"[TaskExecutor] Tracked files for step {step_info.step_number}")
+
+        def on_step_failed_tracking(step_info):
+            """Update DAGTracker when step fails"""
+            if dag_tracker:
+                step_node_id = f"step_{step_info.step_number}"
+                asyncio.run_coroutine_threadsafe(
+                    dag_tracker.update_node_status(step_node_id, "failed", error=step_info.error), loop
+                ).result(timeout=5.0)
 
         event_tracking_callbacks = WorkflowCallbacks(
             on_agent_message=on_agent_msg,
@@ -354,7 +399,9 @@ async def execute_cmbagent_task(
             on_tool_call=on_tool,
             on_phase_change=on_phase_change,
             on_planning_complete=on_planning_complete_tracking,
-            on_step_complete=on_step_complete_tracking
+            on_step_start=on_step_start_tracking,
+            on_step_complete=on_step_complete_tracking,
+            on_step_failed=on_step_failed_tracking,
         )
 
         pause_callbacks = WorkflowCallbacks(
@@ -496,6 +543,7 @@ async def execute_cmbagent_task(
                             max_rounds_control=max_rounds,
                             max_plan_steps=max_plan_steps,
                             max_human_iterations=max_human_iterations,
+                            n_plan_reviews=n_plan_reviews,
                             allow_plan_modification=allow_plan_modification,
                             planner_model=planner_model,
                             engineer_model=engineer_model,
@@ -537,6 +585,7 @@ async def execute_cmbagent_task(
                             max_n_attempts=max_attempts,
                             max_plan_steps=max_plan_steps,
                             max_human_iterations=max_human_iterations,
+                            n_plan_reviews=n_plan_reviews,
                             approval_mode=approval_mode,
                             allow_plan_modification=allow_plan_modification,
                             allow_step_skip=allow_step_skip,
@@ -553,6 +602,52 @@ async def execute_cmbagent_task(
                             callbacks=workflow_callbacks,
                             approval_manager=hitl_approval_manager,
                         )
+                elif mode == "copilot":
+                    # Copilot mode - flexible assistant that adapts to task complexity
+                    from cmbagent.workflows.copilot import copilot
+                    from cmbagent.database.websocket_approval_manager import WebSocketApprovalManager
+
+                    # Get copilot-specific config
+                    available_agents = config.get("availableAgents", ["engineer", "researcher"])
+                    enable_planning = config.get("enablePlanning", True)
+                    use_dynamic_routing = config.get("useDynamicRouting", True)
+                    complexity_threshold = config.get("complexityThreshold", 50)
+                    continuous_mode = config.get("continuousMode", False)
+                    copilot_approval_mode = config.get("approvalMode", "after_step")
+                    control_model = config.get("controlModel", planner_model)  # Use planner model as default
+
+                    # Create WebSocket-based approval manager for HITL interactions
+                    copilot_approval_manager = WebSocketApprovalManager(ws_send_event, task_id)
+                    print(f"[TaskExecutor] Created WebSocket approval manager for Copilot")
+                    print(f"[TaskExecutor] Copilot config: agents={available_agents}, planning={enable_planning}, dynamic_routing={use_dynamic_routing}, continuous={continuous_mode}")
+
+                    # Run copilot workflow (synchronous - runs in ThreadPoolExecutor)
+                    results = copilot(
+                        task=task,
+                        available_agents=available_agents,
+                        engineer_model=engineer_model,
+                        researcher_model=researcher_model,
+                        planner_model=planner_model,
+                        control_model=control_model,
+                        enable_planning=enable_planning,
+                        use_dynamic_routing=use_dynamic_routing,
+                        complexity_threshold=complexity_threshold,
+                        continuous_mode=continuous_mode,
+                        max_turns=config.get("maxTurns", 20),
+                        max_rounds=max_rounds,
+                        max_plan_steps=max_plan_steps,
+                        max_n_attempts=max_attempts,
+                        approval_mode=copilot_approval_mode,
+                        auto_approve_simple=config.get("autoApproveSimple", True),
+                        engineer_instructions=config.get("engineerInstructions", ""),
+                        researcher_instructions=config.get("researcherInstructions", ""),
+                        planner_instructions=plan_instructions,
+                        work_dir=task_work_dir,
+                        api_keys=api_keys,
+                        clear_work_dir=False,
+                        callbacks=workflow_callbacks,
+                        approval_manager=copilot_approval_manager,
+                    )
                 elif mode == "idea-generation":
                     # Always using phase-based workflow
                     print(f"[TaskExecutor] Using phase-based workflow for idea-generation")

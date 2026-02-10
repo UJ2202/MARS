@@ -23,60 +23,71 @@ def setup_engineer_nested_chat(agents: Dict, cmbagent_instance):
     """
     debug_print('Setting up engineer nested chat...')
 
-    # Create nested group chat for code execution
-    executor_chat = GroupChat(
-        agents=[
-            agents['engineer_response_formatter'].agent,
-            agents['executor'].agent,
-        ],
-        messages=[],
-        max_round=3,
-        speaker_selection_method='round_robin',
-    )
+    # Check if all required agents are available
+    required_agents = ['engineer', 'engineer_nest', 'engineer_response_formatter', 'executor', 'executor_response_formatter']
+    missing_agents = [name for name in required_agents if name not in agents]
 
-    executor_manager = GroupChatManager(
-        groupchat=executor_chat,
-        llm_config=cmbagent_instance.llm_config,
-        name="engineer_nested_chat",
-    )
+    if missing_agents:
+        debug_print(f'Skipping engineer nested chat setup - missing agents: {missing_agents}', indent=2)
+        return
 
-    # Custom summary function that handles empty messages
-    def safe_summary(sender, recipient, summary_args):
-        """Safely get last message or return empty string."""
-        messages = summary_args.get("messages", [])
-        if messages and len(messages) > 0:
-            return messages[-1].get('content', '')
-        return ""
+    try:
+        # Create nested group chat for code execution
+        executor_chat = GroupChat(
+            agents=[
+                agents['engineer_response_formatter'].agent,
+                agents['executor'].agent,
+            ],
+            messages=[],
+            max_round=3,
+            speaker_selection_method='round_robin',
+        )
 
-    nested_chats = [{
-        "recipient": executor_manager,
-        "message": lambda recipient, messages, sender, config: (
-            f"{messages[-1]['content']}" if messages and len(messages) > 0 else ""
-        ),
-        "max_turns": 1,
-        "summary_method": safe_summary,  # Use custom safe summary
-    }]
+        executor_manager = GroupChatManager(
+            groupchat=executor_chat,
+            llm_config=cmbagent_instance.llm_config,
+            name="engineer_nested_chat",
+        )
 
-    # Register nested chat trigger
-    other_agents = [
-        agent for agent in cmbagent_instance.agents
-        if agent != agents['engineer'].agent
-    ]
+        # Custom summary function that handles empty messages
+        def safe_summary(sender, recipient, summary_args):
+            """Safely get last message or return empty string."""
+            messages = summary_args.get("messages", [])
+            if messages and len(messages) > 0:
+                return messages[-1].get('content', '')
+            return ""
 
-    agents['engineer_nest'].agent.register_nested_chats(
-        trigger=lambda sender: sender not in other_agents,
-        chat_queue=nested_chats
-    )
+        nested_chats = [{
+            "recipient": executor_manager,
+            "message": lambda recipient, messages, sender, config: (
+                f"{messages[-1]['content']}" if messages and len(messages) > 0 else ""
+            ),
+            "max_turns": 1,
+            "summary_method": safe_summary,  # Use custom safe summary
+        }]
 
-    # Setup handoffs
-    agents['engineer'].agent.handoffs.set_after_work(
-        AgentTarget(agents['engineer_nest'].agent)
-    )
-    agents['engineer_nest'].agent.handoffs.set_after_work(
-        AgentTarget(agents['executor_response_formatter'].agent)
-    )
+        # Register nested chat trigger
+        other_agents = [
+            agent for agent in cmbagent_instance.agents
+            if agent != agents['engineer'].agent
+        ]
 
-    debug_print('Engineer nested chat configured\n', indent=2)
+        agents['engineer_nest'].agent.register_nested_chats(
+            trigger=lambda sender: sender not in other_agents,
+            chat_queue=nested_chats
+        )
+
+        # Setup handoffs
+        agents['engineer'].agent.handoffs.set_after_work(
+            AgentTarget(agents['engineer_nest'].agent)
+        )
+        agents['engineer_nest'].agent.handoffs.set_after_work(
+            AgentTarget(agents['executor_response_formatter'].agent)
+        )
+
+        debug_print('Engineer nested chat configured\n', indent=2)
+    except Exception as e:
+        debug_print(f'Error setting up engineer nested chat: {e}', indent=2)
 
 
 def setup_idea_maker_nested_chat(agents: Dict, cmbagent_instance):
@@ -92,57 +103,68 @@ def setup_idea_maker_nested_chat(agents: Dict, cmbagent_instance):
     """
     debug_print('Setting up idea maker nested chat...')
 
-    # Create nested group chat for idea generation
-    idea_maker_chat = GroupChat(
-        agents=[
-            agents['idea_maker_response_formatter'].agent,
-            agents['idea_saver'].agent,
-        ],
-        messages=[],
-        max_round=4,
-        speaker_selection_method='round_robin',
-    )
+    # Check if all required agents are available
+    required_agents = ['idea_maker', 'idea_maker_nest', 'idea_maker_response_formatter', 'idea_saver', 'control']
+    missing_agents = [name for name in required_agents if name not in agents]
 
-    idea_maker_manager = GroupChatManager(
-        groupchat=idea_maker_chat,
-        llm_config=cmbagent_instance.llm_config,
-        name="idea_maker_manager",
-    )
+    if missing_agents:
+        debug_print(f'Skipping idea maker nested chat setup - missing agents: {missing_agents}', indent=2)
+        return
 
-    # Custom summary function that handles empty messages
-    def safe_summary(sender, recipient, summary_args):
-        """Safely get last message or return empty string."""
-        messages = summary_args.get("messages", [])
-        if messages and len(messages) > 0:
-            return messages[-1].get('content', '')
-        return ""
+    try:
+        # Create nested group chat for idea generation
+        idea_maker_chat = GroupChat(
+            agents=[
+                agents['idea_maker_response_formatter'].agent,
+                agents['idea_saver'].agent,
+            ],
+            messages=[],
+            max_round=4,
+            speaker_selection_method='round_robin',
+        )
 
-    nested_chats = [{
-        "recipient": idea_maker_manager,
-        "message": lambda recipient, messages, sender, config: (
-            f"{messages[-1]['content']}" if messages and len(messages) > 0 else ""
-        ),
-        "max_turns": 1,
-        "summary_method": safe_summary,  # Use custom safe summary
-    }]
+        idea_maker_manager = GroupChatManager(
+            groupchat=idea_maker_chat,
+            llm_config=cmbagent_instance.llm_config,
+            name="idea_maker_manager",
+        )
 
-    # Register nested chat trigger
-    other_agents = [
-        agent for agent in cmbagent_instance.agents
-        if agent != agents['idea_maker'].agent
-    ]
+        # Custom summary function that handles empty messages
+        def safe_summary(sender, recipient, summary_args):
+            """Safely get last message or return empty string."""
+            messages = summary_args.get("messages", [])
+            if messages and len(messages) > 0:
+                return messages[-1].get('content', '')
+            return ""
 
-    agents['idea_maker_nest'].agent.register_nested_chats(
-        trigger=lambda sender: sender not in other_agents,
-        chat_queue=nested_chats
-    )
+        nested_chats = [{
+            "recipient": idea_maker_manager,
+            "message": lambda recipient, messages, sender, config: (
+                f"{messages[-1]['content']}" if messages and len(messages) > 0 else ""
+            ),
+            "max_turns": 1,
+            "summary_method": safe_summary,  # Use custom safe summary
+        }]
 
-    # Setup handoffs
-    agents['idea_maker'].agent.handoffs.set_after_work(
-        AgentTarget(agents['idea_maker_nest'].agent)
-    )
-    agents['idea_maker_nest'].agent.handoffs.set_after_work(
-        AgentTarget(agents['control'].agent)
-    )
+        # Register nested chat trigger
+        other_agents = [
+            agent for agent in cmbagent_instance.agents
+            if agent != agents['idea_maker'].agent
+        ]
 
-    debug_print('Idea maker nested chat configured\n', indent=2)
+        agents['idea_maker_nest'].agent.register_nested_chats(
+            trigger=lambda sender: sender not in other_agents,
+            chat_queue=nested_chats
+        )
+
+        # Setup handoffs
+        agents['idea_maker'].agent.handoffs.set_after_work(
+            AgentTarget(agents['idea_maker_nest'].agent)
+        )
+        agents['idea_maker_nest'].agent.handoffs.set_after_work(
+            AgentTarget(agents['control'].agent)
+        )
+
+        debug_print('Idea maker nested chat configured\n', indent=2)
+    except Exception as e:
+        debug_print(f'Error setting up idea maker nested chat: {e}', indent=2)

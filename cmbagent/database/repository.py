@@ -183,6 +183,37 @@ class DAGRepository(BaseRepository):
             DAGNode.session_id == self.session_id
         ).order_by(DAGNode.order_index).all()
 
+    def update_node_status(self, node_id: str, status: str, **kwargs) -> Optional[DAGNode]:
+        """Update the status of a DAG node.
+
+        Args:
+            node_id: The ID of the node to update
+            status: New status (pending, running, completed, failed, skipped)
+            **kwargs: Additional fields to update (e.g., meta)
+                     Note: If 'meta' is provided, it will be merged with existing meta
+                     rather than replacing it completely.
+
+        Returns:
+            Updated DAGNode or None if not found
+        """
+        node = self.get_node(node_id)
+        if node:
+            node.status = status
+            for key, value in kwargs.items():
+                if hasattr(node, key):
+                    # Special handling for meta: merge instead of replace
+                    if key == "meta" and value is not None:
+                        existing_meta = node.meta or {}
+                        # Merge new meta into existing meta
+                        merged_meta = {**existing_meta, **value}
+                        setattr(node, key, merged_meta)
+                    else:
+                        setattr(node, key, value)
+            self.db.commit()
+            self.db.refresh(node)
+            return node
+        return None
+
     def create_edge(self, from_node_id: str, to_node_id: str, dependency_type: str = "sequential", **kwargs) -> DAGEdge:
         """Create a new DAG edge."""
         edge = DAGEdge(
@@ -206,6 +237,112 @@ class DAGRepository(BaseRepository):
         edges = self.db.query(DAGEdge).filter(DAGEdge.from_node_id == node_id).all()
         node_ids = [edge.to_node_id for edge in edges]
         return self.db.query(DAGNode).filter(DAGNode.id.in_(node_ids)).all()
+
+    def create_sub_node(
+        self,
+        parent_node_id: str,
+        node_type: str,
+        agent: str,
+        status: str = "pending",
+        meta: Optional[Dict[str, Any]] = None
+    ) -> DAGNode:
+        """
+        Create a sub-node under a parent node.
+
+        Args:
+            parent_node_id: ID of parent node
+            node_type: Type of sub-node (e.g., "sub_agent", "tool_call")
+            agent: Agent name
+            status: Initial status
+            meta: Additional metadata
+
+        Returns:
+            Created DAGNode
+        """
+        parent = self.db.query(DAGNode).filter(DAGNode.id == parent_node_id).first()
+        if not parent:
+            raise ValueError(f"Parent node {parent_node_id} not found")
+
+        # Calculate depth and order_index for sub-node
+        depth = parent.depth + 1
+
+        # Find max order_index among siblings
+        siblings = self.db.query(DAGNode).filter(
+            DAGNode.parent_node_id == parent_node_id
+        ).all()
+        order_index = max([s.order_index for s in siblings], default=-1) + 1
+
+        node = DAGNode(
+            run_id=parent.run_id,
+            session_id=parent.session_id,
+            parent_node_id=parent_node_id,
+            node_type=node_type,
+            agent=agent,
+            status=status,
+            order_index=order_index,
+            depth=depth,
+            meta=meta or {}
+        )
+
+        self.db.add(node)
+        self.db.commit()
+        self.db.refresh(node)
+
+        return node
+
+    def create_branch_node(
+        self,
+        source_node_id: str,
+        branch_name: str,
+        hypothesis: Optional[str] = None
+    ) -> DAGNode:
+        """
+        Create a branch node for alternative execution paths.
+
+        Args:
+            source_node_id: Node to branch from
+            branch_name: Name of the branch (e.g., "redo_1", "alternative_a")
+            hypothesis: Hypothesis for this branch
+
+        Returns:
+            Created branch node
+        """
+        source = self.db.query(DAGNode).filter(DAGNode.id == source_node_id).first()
+        if not source:
+            raise ValueError(f"Source node {source_node_id} not found")
+
+        # Create branch node at same level as source
+        node = DAGNode(
+            run_id=source.run_id,
+            session_id=source.session_id,
+            parent_node_id=source.parent_node_id,
+            node_type="branch_point",
+            agent=f"branch_{branch_name}",
+            status="pending",
+            order_index=source.order_index,
+            depth=source.depth,
+            meta={
+                "branch_name": branch_name,
+                "hypothesis": hypothesis,
+                "source_node_id": source_node_id
+            }
+        )
+
+        self.db.add(node)
+        self.db.commit()
+        self.db.refresh(node)
+
+        # Create conditional edge from source to branch
+        edge = DAGEdge(
+            from_node_id=source_node_id,
+            to_node_id=node.id,
+            dependency_type="conditional",
+            condition=f"branch_{branch_name}"
+        )
+        self.db.add(edge)
+        self.db.commit()
+
+        return node
 
 
 class CheckpointRepository(BaseRepository):

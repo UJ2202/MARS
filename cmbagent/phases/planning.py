@@ -148,6 +148,7 @@ class PlanningPhase(Phase):
                     'plan_reviewer': reviewer_config,
                 },
                 api_keys=context.api_keys,
+                **manager.get_managed_cmbagent_kwargs()
             )
             init_time = time.time() - init_start
 
@@ -215,7 +216,18 @@ class PlanningPhase(Phase):
             else:
                 plan_steps_list = []
 
-            # Invoke planning complete callback
+            # Update the planning phase node with the plan content BEFORE sending events
+            manager.update_current_node_metadata({
+                "plan": plan_steps_list,
+                "num_steps": len(plan_steps_list),
+                "steps_summary": [s.get('sub_task', s.get('task', '')) for s in plan_steps_list]
+            })
+
+            # Add plan step nodes to DAG for visualization BEFORE sending WebSocket events
+            # Pass the current phase node ID so steps connect to the planning phase
+            manager.add_plan_step_nodes(plan_steps_list, source_node=manager._current_dag_node_id)
+
+            # NOW invoke planning complete callback to send WebSocket events (after DB nodes created)
             if context.callbacks:
                 plan_info = PlanInfo(
                     task=context.task,

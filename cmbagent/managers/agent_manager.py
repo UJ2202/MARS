@@ -32,7 +32,8 @@ def import_non_rag_agents() -> Dict[str, Dict[str, Any]]:
         subdir_path = os.path.join(path_to_agents, subdir)
         if os.path.isdir(subdir_path):
             for filename in os.listdir(subdir_path):
-                if filename.endswith(".py") and filename != "__init__.py" and filename[0] != ".":
+                # Skip __init__.py, hidden files (.), and private files (_)
+                if filename.endswith(".py") and filename != "__init__.py" and filename[0] not in (".", "_"):
                     module_name = filename[:-3]  # Remove the .py extension
                     class_name = ''.join([part.capitalize() for part in module_name.split('_')]) + 'Agent'
                     # Assuming the module path is agents.<subdir>.<module_name>

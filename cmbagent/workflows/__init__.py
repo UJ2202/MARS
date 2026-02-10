@@ -55,6 +55,10 @@ from cmbagent.workflows.composer import (
     ONE_SHOT_RESEARCHER_WORKFLOW,
     IDEA_GENERATION_WORKFLOW,
     IDEA_TO_EXECUTION_WORKFLOW,
+    # Copilot workflows
+    COPILOT_WORKFLOW,
+    COPILOT_CONTINUOUS_WORKFLOW,
+    COPILOT_SIMPLE_WORKFLOW,
 )
 
 # Phase-based function wrappers
@@ -76,6 +80,57 @@ from cmbagent.workflows.hitl_workflow import (
     hitl_error_recovery_workflow,
 )
 
+# Copilot workflows (now uses SwarmOrchestrator internally)
+# Make these imports optional in case orchestrator module is not available
+try:
+    from cmbagent.workflows.copilot import (
+        copilot,
+        copilot_async,
+        continue_copilot,
+        continue_copilot_sync,
+        get_active_copilot_sessions,
+        quick_task,
+        planned_task,
+        interactive_session,
+    )
+except ImportError as e:
+    print(f"Warning: Could not import copilot workflows: {e}")
+    # Define placeholder functions
+    def copilot(*args, **kwargs):
+        raise NotImplementedError("Copilot workflows require the orchestrator module")
+    copilot_async = copilot
+    continue_copilot = copilot
+    continue_copilot_sync = copilot
+    get_active_copilot_sessions = lambda: {}
+    quick_task = copilot
+    planned_task = copilot
+    interactive_session = copilot
+
+# Swarm Copilot - Unified orchestration
+try:
+    from cmbagent.workflows.swarm_copilot import (
+        swarm_copilot,
+        swarm_copilot_async,
+        continue_swarm_copilot,
+        continue_swarm_copilot_sync,
+        get_active_sessions,
+        quick_swarm,
+        full_swarm,
+        interactive_swarm,
+    )
+except ImportError as e:
+    print(f"Warning: Could not import swarm_copilot workflows: {e}")
+    # Define placeholder functions
+    def swarm_copilot(*args, **kwargs):
+        raise NotImplementedError("Swarm Copilot workflows require the orchestrator module")
+    swarm_copilot_async = swarm_copilot
+    continue_swarm_copilot = swarm_copilot
+    continue_swarm_copilot_sync = swarm_copilot
+    get_active_sessions = lambda: {}
+    quick_swarm = swarm_copilot
+    full_swarm = swarm_copilot
+    interactive_swarm = swarm_copilot
+
 # Alias for simpler planning_and_control (without context carryover)
 # Currently using the same implementation as the full version
 planning_and_control = planning_and_control_context_carryover
@@ -96,6 +151,10 @@ __all__ = [
     'ONE_SHOT_RESEARCHER_WORKFLOW',
     'IDEA_GENERATION_WORKFLOW',
     'IDEA_TO_EXECUTION_WORKFLOW',
+    # Copilot preset workflows
+    'COPILOT_WORKFLOW',
+    'COPILOT_CONTINUOUS_WORKFLOW',
+    'COPILOT_SIMPLE_WORKFLOW',
     # Function API (all use phase-based implementation)
     'planning_and_control_context_carryover',
     'planning_and_control',
@@ -109,6 +168,24 @@ __all__ = [
     'hitl_interactive_workflow',
     'hitl_planning_only_workflow',
     'hitl_error_recovery_workflow',
+    # Copilot functions (uses SwarmOrchestrator)
+    'copilot',
+    'copilot_async',
+    'continue_copilot',
+    'continue_copilot_sync',
+    'get_active_copilot_sessions',
+    'quick_task',
+    'planned_task',
+    'interactive_session',
+    # Swarm Copilot - Unified orchestration
+    'swarm_copilot',
+    'swarm_copilot_async',
+    'continue_swarm_copilot',
+    'continue_swarm_copilot_sync',
+    'get_active_sessions',
+    'quick_swarm',
+    'full_swarm',
+    'interactive_swarm',
     # Utilities
     'clean_work_dir',
     'load_context',

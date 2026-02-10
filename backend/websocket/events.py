@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 
 
 async def send_ws_event(
@@ -14,7 +15,7 @@ async def send_ws_event(
     data: Dict[str, Any] = None,
     run_id: str = None,
     session_id: str = None
-):
+) -> bool:
     """Send a WebSocket event in the standardized protocol format.
 
     This helper ensures all WebSocket messages follow the event protocol:
@@ -23,7 +24,19 @@ async def send_ws_event(
     - run_id: Optional run identifier
     - session_id: Optional session identifier
     - data: Event-specific data payload
+
+    Returns:
+        bool: True if sent successfully, False otherwise
     """
+    # Check connection state before sending
+    try:
+        if websocket.client_state != WebSocketState.CONNECTED:
+            print(f"[send_ws_event] WebSocket not connected, skipping {event_type}")
+            return False
+    except Exception:
+        # If we can't check state, try to send anyway
+        pass
+
     message = {
         "event_type": event_type,
         "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -35,4 +48,9 @@ async def send_ws_event(
     if session_id:
         message["session_id"] = session_id
 
-    await websocket.send_json(message)
+    try:
+        await websocket.send_json(message)
+        return True
+    except Exception as e:
+        print(f"[send_ws_event] Failed to send {event_type}: {e}")
+        return False

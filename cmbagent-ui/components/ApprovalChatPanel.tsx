@@ -30,6 +30,18 @@ const OPTION_CONFIG: Record<string, { icon: React.ReactNode; color: string; labe
     label: 'Continue',
     description: 'Continue to next step'
   },
+  submit: {
+    icon: <Send className="w-4 h-4" />,
+    color: 'bg-blue-600 hover:bg-blue-700 border-blue-500',
+    label: 'Submit',
+    description: 'Submit your input'
+  },
+  exit: {
+    icon: <XCircle className="w-4 h-4" />,
+    color: 'bg-gray-600 hover:bg-gray-700 border-gray-500',
+    label: 'Exit',
+    description: 'End the session'
+  },
   reject: {
     icon: <XCircle className="w-4 h-4" />,
     color: 'bg-red-600 hover:bg-red-700 border-red-500',
@@ -142,10 +154,18 @@ export function ApprovalChatPanel({ approval, onResolve, isExpanded = true, onTo
         return '⏸️ Manual Pause'
       case 'ag2_dynamic':
         return '🤖 Agent Requesting Input'
+      case 'chat_input':
+      case 'next_task':
+        return '💬 Your Turn'
       default:
         return '🔔 Approval Required'
     }
   }
+
+  // Check if this is a chat input type (requires primary text input)
+  const isChatInput = approval.checkpoint_type === 'chat_input' ||
+                      approval.checkpoint_type === 'next_task' ||
+                      approval.context?.requires_text_input === true
 
   const formatContext = (context: Record<string, any>) => {
     if (!context) return null
@@ -284,99 +304,158 @@ export function ApprovalChatPanel({ approval, onResolve, isExpanded = true, onTo
 
           {/* Fixed bottom section - Options and feedback */}
           <div className="flex-shrink-0 border-t border-gray-700/50 bg-gray-900/80 p-4 space-y-3">
-            {/* Options */}
-            <div className="flex flex-wrap gap-2">
-              {options.map((option) => {
-                const config = OPTION_CONFIG[option.toLowerCase()] || {
-                  icon: <CheckCircle className="w-4 h-4" />,
-                  color: 'bg-gray-600 hover:bg-gray-700 border-gray-500',
-                  label: option,
-                  description: option
-                }
-                const isSelected = selectedOption === option
-
-                return (
-                  <button
-                    key={option}
-                    onClick={() => setSelectedOption(isSelected ? null : option)}
-                    className={`
-                      flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium 
-                      transition-all duration-200
-                      ${isSelected 
-                        ? `${config.color} text-white ring-2 ring-offset-2 ring-offset-gray-900 ring-white/30` 
-                        : 'bg-gray-800/50 border-gray-600 text-gray-300 hover:bg-gray-700/50 hover:border-gray-500'
-                      }
-                    `}
-                    title={config.description}
-                  >
-                    {config.icon}
-                    {config.label}
-                  </button>
-                )
-              })}
-            </div>
-
-            {/* Feedback input - shown when option is selected */}
-            {selectedOption && (
-              <div className="space-y-3 animate-in slide-in-from-top-2 duration-200">
-                {/* Show modifications input for modify option */}
-                {selectedOption.toLowerCase() === 'modify' && (
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Modifications (JSON or plain text):
-                    </label>
-                    <textarea
-                      value={modifications}
-                      onChange={(e) => setModifications(e.target.value)}
-                      placeholder='{"step_1": "Modified step description..."}'
-                      className="w-full px-3 py-2 bg-gray-800/50 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none font-mono"
-                      rows={3}
-                      onKeyDown={handleKeyDown}
-                    />
-                  </div>
-                )}
-
-                {/* Feedback input */}
+            {/* Chat Input Mode - show text input first */}
+            {isChatInput ? (
+              <div className="space-y-3">
                 <div className="flex gap-2">
                   <div className="flex-1">
                     <textarea
                       ref={feedbackRef}
                       value={feedback}
                       onChange={(e) => setFeedback(e.target.value)}
-                      placeholder={
-                        selectedOption.toLowerCase() === 'revise' 
-                          ? "Describe what changes you'd like..."
-                          : "Optional: Add feedback or instructions..."
-                      }
-                      className="w-full px-3 py-2 bg-gray-800/50 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-                      rows={2}
-                      onKeyDown={handleKeyDown}
+                      placeholder={approval.context?.input_placeholder || "Enter your next task or message..."}
+                      className="w-full px-3 py-3 bg-gray-800/50 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                      rows={3}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && feedback.trim()) {
+                          onResolve('submit', feedback)
+                          setFeedback('')
+                        }
+                      }}
+                      autoFocus
                     />
                     <p className="text-xs text-gray-500 mt-1">
                       Press ⌘/Ctrl + Enter to submit
                     </p>
                   </div>
+                </div>
+                <div className="flex gap-2 justify-end">
                   <button
-                    onClick={handleSubmit}
+                    onClick={() => {
+                      onResolve('exit')
+                    }}
+                    className="px-4 py-2 rounded-lg font-medium text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+                  >
+                    Exit Session
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (feedback.trim()) {
+                        onResolve('submit', feedback)
+                        setFeedback('')
+                      }
+                    }}
+                    disabled={!feedback.trim()}
                     className={`
-                      self-end px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2
-                      transition-all duration-200
-                      ${OPTION_CONFIG[selectedOption.toLowerCase()]?.color || 'bg-blue-600 hover:bg-blue-700'}
-                      text-white
+                      px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2 transition-colors
+                      ${feedback.trim()
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                        : 'bg-gray-700 text-gray-500 cursor-not-allowed'}
                     `}
                   >
                     <Send className="w-4 h-4" />
-                    Submit
+                    Send
                   </button>
                 </div>
               </div>
-            )}
+            ) : (
+              /* Standard approval mode with options */
+              <>
+                {/* Options */}
+                <div className="flex flex-wrap gap-2">
+                  {options.map((option) => {
+                    const config = OPTION_CONFIG[option.toLowerCase()] || {
+                      icon: <CheckCircle className="w-4 h-4" />,
+                      color: 'bg-gray-600 hover:bg-gray-700 border-gray-500',
+                      label: option,
+                      description: option
+                    }
+                    const isSelected = selectedOption === option
 
-            {/* Quick actions hint */}
-            {!selectedOption && (
-              <p className="text-xs text-gray-500 text-center">
-                Select an option above to continue the workflow
-              </p>
+                    return (
+                      <button
+                        key={option}
+                        onClick={() => setSelectedOption(isSelected ? null : option)}
+                        className={`
+                          flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium
+                          transition-all duration-200
+                          ${isSelected
+                            ? `${config.color} text-white ring-2 ring-offset-2 ring-offset-gray-900 ring-white/30`
+                            : 'bg-gray-800/50 border-gray-600 text-gray-300 hover:bg-gray-700/50 hover:border-gray-500'
+                          }
+                        `}
+                        title={config.description}
+                      >
+                        {config.icon}
+                        {config.label}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {/* Feedback input - shown when option is selected */}
+                {selectedOption && (
+                  <div className="space-y-3 animate-in slide-in-from-top-2 duration-200">
+                    {/* Show modifications input for modify option */}
+                    {selectedOption.toLowerCase() === 'modify' && (
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">
+                          Modifications (JSON or plain text):
+                        </label>
+                        <textarea
+                          value={modifications}
+                          onChange={(e) => setModifications(e.target.value)}
+                          placeholder='{"step_1": "Modified step description..."}'
+                          className="w-full px-3 py-2 bg-gray-800/50 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none font-mono"
+                          rows={3}
+                          onKeyDown={handleKeyDown}
+                        />
+                      </div>
+                    )}
+
+                    {/* Feedback input */}
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <textarea
+                          ref={feedbackRef}
+                          value={feedback}
+                          onChange={(e) => setFeedback(e.target.value)}
+                          placeholder={
+                            selectedOption.toLowerCase() === 'revise'
+                              ? "Describe what changes you'd like..."
+                              : "Optional: Add feedback or instructions..."
+                          }
+                          className="w-full px-3 py-2 bg-gray-800/50 border border-gray-600 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                          rows={2}
+                          onKeyDown={handleKeyDown}
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          Press ⌘/Ctrl + Enter to submit
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleSubmit}
+                        className={`
+                          self-end px-4 py-2 rounded-lg font-medium text-sm flex items-center gap-2
+                          transition-all duration-200
+                          ${OPTION_CONFIG[selectedOption.toLowerCase()]?.color || 'bg-blue-600 hover:bg-blue-700'}
+                          text-white
+                        `}
+                      >
+                        <Send className="w-4 h-4" />
+                        Submit
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Quick actions hint */}
+                {!selectedOption && (
+                  <p className="text-xs text-gray-500 text-center">
+                    Select an option above to continue the workflow
+                  </p>
+                )}
+              </>
             )}
           </div>
         </div>

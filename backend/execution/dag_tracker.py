@@ -132,94 +132,34 @@ class DAGTracker:
 
     def _create_hitl_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create initial DAG for HITL (Human-in-the-Loop) interactive mode.
-        
+
         The HITL workflow has these phases:
-        1. Planning Phase - AI generates plan
-        2. Human Review - Human approves/modifies plan
-        3. Execution Steps - Executed with optional human checkpoints
-        
+        1. Planning Phase - AI generates plan (with human feedback iterations)
+        2. Execution Steps - Executed with optional human checkpoints
+
         Steps are added dynamically after the plan is generated and approved.
+        Human review is tracked as events within steps, not as separate nodes.
         """
         hitl_variant = config.get("hitlVariant", "full_interactive")
-        
-        if hitl_variant == "planning_only":
-            # Only human review at planning stage
-            self.nodes = [
-                {
-                    "id": "planning",
-                    "label": "HITL Planning",
-                    "type": "planning",
-                    "agent": "planner",
-                    "status": "pending",
-                    "step_number": 0,
-                    "description": "AI generates execution plan",
-                    "task": task[:100] + "..." if len(task) > 100 else task
-                },
-                {
-                    "id": "human_review_plan",
-                    "label": "Human Review",
-                    "type": "approval",
-                    "agent": "human",
-                    "status": "pending",
-                    "step_number": 1,
-                    "description": "Human reviews and approves/modifies plan"
-                }
-            ]
-            self.edges = [
-                {"source": "planning", "target": "human_review_plan"}
-            ]
-        elif hitl_variant == "error_recovery":
-            # Human intervenes only on errors
-            self.nodes = [
-                {
-                    "id": "planning",
-                    "label": "Planning Phase",
-                    "type": "planning",
-                    "agent": "planner",
-                    "status": "pending",
-                    "step_number": 0,
-                    "description": "AI generates execution plan",
-                    "task": task[:100] + "..." if len(task) > 100 else task
-                },
-                {
-                    "id": "error_recovery",
-                    "label": "Error Recovery",
-                    "type": "approval",
-                    "agent": "human",
-                    "status": "pending",
-                    "step_number": 1,
-                    "description": "Human intervenes if errors occur during execution"
-                }
-            ]
-            self.edges = [
-                {"source": "planning", "target": "error_recovery"}
-            ]
-        else:
-            # full_interactive - Human reviews plan AND each step
-            self.nodes = [
-                {
-                    "id": "planning",
-                    "label": "HITL Planning",
-                    "type": "planning",
-                    "agent": "planner",
-                    "status": "pending",
-                    "step_number": 0,
-                    "description": "AI generates execution plan",
-                    "task": task[:100] + "..." if len(task) > 100 else task
-                },
-                {
-                    "id": "human_review_plan",
-                    "label": "Plan Review",
-                    "type": "approval",
-                    "agent": "human",
-                    "status": "pending",
-                    "step_number": 1,
-                    "description": "Human approves or modifies plan"
-                }
-            ]
-            self.edges = [
-                {"source": "planning", "target": "human_review_plan"}
-            ]
+
+        # All HITL variants start with just the planning node
+        # Steps are added dynamically after plan approval
+        label = "HITL Planning" if hitl_variant in ("planning_only", "full_interactive") else "Planning Phase"
+
+        self.nodes = [
+            {
+                "id": "planning",
+                "label": label,
+                "type": "planning",
+                "agent": "planner",
+                "status": "pending",
+                "step_number": 0,
+                "description": "AI generates execution plan with human feedback",
+                "task": task[:100] + "..." if len(task) > 100 else task
+            }
+        ]
+        # No edges initially - steps connect after plan is created
+        self.edges = []
 
         for node in self.nodes:
             self.node_statuses[node["id"]] = "pending"
@@ -389,14 +329,20 @@ class DAGTracker:
         for i, step_info in enumerate(steps, 1):
             step_id = f"step_{i}"
             if isinstance(step_info, dict):
-                description = step_info.get("description", "")
-                task = step_info.get("task", "")
-                agent = step_info.get("agent", "engineer")
+                # Handle both formats: standard planning uses "task"/"agent", HITL uses "sub_task"/"sub_task_agent"
+                description = step_info.get("description") or step_info.get("sub_task_description", "")
+                task = step_info.get("task") or step_info.get("sub_task", "")
+                agent = step_info.get("agent") or step_info.get("sub_task_agent", "engineer")
                 insights = step_info.get("insights", "")
                 goal = step_info.get("goal", "")
                 summary = step_info.get("summary", "")
                 bullet_points = step_info.get("bullet_points", [])
 
+                # Use task as description if description is empty
+                if not description and task:
+                    description = task
+
+                # Build label from the most informative field
                 label_source = goal or task or description
                 if label_source:
                     truncated_label = label_source.strip()[:80]
@@ -444,22 +390,11 @@ class DAGTracker:
         })
         self.node_statuses["terminator"] = "pending"
 
-        # Determine the source node for steps based on mode
-        # For HITL modes, steps connect from human_review_plan if it exists
-        if self.mode == "hitl-interactive":
-            # Check if human_review_plan node exists
-            has_human_review = any(n.get("id") == "human_review_plan" for n in self.nodes)
-            first_step_source = "human_review_plan" if has_human_review else "planning"
-            # Preserve the planning → human_review_plan edge if it exists
-            if has_human_review:
-                self.edges = [{"source": "planning", "target": "human_review_plan"}]
-            else:
-                self.edges = []
-        else:
-            first_step_source = "planning"
-            self.edges = []
+        # Steps always connect directly from planning (no human_review node)
+        first_step_source = "planning"
+        self.edges = []
 
-        # Create edges for steps
+        # Create edges for steps: planning → step_1 → step_2 → ... → terminator
         self.edges.append({"source": first_step_source, "target": "step_1"})
         for i in range(1, len(steps)):
             self.edges.append({"source": f"step_{i}", "target": f"step_{i+1}"})

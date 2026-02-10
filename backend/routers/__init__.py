@@ -16,6 +16,7 @@ from routers.runs import router as runs_router
 from routers.nodes import router as nodes_router
 from routers.tasks import router as tasks_router
 from routers.phases import router as phases_router
+from routers.copilot import router as copilot_router
 
 
 def register_routers(app):
@@ -23,6 +24,7 @@ def register_routers(app):
     app.include_router(health_router)
     app.include_router(tasks_router)
     app.include_router(phases_router)  # Phase-based workflows
+    app.include_router(copilot_router)  # Copilot mode
     app.include_router(files_router)
     app.include_router(credentials_router)
     app.include_router(arxiv_router)
@@ -44,4 +46,5 @@ __all__ = [
     "nodes_router",
     "tasks_router",
     "phases_router",
+    "copilot_router",
 ]

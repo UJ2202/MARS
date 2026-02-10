@@ -22,12 +22,40 @@ from cmbagent.utils import default_formatter_model as default_formatter_model_de
 from cmbagent.workflows.utils import clean_work_dir
 
 
+def _setup_hitl_workflow(work_dir, api_keys, clear_work_dir):
+    """Common setup for all HITL workflows."""
+    work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
+    if clear_work_dir:
+        clean_work_dir(work_dir)
+    if api_keys is None:
+        api_keys = get_api_keys_from_env()
+    return work_dir, api_keys
+
+
+def _extract_hitl_results(context, work_dir, include_planning=True, include_steps=True):
+    """Extract HITL feedback from workflow context into results dict."""
+    results = {
+        'final_context': context.to_dict(),
+        'phase_timings': context.phase_timings,
+        'work_dir': work_dir,
+    }
+    if hasattr(context, 'shared_state'):
+        if include_planning:
+            results['hitl_feedback'] = context.shared_state.get('all_hitl_feedback', '') or context.shared_state.get('hitl_feedback', '')
+            results['planning_feedback_history'] = context.shared_state.get('planning_feedback_history', [])
+        if include_steps:
+            results['step_feedback'] = context.shared_state.get('step_feedback', [])
+    return results
+
+
 def hitl_interactive_workflow(
     task,
     max_rounds_planning=50,
     max_rounds_control=100,
-    max_plan_steps=5,
+    max_plan_steps=10,  # Allow up to 10 steps for dynamic plans
     max_human_iterations=3,
+    n_plan_reviews=1,  # Internal agent review iterations before human approval
     max_n_attempts=3,
     approval_mode="both",  # both, before_step, after_step, on_error
     allow_plan_modification=True,
@@ -87,15 +115,7 @@ def hitl_interactive_workflow(
     """
     from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
 
-    # Setup
-    work_dir = os.path.abspath(os.path.expanduser(work_dir))
-    os.makedirs(work_dir, exist_ok=True)
-
-    if clear_work_dir:
-        clean_work_dir(work_dir)
-
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
+    work_dir, api_keys = _setup_hitl_workflow(work_dir, api_keys, clear_work_dir)
 
     # Define the HITL workflow
     workflow = WorkflowDefinition(
@@ -108,6 +128,7 @@ def hitl_interactive_workflow(
                 "config": {
                     "max_plan_steps": max_plan_steps,
                     "max_human_iterations": max_human_iterations,
+                    "n_plan_reviews": n_plan_reviews,
                     "require_explicit_approval": True,
                     "allow_plan_modification": allow_plan_modification,
                     "show_intermediate_plans": True,
@@ -144,29 +165,16 @@ def hitl_interactive_workflow(
 
     # Execute workflow
     context = executor.run_sync()
-
-    # Compile results
-    results = {
-        'final_context': context.to_dict(),
-        'phase_timings': context.phase_timings,
-        'work_dir': work_dir,
-    }
-
-    # Extract HITL feedback from context
-    if hasattr(context, 'shared_state'):
-        results['hitl_feedback'] = context.shared_state.get('all_hitl_feedback', '')
-        results['planning_feedback_history'] = context.shared_state.get('planning_feedback_history', [])
-        results['step_feedback'] = context.shared_state.get('step_feedback', [])
-
-    return results
+    return _extract_hitl_results(context, work_dir)
 
 
 def hitl_planning_only_workflow(
     task,
     max_rounds_planning=50,
     max_rounds_control=100,
-    max_plan_steps=5,
+    max_plan_steps=10,  # Allow up to 10 steps for dynamic plans
     max_human_iterations=3,
+    n_plan_reviews=1,  # Internal agent review iterations before human approval
     allow_plan_modification=True,
     planner_model=default_agents_llm_model['planner'],
     engineer_model=default_agents_llm_model['engineer'],
@@ -193,15 +201,7 @@ def hitl_planning_only_workflow(
     """
     from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
 
-    # Setup
-    work_dir = os.path.abspath(os.path.expanduser(work_dir))
-    os.makedirs(work_dir, exist_ok=True)
-
-    if clear_work_dir:
-        clean_work_dir(work_dir)
-
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
+    work_dir, api_keys = _setup_hitl_workflow(work_dir, api_keys, clear_work_dir)
 
     # Define workflow: HITL planning + autonomous control
     workflow = WorkflowDefinition(
@@ -214,6 +214,7 @@ def hitl_planning_only_workflow(
                 "config": {
                     "max_plan_steps": max_plan_steps,
                     "max_human_iterations": max_human_iterations,
+                    "n_plan_reviews": n_plan_reviews,
                     "require_explicit_approval": True,
                     "allow_plan_modification": allow_plan_modification,
                     "show_intermediate_plans": True,
@@ -246,20 +247,7 @@ def hitl_planning_only_workflow(
 
     # Execute workflow
     context = executor.run_sync()
-
-    # Compile results
-    results = {
-        'final_context': context.to_dict(),
-        'phase_timings': context.phase_timings,
-        'work_dir': work_dir,
-    }
-
-    # Extract HITL feedback from context
-    if hasattr(context, 'shared_state'):
-        results['hitl_feedback'] = context.shared_state.get('hitl_feedback', '')
-        results['planning_feedback_history'] = context.shared_state.get('planning_feedback_history', [])
-
-    return results
+    return _extract_hitl_results(context, work_dir, include_steps=False)
 
 
 def hitl_error_recovery_workflow(
@@ -297,15 +285,7 @@ def hitl_error_recovery_workflow(
     """
     from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
 
-    # Setup
-    work_dir = os.path.abspath(os.path.expanduser(work_dir))
-    os.makedirs(work_dir, exist_ok=True)
-
-    if clear_work_dir:
-        clean_work_dir(work_dir)
-
-    if api_keys is None:
-        api_keys = get_api_keys_from_env()
+    work_dir, api_keys = _setup_hitl_workflow(work_dir, api_keys, clear_work_dir)
 
     # Define workflow: Autonomous planning + HITL error recovery
     workflow = WorkflowDefinition(
@@ -351,16 +331,4 @@ def hitl_error_recovery_workflow(
 
     # Execute workflow
     context = executor.run_sync()
-
-    # Compile results
-    results = {
-        'final_context': context.to_dict(),
-        'phase_timings': context.phase_timings,
-        'work_dir': work_dir,
-    }
-
-    # Extract HITL feedback from context
-    if hasattr(context, 'shared_state'):
-        results['step_feedback'] = context.shared_state.get('step_feedback', [])
-
-    return results
+    return _extract_hitl_results(context, work_dir, include_planning=False)

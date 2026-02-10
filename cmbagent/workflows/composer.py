@@ -82,6 +82,7 @@ class WorkflowExecutor:
         api_keys: Dict[str, str],
         callbacks: Any = None,
         approval_manager: Any = None,
+        initial_shared_state: Dict[str, Any] = None,
     ):
         """
         Initialize workflow executor.
@@ -93,6 +94,7 @@ class WorkflowExecutor:
             api_keys: API credentials
             callbacks: Optional callback handlers
             approval_manager: Optional HITL approval manager
+            initial_shared_state: Optional initial shared state for phases
         """
         self.workflow = workflow
         self.task = task
@@ -100,6 +102,7 @@ class WorkflowExecutor:
         self.api_keys = api_keys
         self.callbacks = callbacks
         self.approval_manager = approval_manager
+        self.initial_shared_state = initial_shared_state or {}
 
         # Build phases from definitions
         self.phases: List[Phase] = []
@@ -115,6 +118,10 @@ class WorkflowExecutor:
             work_dir=self.work_dir,
             api_keys=api_keys,
         )
+
+        # Apply initial shared state
+        if self.initial_shared_state:
+            self.context.shared_state.update(self.initial_shared_state)
 
         # Execution state
         self.current_phase_index = 0
@@ -488,6 +495,66 @@ SMART_APPROVAL_WORKFLOW = WorkflowDefinition(
     is_system=True,
 )
 
+# Copilot workflow - flexible assistant that adapts to task complexity
+COPILOT_WORKFLOW = WorkflowDefinition(
+    id="copilot",
+    name="Copilot Assistant",
+    description="Flexible AI assistant that adapts to task complexity - routes simple tasks to one-shot, complex tasks to planning",
+    phases=[
+        {
+            "type": "copilot",
+            "config": {
+                "available_agents": ["engineer", "researcher"],
+                "enable_planning": True,
+                "complexity_threshold": 50,
+                "continuous_mode": False,
+                "max_turns": 20,
+                "max_rounds": 100,
+                "max_plan_steps": 5,
+                "approval_mode": "after_step",
+                "auto_approve_simple": True,
+            }
+        },
+    ],
+    is_system=True,
+)
+
+COPILOT_CONTINUOUS_WORKFLOW = WorkflowDefinition(
+    id="copilot_continuous",
+    name="Copilot Interactive Session",
+    description="Continuous copilot session - keeps running until user exits",
+    phases=[
+        {
+            "type": "copilot",
+            "config": {
+                "available_agents": ["engineer", "researcher"],
+                "enable_planning": True,
+                "continuous_mode": True,
+                "max_turns": 50,
+                "approval_mode": "after_step",
+            }
+        },
+    ],
+    is_system=True,
+)
+
+COPILOT_SIMPLE_WORKFLOW = WorkflowDefinition(
+    id="copilot_simple",
+    name="Simple Copilot (No Planning)",
+    description="Direct task execution without planning - for quick simple tasks",
+    phases=[
+        {
+            "type": "copilot",
+            "config": {
+                "available_agents": ["engineer", "researcher"],
+                "enable_planning": False,
+                "approval_mode": "none",
+            }
+        },
+    ],
+    is_system=True,
+)
+
 
 # Default workflows available
 SYSTEM_WORKFLOWS: Dict[str, WorkflowDefinition] = {
@@ -506,6 +573,10 @@ SYSTEM_WORKFLOWS: Dict[str, WorkflowDefinition] = {
         ERROR_RECOVERY_WORKFLOW,
         PROGRESSIVE_REVIEW_WORKFLOW,
         SMART_APPROVAL_WORKFLOW,
+        # Copilot workflows
+        COPILOT_WORKFLOW,
+        COPILOT_CONTINUOUS_WORKFLOW,
+        COPILOT_SIMPLE_WORKFLOW,
     ]
 }
 

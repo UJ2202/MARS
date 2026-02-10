@@ -2,10 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
-# engineer response
 class EngineerResponse(BaseModel):
-    # steps: list[Step]
-    # step: Step
     code_explanation: str = Field(..., description="The code explanation")
     python_code:  str = Field(..., description="The Python code in a form ready to execute")
 
@@ -43,8 +40,6 @@ class Subtasks(BaseModel):
 class PlannerResponse(BaseModel):
     main_task: str
     sub_tasks: list[Subtasks]
-    # next_step_suggestion: str = Field(..., description="The next step suggestion, either proceed with the plan or hand off to the plan_reviewer.")
-    # next_agent_suggestion: str = Field(..., description="The name of the next agent to consult. Must be either planner, plan_reviewer or admin.")
 
     def format(self) -> str:
         plan_output = "\n".join(
@@ -59,6 +54,7 @@ class PlannerResponse(BaseModel):
 
         """
         return message
+
 
 class SubtaskSummary(BaseModel):
     sub_task: str
@@ -91,9 +87,6 @@ class SummarizerResponse(BaseModel):
         """
 
 
-### GPT RAG assistant response
-
-
 class FileResult(BaseModel):
     file_name: str = Field(..., description="The name of the consulted file")
 
@@ -105,14 +98,6 @@ class CodeExplanation(BaseModel):
 
 class PythonCode(BaseModel):
     code: Optional[str] = Field(None, description="The Python code retrieved or generated")
-
-# class CurrentStatusAndNextStep(BaseModel):
-#     status_and_next_step_suggestion: str = Field(..., description="""
-#     State where we are in the PLAN and suggest what to do next according to the PLAN or based on previous <admin> feedback. If the suggestion doesnt follow the PLAN, a justification must be provided. 
-#     Start with: 'We are on Step <i> of the PLAN. Next, if you would like, let us ...'. 
-#     If we are at the last step of the PLAN, then <current_status_and_next_step_suggestion> should be 'We are at the last step of the PLAN. Unless you have further requests, we can end the session. What would you like to do?' 
-#     It must end with: 'Should we proceed?'
-#     """)
 
 class RagSoftwareFormatterResponse(BaseModel):
     retrieval_task: RetrievalTask = Field(..., description="Details of the retrieval task")
@@ -146,4 +131,139 @@ class RagSoftwareFormatterResponse(BaseModel):
 ```
 \n
 
+        """
+
+
+# ============ COPILOT ROUTING DECISION ============
+
+class AgentCapability(BaseModel):
+    """Describes what an agent can do."""
+    agent_name: str = Field(..., description="Name of the agent")
+    capability: str = Field(..., description="What this agent is good at")
+    relevance_score: float = Field(..., description="How relevant this agent is (0-1)")
+
+
+class CopilotRoutingDecision(BaseModel):
+    """
+    Structured output from copilot control agent for intelligent task routing.
+
+    This replaces simple heuristics with LLM-based analysis.
+    """
+    # Primary routing decision
+    route_type: str = Field(
+        ...,
+        description="How to handle this task: 'one_shot' (direct execution), 'planned' (needs planning), 'clarify' (need more info from user)"
+    )
+
+    # Complexity analysis
+    complexity_score: int = Field(
+        ...,
+        description="Task complexity 0-100. <30=simple, 30-60=moderate, >60=complex"
+    )
+    complexity_reasoning: str = Field(
+        ...,
+        description="Brief explanation of why this complexity score"
+    )
+
+    # Agent selection
+    primary_agent: str = Field(
+        ...,
+        description="Best agent to handle this task (e.g., 'engineer', 'researcher')"
+    )
+    supporting_agents: List[str] = Field(
+        default_factory=list,
+        description="Other agents that might be needed"
+    )
+    agent_reasoning: str = Field(
+        ...,
+        description="Why these agents were selected"
+    )
+
+    # For planned routes
+    estimated_steps: int = Field(
+        default=1,
+        description="Estimated number of steps if planning is needed"
+    )
+
+    # For clarify routes
+    clarifying_questions: List[str] = Field(
+        default_factory=list,
+        description="Questions to ask user if route_type is 'clarify'"
+    )
+
+    # Task refinement
+    refined_task: str = Field(
+        ...,
+        description="Optionally refined/clarified version of the task"
+    )
+
+    # Confidence
+    confidence: float = Field(
+        ...,
+        description="Confidence in this routing decision (0-1)"
+    )
+
+    def format(self) -> str:
+        agents = f"{self.primary_agent}"
+        if self.supporting_agents:
+            agents += f" + {', '.join(self.supporting_agents)}"
+
+        questions = ""
+        if self.clarifying_questions:
+            questions = "\n**Clarifying Questions:**\n" + "\n".join(f"- {q}" for q in self.clarifying_questions)
+
+        return f"""
+**Routing Decision:**
+- Route: {self.route_type}
+- Complexity: {self.complexity_score}/100 ({self.complexity_reasoning})
+- Agents: {agents}
+- Estimated Steps: {self.estimated_steps}
+- Confidence: {self.confidence:.0%}
+
+**Agent Reasoning:** {self.agent_reasoning}
+
+**Refined Task:** {self.refined_task}
+{questions}
+        """
+
+    def should_use_planning(self) -> bool:
+        """Helper to check if planning is recommended."""
+        return self.route_type == "planned"
+
+    def needs_clarification(self) -> bool:
+        """Helper to check if clarification is needed."""
+        return self.route_type == "clarify"
+
+
+class CopilotHandoffDecision(BaseModel):
+    """
+    Decision for handing off to another agent mid-execution.
+
+    Used when copilot control determines a different agent should take over.
+    """
+    should_handoff: bool = Field(
+        ...,
+        description="Whether to handoff to another agent"
+    )
+    target_agent: str = Field(
+        default="",
+        description="Agent to handoff to"
+    )
+    handoff_reason: str = Field(
+        default="",
+        description="Why this handoff is needed"
+    )
+    context_to_pass: List[str] = Field(
+        default_factory=list,
+        description="Key context items to pass to the next agent"
+    )
+
+    def format(self) -> str:
+        if not self.should_handoff:
+            return "**No handoff needed**"
+        return f"""
+**Handoff Decision:**
+- Target: {self.target_agent}
+- Reason: {self.handoff_reason}
+- Context: {', '.join(self.context_to_pass) if self.context_to_pass else 'None'}
         """

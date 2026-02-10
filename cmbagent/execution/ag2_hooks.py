@@ -11,6 +11,9 @@ import time
 
 from cmbagent.execution.event_capture import get_event_captor
 
+# Track if hooks are already installed (idempotency)
+_hooks_installed = False
+
 
 def patch_conversable_agent():
     """
@@ -146,22 +149,31 @@ def patch_code_executor():
 def install_ag2_hooks() -> bool:
     """
     Install all AG2 hooks for event capture.
-    
+    Idempotent - safe to call multiple times.
+
     Returns:
-        True if all hooks installed successfully
+        True if hooks installed successfully (or already installed)
     """
+    global _hooks_installed
+
+    # Check if already installed
+    if _hooks_installed:
+        print("[AG2 Hooks] Already installed, skipping")
+        return True
+
     results = [
         patch_conversable_agent(),
         patch_group_chat(),
         patch_code_executor()
     ]
-    
+
     success = all(results)
     if success:
+        _hooks_installed = True
         print("[AG2 Hooks] All hooks installed successfully")
     else:
         print("[AG2 Hooks] Some hooks failed to install")
-    
+
     return success
 
 

@@ -28,11 +28,6 @@ if cmbagent_debug:
     print('path_to_assistants: ', path_to_assistants)
 path_to_agents = os.path.join(path_to_basedir, "agents/")
 
-# path_to_engineer = os.path.join(path_to_basedir, "engineer")
-# path_to_planner = os.path.join(path_to_basedir, "planner")
-# path_to_executor = os.path.join(path_to_basedir, "executor")
-# path_to_admin = os.path.join(path_to_basedir, "admin")
-
 # Always use current working directory
 work_dir_default = os.path.join(os.getcwd(), "cmbagent_workdir")
 
@@ -106,37 +101,70 @@ from .cmbagent_utils import file_search_max_num_results
 
 default_max_round = 50
 
-# default_llm_model = 'gpt-4o-2024-11-20'
 default_llm_model = 'gpt-4.1-2025-04-14'
-# default_llm_model = 'gpt-4o-mini'
-# default_llm_model = "gemini-2.0-flash"
 default_formatter_model = 'o3-mini-2025-01-31'
 
 
+# Core agents - general purpose, always available
+CORE_AGENTS = {
+    "engineer": "gpt-4.1-2025-04-14",
+    "researcher": "gpt-4.1-2025-04-14",
+    "planner": "gpt-4.1-2025-04-14",
+    "plan_reviewer": "o3-mini-2025-01-31",
+    "web_surfer": "gpt-4.1-2025-04-14",
+    "retrieve_assistant": "gpt-4.1-2025-04-14",
+}
+
+# Domain-specific agents - cosmology/science focused
+DOMAIN_AGENTS = {
+    "idea_hater": "o3-mini-2025-01-31",
+    "idea_maker": "gpt-4.1-2025-04-14",
+    "plot_judge": "o3-mini-2025-01-31",
+    "plot_debugger": "gpt-4o-2024-11-20",
+    "aas_keyword_finder": "o3-mini-2025-01-31",
+    "task_improver": "o3-mini-2025-01-31",
+    "task_recorder": "gpt-4o-2024-11-20",
+    "perplexity": "o3-mini-2025-01-31",
+    # RAG agents
+    "classy_sz": "gpt-4o-2024-11-20",
+    "camb": "gpt-4o-2024-11-20",
+    "classy": "gpt-4o-2024-11-20",
+    "cobaya": "gpt-4o-2024-11-20",
+    "planck": "gpt-4o-2024-11-20",
+    "camb_context": "gpt-4.1-2025-04-14",
+}
 
 
+def get_agents_by_type(include_domain: bool = True) -> dict:
+    """Get agent model configs by type.
+
+    Args:
+        include_domain: If True, include domain-specific agents.
+                       If False, return only core agents.
+
+    Returns:
+        Dictionary of agent name -> model name
+    """
+    if include_domain:
+        return {**CORE_AGENTS, **DOMAIN_AGENTS}
+    return CORE_AGENTS.copy()
+
+
+# Full agent list (backward compatible)
 
 default_agents_llm_model ={
     "engineer": "gpt-4.1-2025-04-14",
     "aas_keyword_finder": "o3-mini-2025-01-31",
     "task_improver": "o3-mini-2025-01-31",
     "task_recorder": "gpt-4o-2024-11-20",
-    # "control": "gpt-4o-2024-11-20",
-    # "control": "gemini-2.5-pro-preview-03-25",
-    # "terminator": "gpt-5",
-    # "terminator": "gemini-2.5-pro-preview-03-25",
     "researcher": "gpt-4.1-2025-04-14",
     "web_surfer": "gpt-4.1-2025-04-14",
     "retrieve_assistant": "gpt-4.1-2025-04-14",
     "perplexity": "o3-mini-2025-01-31",
     "planner": "gpt-4.1-2025-04-14",
-    # "plan_reviewer": "claude-3-7-sonnet-20250219",
     "plan_reviewer": "o3-mini-2025-01-31",
-    # "plan_setter": "gpt-4o-2024-11-20",
-    # "idea_hater": "claude-3-7-sonnet-20250219",
     "idea_hater":  "o3-mini-2025-01-31",
     "idea_maker": "gpt-4.1-2025-04-14",
-    # "plot_judge": "gpt-4o-2024-08-06",
     "plot_judge": "o3-mini-2025-01-31",
 
     # rag agents
@@ -147,26 +175,9 @@ default_agents_llm_model ={
     "planck": "gpt-4o-2024-11-20",
 
     "camb_context": "gpt-4.1-2025-04-14",
-    # "camb_context": "gemini-2.5-flash-preview-04-17",
-    # "camb_context": "gemini-2.5-pro-preview-03-25",
-    # "camb_context": "gemini-2.5-flash",
-    # "camb_context": "gemini-2.5-flash-preview-05-20",
 
-    # "classy_context": "gpt-4o-2024-11-20",
-    
-    # structured output agents
-    # "classy_sz_response_formatter": "gpt-4o-2024-11-20",
-    # "camb_response_formatter": "gpt-4.1-2025-04-14",
-    # "classy_response_formatter": "gpt-4.1-2025-04-14",
-    # "cobaya_response_formatter": "gpt-4o-2024-11-20",
-    # # "engineer_response_formatter": "gpt-4.1-2025-04-14",
-    # "engineer_response_formatter": default_formatter_model,
-    # # "engineer_response_formatter": "gemini-2.5-pro-preview-03-25",
-    # "researcher_response_formatter": default_formatter_model,
-    # "executor_response_formatter": default_formatter_model,
-    #"executor_response_formatter": "gemini-2.5-pro-preview-03-25",
     'plot_debugger': 'gpt-4o-2024-11-20',
-    
+
     # Summarizer agents
     'summarizer': default_llm_model,
     'summarizer_response_formatter': default_formatter_model,
@@ -215,23 +226,11 @@ def get_model_config(model, api_keys):
 
 api_keys_env = get_api_keys_from_env()
 
-# print('api_keys_env: ', api_keys_env)
-
 for agent in default_agents_llm_model:
     default_agent_llm_configs[agent] =  get_model_config(default_agents_llm_model[agent], api_keys_env)
 
 
 default_llm_config_list = [get_model_config(default_llm_model, api_keys_env)]
-
-
-#### note we should be able to set the temperature for different agents, e.g., 
-                    # "idea_maker": {
-                    #     "model": default_llm_model,
-                    #     "api_key": os.getenv("OPENAI_API_KEY"),
-                    #     "api_type": "openai",
-                    #     'temperature': 0.5,
-                    #     },
-
 
 
 def update_yaml_preserving_format(yaml_file, agent_name, new_id, field = 'vector_store_ids'):
@@ -255,26 +254,9 @@ def update_yaml_preserving_format(yaml_file, agent_name, new_id, field = 'vector
     with open(yaml_file, 'w') as file:
         yaml.dump(yaml_content, file)
 
-def aas_keyword_to_url(keyword):
-    """
-    Given an AAS keyword, return its IAU Thesaurus URL.
-    
-    Args:
-        keyword (str): The AAS keyword (e.g., "H II regions")
-        
-    Returns:
-        str: The corresponding IAU Thesaurus URL
-    """
-    with open('aas_kwd_to_url.pkl', 'rb') as f:
-        dic = pickle.load(f)
-    return dic[keyword]
-
-
 with open(path_to_basedir + '/keywords/aas_kwd_to_url.pkl', 'rb') as file:
     AAS_keywords_dict = pickle.load(file)
 
-# print(my_dict)
-# Assuming you have already loaded your dictionary into `my_dict`
 AAS_keywords_string = ', '.join(AAS_keywords_dict.keys())
 
 unesco_taxonomy_path = path_to_basedir + '/keywords/unesco_hierarchical.json'
@@ -299,10 +281,6 @@ def clean_llm_config(llm_config):
             llm_config.pop('temperature', None)
         if 'top_p' in llm_config:
             llm_config.pop('top_p', None)
-
-    # print('\nin cmbagent.py: llm_config: ', llm_config)
-
-    
 
     if llm_config['config_list'][0]['api_type'] == 'google':
         if 'top_p' in llm_config:

@@ -113,24 +113,64 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
         )
 
         # Handle both execution and client messages
-        while True:
-            done, pending = await asyncio.wait(
-                [execution_task, asyncio.create_task(websocket.receive_json())],
-                return_when=asyncio.FIRST_COMPLETED
-            )
+        # Use a single persistent receive task to avoid resource leaks
+        receive_task = asyncio.create_task(websocket.receive_json())
 
-            # Check if execution completed
-            if execution_task in done:
-                break
+        try:
+            while True:
+                done, pending = await asyncio.wait(
+                    [execution_task, receive_task],
+                    return_when=asyncio.FIRST_COMPLETED
+                )
 
-            # Handle client message
-            for task_result in done:
-                if task_result != execution_task:
+                # Check if execution completed
+                if execution_task in done:
+                    # Cancel pending receive task to avoid resource leak
+                    if receive_task in pending:
+                        receive_task.cancel()
+                        try:
+                            await receive_task
+                        except asyncio.CancelledError:
+                            pass
+
+                    # Check if execution_task had an exception
                     try:
-                        client_msg = task_result.result()
+                        result = execution_task.result()
+                        print(f"[WebSocket] Execution completed successfully for task {task_id}")
+                    except Exception as exec_error:
+                        print(f"[WebSocket] Execution failed for task {task_id}: {exec_error}")
+                        # Try to send error to client
+                        try:
+                            await send_ws_event(
+                                websocket, "error",
+                                {"message": f"Task execution failed: {str(exec_error)}"},
+                                run_id=task_id
+                            )
+                        except Exception:
+                            pass  # WebSocket might already be closed
+                    break
+
+                # Handle client message
+                if receive_task in done:
+                    try:
+                        client_msg = receive_task.result()
                         await handle_client_message(websocket, task_id, client_msg)
+                    except WebSocketDisconnect:
+                        print(f"WebSocket disconnected while receiving message for task {task_id}")
+                        break
                     except Exception as e:
                         print(f"Error handling client message: {e}")
+
+                    # Create new receive task for next iteration
+                    receive_task = asyncio.create_task(websocket.receive_json())
+
+        except asyncio.CancelledError:
+            # Clean up on cancellation
+            if not execution_task.done():
+                execution_task.cancel()
+            if not receive_task.done():
+                receive_task.cancel()
+            raise
 
     except WebSocketDisconnect:
         print(f"WebSocket disconnected for task {task_id}")

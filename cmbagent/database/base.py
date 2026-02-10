@@ -92,12 +92,3 @@ def init_database():
     engine = get_engine()
     Base.metadata.create_all(engine)
     return engine
-
-
-def close_database():
-    """Close database connections and dispose of engine."""
-    global _engine, _SessionFactory
-    if _engine:
-        _engine.dispose()
-        _engine = None
-    _SessionFactory = None

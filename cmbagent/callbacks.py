@@ -402,24 +402,26 @@ def merge_callbacks(*callbacks_list: WorkflowCallbacks) -> WorkflowCallbacks:
 def create_websocket_callbacks(
     send_event_func: Callable[[str, Dict[str, Any]], None],
     run_id: str,
-    total_steps: Optional[int] = None
+    total_steps: Optional[int] = None,
+    hitl_mode: Optional[str] = None,
 ) -> WorkflowCallbacks:
     """
     Create WorkflowCallbacks that emit WebSocket events.
-    
+
     Args:
         send_event_func: Function to send WebSocket events
             Signature: send(event_type: str, data: dict) -> None
         run_id: Workflow run ID for tagging events
         total_steps: Total number of steps (updated after planning)
-        
+        hitl_mode: HITL variant if applicable ("full_interactive", "planning_only", "error_recovery")
+
     Returns:
         WorkflowCallbacks configured for WebSocket emission
     """
     from datetime import datetime, timezone
-    
+
     # Mutable container to track state
-    state = {"total_steps": total_steps or 0, "steps_info": []}
+    state = {"total_steps": total_steps or 0, "steps_info": [], "hitl_mode": hitl_mode}
     
     def on_planning_start(task: str, config: Dict[str, Any]) -> None:
         send_event_func("dag_node_status_changed", {
@@ -433,7 +435,7 @@ def create_websocket_callbacks(
     def on_planning_complete(plan_info: PlanInfo) -> None:
         state["total_steps"] = plan_info.num_steps
         state["steps_info"] = plan_info.steps
-        
+
         # Mark planning as complete
         send_event_func("dag_node_status_changed", {
             "run_id": run_id,
@@ -442,21 +444,30 @@ def create_websocket_callbacks(
             "new_status": "completed",
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
-        
+
+        # Note: Human review is now tracked as events within the planning phase, not a separate node
+
         # Send full DAG update with steps
+        is_hitl = state["hitl_mode"] in ("full_interactive", "planning_only")
         nodes = [
             {
                 "id": "planning",
-                "label": "Planning Phase",
+                "label": "HITL Planning" if is_hitl else "Planning Phase",
                 "type": "planning",
                 "status": "completed",
                 "step_number": 0
             }
         ]
-        
+
+        # Note: Human review is now handled as an event within steps, not a separate node
+
         for i, step in enumerate(plan_info.steps, 1):
-            agent = step.get('sub_task_agent', 'engineer')
-            description = step.get('sub_task_description', '')
+            agent = step.get('sub_task_agent') or step.get('agent', 'engineer')
+            description = step.get('sub_task') or step.get('sub_task_description') or step.get('description') or step.get('task', '')
+            goal = step.get('goal') or step.get('summary') or description
+            summary = step.get('summary', '')
+            bullet_points = step.get('bullet_points', [])
+
             # Create a meaningful label from the description (first 50 chars) or use agent name
             if description:
                 # Clean up the description for label
@@ -473,7 +484,11 @@ def create_websocket_callbacks(
                 "agent": agent,
                 "status": "pending",
                 "step_number": i,
-                "description": description[:200] if description else ""
+                "description": description[:200] if description else "",
+                "task": description[:200] if description else "",
+                "goal": goal[:200] if goal else "",
+                "summary": summary[:200] if summary else "",
+                "bullet_points": bullet_points
             })
         
         nodes.append({
@@ -483,12 +498,14 @@ def create_websocket_callbacks(
             "status": "pending",
             "step_number": plan_info.num_steps + 1
         })
-        
-        edges = [{"source": "planning", "target": "step_1"}]
+
+        # Build edges: planning → step_1 → step_2 → ... → terminator
+        edges = []
+        edges.append({"source": "planning", "target": "step_1"})
         for i in range(1, plan_info.num_steps):
             edges.append({"source": f"step_{i}", "target": f"step_{i+1}"})
         edges.append({"source": f"step_{plan_info.num_steps}", "target": "terminator"})
-        
+
         send_event_func("dag_updated", {
             "run_id": run_id,
             "nodes": nodes,
