@@ -71,6 +71,8 @@ class DAGTracker:
             return self._create_planning_control_dag(task, config)
         elif self.mode == "idea-generation":
             return self._create_idea_generation_dag(task, config)
+        elif self.mode == "hitl-interactive":
+            return self._create_hitl_dag(task, config)
         elif self.mode == "one-shot":
             return self._create_one_shot_dag(task, config)
         elif self.mode == "ocr":
@@ -104,34 +106,125 @@ class DAGTracker:
         return {"nodes": self.nodes, "edges": self.edges, "levels": 1}
 
     def _create_idea_generation_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create DAG for idea-generation mode."""
+        """Create initial DAG for idea-generation mode.
+        
+        Like planning-control mode, starts with just a planning node.
+        Steps are added dynamically after the plan is generated.
+        """
         self.nodes = [
-            {"id": "planning", "label": "Plan Generation", "type": "planning",
-             "agent": "planner", "status": "pending", "step_number": 0},
-            {"id": "idea_maker_1", "label": "Generate Ideas", "type": "agent",
-             "agent": "idea_maker", "status": "pending", "step_number": 1},
-            {"id": "idea_hater_1", "label": "Critique Ideas", "type": "agent",
-             "agent": "idea_hater", "status": "pending", "step_number": 2},
-            {"id": "idea_maker_2", "label": "Refine Ideas", "type": "agent",
-             "agent": "idea_maker", "status": "pending", "step_number": 3},
-            {"id": "idea_hater_2", "label": "Final Critique", "type": "agent",
-             "agent": "idea_hater", "status": "pending", "step_number": 4},
-            {"id": "idea_maker_3", "label": "Select Best Idea", "type": "agent",
-             "agent": "idea_maker", "status": "pending", "step_number": 5},
-            {"id": "terminator", "label": "Completion", "type": "terminator",
-             "agent": "system", "status": "pending", "step_number": 6},
+            {
+                "id": "planning",
+                "label": "Idea Planning Phase",
+                "type": "planning",
+                "agent": "planner",
+                "status": "pending",
+                "step_number": 0,
+                "description": "Planning idea generation workflow",
+                "task": task[:100] + "..." if len(task) > 100 else task
+            }
         ]
-        self.edges = [
-            {"source": "planning", "target": "idea_maker_1"},
-            {"source": "idea_maker_1", "target": "idea_hater_1"},
-            {"source": "idea_hater_1", "target": "idea_maker_2"},
-            {"source": "idea_maker_2", "target": "idea_hater_2"},
-            {"source": "idea_hater_2", "target": "idea_maker_3"},
-            {"source": "idea_maker_3", "target": "terminator"},
-        ]
+        self.edges = []
+
         for node in self.nodes:
             self.node_statuses[node["id"]] = "pending"
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 7}
+
+        return {"nodes": self.nodes, "edges": self.edges, "levels": 1}
+
+    def _create_hitl_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Create initial DAG for HITL (Human-in-the-Loop) interactive mode.
+        
+        The HITL workflow has these phases:
+        1. Planning Phase - AI generates plan
+        2. Human Review - Human approves/modifies plan
+        3. Execution Steps - Executed with optional human checkpoints
+        
+        Steps are added dynamically after the plan is generated and approved.
+        """
+        hitl_variant = config.get("hitlVariant", "full_interactive")
+        
+        if hitl_variant == "planning_only":
+            # Only human review at planning stage
+            self.nodes = [
+                {
+                    "id": "planning",
+                    "label": "HITL Planning",
+                    "type": "planning",
+                    "agent": "planner",
+                    "status": "pending",
+                    "step_number": 0,
+                    "description": "AI generates execution plan",
+                    "task": task[:100] + "..." if len(task) > 100 else task
+                },
+                {
+                    "id": "human_review_plan",
+                    "label": "Human Review",
+                    "type": "approval",
+                    "agent": "human",
+                    "status": "pending",
+                    "step_number": 1,
+                    "description": "Human reviews and approves/modifies plan"
+                }
+            ]
+            self.edges = [
+                {"source": "planning", "target": "human_review_plan"}
+            ]
+        elif hitl_variant == "error_recovery":
+            # Human intervenes only on errors
+            self.nodes = [
+                {
+                    "id": "planning",
+                    "label": "Planning Phase",
+                    "type": "planning",
+                    "agent": "planner",
+                    "status": "pending",
+                    "step_number": 0,
+                    "description": "AI generates execution plan",
+                    "task": task[:100] + "..." if len(task) > 100 else task
+                },
+                {
+                    "id": "error_recovery",
+                    "label": "Error Recovery",
+                    "type": "approval",
+                    "agent": "human",
+                    "status": "pending",
+                    "step_number": 1,
+                    "description": "Human intervenes if errors occur during execution"
+                }
+            ]
+            self.edges = [
+                {"source": "planning", "target": "error_recovery"}
+            ]
+        else:
+            # full_interactive - Human reviews plan AND each step
+            self.nodes = [
+                {
+                    "id": "planning",
+                    "label": "HITL Planning",
+                    "type": "planning",
+                    "agent": "planner",
+                    "status": "pending",
+                    "step_number": 0,
+                    "description": "AI generates execution plan",
+                    "task": task[:100] + "..." if len(task) > 100 else task
+                },
+                {
+                    "id": "human_review_plan",
+                    "label": "Plan Review",
+                    "type": "approval",
+                    "agent": "human",
+                    "status": "pending",
+                    "step_number": 1,
+                    "description": "Human approves or modifies plan"
+                }
+            ]
+            self.edges = [
+                {"source": "planning", "target": "human_review_plan"}
+            ]
+
+        for node in self.nodes:
+            self.node_statuses[node["id"]] = "pending"
+
+        return {"nodes": self.nodes, "edges": self.edges, "levels": len(self.nodes)}
 
     def _create_one_shot_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create DAG for one-shot mode."""
@@ -351,8 +444,23 @@ class DAGTracker:
         })
         self.node_statuses["terminator"] = "pending"
 
-        # Create edges
-        self.edges = [{"source": "planning", "target": "step_1"}]
+        # Determine the source node for steps based on mode
+        # For HITL modes, steps connect from human_review_plan if it exists
+        if self.mode == "hitl-interactive":
+            # Check if human_review_plan node exists
+            has_human_review = any(n.get("id") == "human_review_plan" for n in self.nodes)
+            first_step_source = "human_review_plan" if has_human_review else "planning"
+            # Preserve the planning → human_review_plan edge if it exists
+            if has_human_review:
+                self.edges = [{"source": "planning", "target": "human_review_plan"}]
+            else:
+                self.edges = []
+        else:
+            first_step_source = "planning"
+            self.edges = []
+
+        # Create edges for steps
+        self.edges.append({"source": first_step_source, "target": "step_1"})
         for i in range(1, len(steps)):
             self.edges.append({"source": f"step_{i}", "target": f"step_{i+1}"})
         self.edges.append({"source": f"step_{len(steps)}", "target": "terminator"})

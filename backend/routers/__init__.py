@@ -15,12 +15,14 @@ from routers.branching import router as branching_router
 from routers.runs import router as runs_router
 from routers.nodes import router as nodes_router
 from routers.tasks import router as tasks_router
+from routers.phases import router as phases_router
 
 
 def register_routers(app):
     """Register all routers with the FastAPI application."""
     app.include_router(health_router)
     app.include_router(tasks_router)
+    app.include_router(phases_router)  # Phase-based workflows
     app.include_router(files_router)
     app.include_router(credentials_router)
     app.include_router(arxiv_router)
@@ -41,4 +43,5 @@ __all__ = [
     "runs_router",
     "nodes_router",
     "tasks_router",
+    "phases_router",
 ]

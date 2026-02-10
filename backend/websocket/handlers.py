@@ -170,19 +170,56 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
     elif msg_type in ["resolve_approval", "approval_response"]:
         # Handle approval resolution (Stage 6: HITL)
         approval_id = message.get("approval_id")
-        
+
         # Support both 'resolution' and 'approved' formats
         if "approved" in message:
             resolution = "approved" if message.get("approved") else "rejected"
         else:
             resolution = message.get("resolution", "rejected")
-        
+
         feedback = message.get("feedback", "")
         modifications = message.get("modifications", "")
-        
+
         # Combine feedback and modifications
         full_feedback = f"{feedback}\n\nModifications: {modifications}" if modifications else feedback
 
+        # Try in-memory WebSocket approval manager first (for HITL workflows)
+        try:
+            from cmbagent.database.websocket_approval_manager import WebSocketApprovalManager
+
+            if WebSocketApprovalManager.has_pending(approval_id):
+                modifications_dict = {}
+                if modifications:
+                    try:
+                        import json
+                        modifications_dict = json.loads(modifications) if isinstance(modifications, str) else modifications
+                    except (json.JSONDecodeError, TypeError):
+                        modifications_dict = {"raw": modifications}
+
+                WebSocketApprovalManager.resolve(
+                    approval_id=approval_id,
+                    resolution=resolution,
+                    user_feedback=full_feedback,
+                    modifications=modifications_dict,
+                )
+
+                print(f"✅ Approval {approval_id} resolved in-memory as {resolution}")
+
+                await send_ws_event(
+                    websocket, "approval_received",
+                    {
+                        "approval_id": approval_id,
+                        "approved": resolution in ("approved", "modified"),
+                        "resolution": resolution,
+                        "feedback": full_feedback,
+                    },
+                    run_id=task_id,
+                )
+                return
+        except ImportError:
+            pass
+
+        # Fall back to database-backed approval manager
         try:
             from cmbagent.database import get_db_session
             from cmbagent.database.models import WorkflowRun, ApprovalRequest
@@ -218,8 +255,8 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
                     user_feedback=full_feedback
                 )
 
-                print(f"✅ Approval {approval_id} resolved as {resolution}")
-                
+                print(f"✅ Approval {approval_id} resolved via DB as {resolution}")
+
                 # Send confirmation back to client
                 await send_ws_event(
                     websocket, "approval_received",

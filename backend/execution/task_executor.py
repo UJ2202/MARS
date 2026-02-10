@@ -110,7 +110,7 @@ async def execute_cmbagent_task(
         effective_run_id = dag_tracker.run_id or task_id
 
         # Set initial phase based on mode
-        if mode in ["planning-control", "idea-generation"]:
+        if mode in ["planning-control", "idea-generation", "hitl-interactive"]:
             dag_tracker.set_phase("planning", None)
         else:
             dag_tracker.set_phase("execution", None)
@@ -200,10 +200,30 @@ async def execute_cmbagent_task(
 
         def ws_send_event(event_type: str, data: Dict[str, Any]):
             """Send WebSocket event from sync context"""
-            asyncio.run_coroutine_threadsafe(
-                send_ws_event(websocket, event_type, data, run_id=task_id),
-                loop
-            )
+            print(f"[ws_send_event] Attempting to send event: {event_type}")
+            print(f"[ws_send_event] Event data keys: {list(data.keys())}")
+            print(f"[ws_send_event] WebSocket: {websocket}")
+            print(f"[ws_send_event] Loop: {loop}")
+
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    send_ws_event(websocket, event_type, data, run_id=task_id),
+                    loop
+                )
+                # Wait for a short time to ensure it's queued
+                try:
+                    result = future.result(timeout=2.0)
+                    print(f"[ws_send_event] ✓ Event {event_type} sent successfully")
+                except TimeoutError:
+                    print(f"[ws_send_event] ⚠ Event {event_type} queued but not confirmed within 2s")
+                except Exception as e:
+                    print(f"[ws_send_event] ✗ Event {event_type} failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+            except Exception as e:
+                print(f"[ws_send_event] ✗ Failed to queue event {event_type}: {e}")
+                import traceback
+                traceback.print_exc()
 
         def sync_pause_check():
             """Synchronous pause check - blocks while paused."""
@@ -426,6 +446,9 @@ async def execute_cmbagent_task(
                         
                         print(f"[TaskExecutor] HITL enabled with mode: {approval_mode}")
                     
+                    # Always using phase-based workflow
+                    print(f"[TaskExecutor] Using phase-based workflow for planning-control")
+                    
                     results = cmbagent.planning_and_control_context_carryover(
                         task=task,
                         max_rounds_control=max_rounds,
@@ -445,7 +468,95 @@ async def execute_cmbagent_task(
                         callbacks=workflow_callbacks,
                         approval_config=approval_config
                     )
+                elif mode == "hitl-interactive":
+                    # HITL Interactive mode - full human-in-the-loop workflow
+                    from cmbagent.workflows import hitl_workflow
+                    from cmbagent.database.websocket_approval_manager import WebSocketApprovalManager
+
+                    # Get HITL-specific config
+                    hitl_variant = config.get("hitlVariant", "full_interactive")
+                    max_human_iterations = config.get("maxHumanIterations", 3)
+                    approval_mode = config.get("approvalMode", "both")
+                    allow_plan_modification = config.get("allowPlanModification", True)
+                    allow_step_skip = config.get("allowStepSkip", True)
+                    allow_step_retry = config.get("allowStepRetry", True)
+                    show_step_context = config.get("showStepContext", True)
+
+                    # Create WebSocket-based approval manager for UI interaction
+                    hitl_approval_manager = WebSocketApprovalManager(ws_send_event, task_id)
+                    print(f"[TaskExecutor] Created WebSocket approval manager for HITL")
+
+                    print(f"[TaskExecutor] Using HITL workflow variant: {hitl_variant}")
+
+                    # Select workflow based on variant
+                    if hitl_variant == "planning_only":
+                        results = hitl_workflow.hitl_planning_only_workflow(
+                            task=task,
+                            max_rounds_planning=50,
+                            max_rounds_control=max_rounds,
+                            max_plan_steps=max_plan_steps,
+                            max_human_iterations=max_human_iterations,
+                            allow_plan_modification=allow_plan_modification,
+                            planner_model=planner_model,
+                            engineer_model=engineer_model,
+                            researcher_model=researcher_model,
+                            work_dir=task_work_dir,
+                            api_keys=api_keys,
+                            clear_work_dir=False,
+                            default_formatter_model=default_formatter_model,
+                            default_llm_model=default_llm_model,
+                            callbacks=workflow_callbacks,
+                            approval_manager=hitl_approval_manager,
+                        )
+                    elif hitl_variant == "error_recovery":
+                        results = hitl_workflow.hitl_error_recovery_workflow(
+                            task=task,
+                            max_rounds_planning=50,
+                            max_rounds_control=max_rounds,
+                            max_plan_steps=max_plan_steps,
+                            n_plan_reviews=n_plan_reviews,
+                            max_n_attempts=max_attempts,
+                            allow_step_retry=allow_step_retry,
+                            allow_step_skip=allow_step_skip,
+                            planner_model=planner_model,
+                            plan_reviewer_model=plan_reviewer_model,
+                            engineer_model=engineer_model,
+                            researcher_model=researcher_model,
+                            work_dir=task_work_dir,
+                            api_keys=api_keys,
+                            clear_work_dir=False,
+                            default_formatter_model=default_formatter_model,
+                            default_llm_model=default_llm_model,
+                            callbacks=workflow_callbacks,
+                            approval_manager=hitl_approval_manager,
+                        )
+                    else:  # full_interactive (default)
+                        results = hitl_workflow.hitl_interactive_workflow(
+                            task=task,
+                            max_rounds_control=max_rounds,
+                            max_n_attempts=max_attempts,
+                            max_plan_steps=max_plan_steps,
+                            max_human_iterations=max_human_iterations,
+                            approval_mode=approval_mode,
+                            allow_plan_modification=allow_plan_modification,
+                            allow_step_skip=allow_step_skip,
+                            allow_step_retry=allow_step_retry,
+                            show_step_context=show_step_context,
+                            planner_model=planner_model,
+                            engineer_model=engineer_model,
+                            researcher_model=researcher_model,
+                            work_dir=task_work_dir,
+                            api_keys=api_keys,
+                            clear_work_dir=False,
+                            default_formatter_model=default_formatter_model,
+                            default_llm_model=default_llm_model,
+                            callbacks=workflow_callbacks,
+                            approval_manager=hitl_approval_manager,
+                        )
                 elif mode == "idea-generation":
+                    # Always using phase-based workflow
+                    print(f"[TaskExecutor] Using phase-based workflow for idea-generation")
+                    
                     results = cmbagent.planning_and_control_context_carryover(
                         task=task,
                         max_rounds_control=max_rounds,

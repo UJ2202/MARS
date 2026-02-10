@@ -64,8 +64,11 @@ class DualPersistenceManager:
         checkpoint_id = self._generate_checkpoint_id()
         pickle_path = self.context_dir / f"context_{checkpoint_id}.pkl"
 
+        # Filter out non-picklable items from context
+        filtered_context = self._filter_picklable(context)
+        
         with open(pickle_path, 'wb') as f:
-            pickle.dump(context, f)
+            pickle.dump(filtered_context, f)
 
         # 2. Save to database (primary)
         try:
@@ -152,8 +155,11 @@ class DualPersistenceManager:
         # Save with step-specific filename for backward compatibility
         pickle_path = self.context_dir / f"context_step_{step_number}.pkl"
 
+        # Filter out non-picklable items
+        filtered_context = self._filter_picklable(context)
+
         with open(pickle_path, 'wb') as f:
-            pickle.dump(context, f)
+            pickle.dump(filtered_context, f)
 
         # Also save to database
         try:
@@ -196,6 +202,32 @@ class DualPersistenceManager:
         """Generate a unique checkpoint ID."""
         import uuid
         return str(uuid.uuid4())
+
+    def _filter_picklable(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter context dictionary to only include picklable items.
+        
+        Args:
+            context: Original context dictionary
+            
+        Returns:
+            Filtered dictionary with only picklable items
+        """
+        filtered = {}
+        
+        for key, value in context.items():
+            # Skip private keys (often contain closures or non-picklable objects)
+            if key.startswith('_'):
+                print(f"[Persistence] Skipping non-picklable key: {key}")
+                continue
+            try:
+                # Test if value is picklable
+                pickle.dumps(value)
+                filtered[key] = value
+            except (TypeError, pickle.PicklingError, AttributeError) as e:
+                print(f"[Persistence] Skipping non-picklable item '{key}': {type(e).__name__}")
+        
+        return filtered
 
     def _serialize_context_for_db(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """

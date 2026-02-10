@@ -1,3 +1,17 @@
+"""
+LEGACY FILE - REFERENCE ONLY
+================================
+This file contains the old legacy implementation and is kept for reference only.
+The system now exclusively uses phase-based workflows.
+
+DO NOT IMPORT OR USE THIS FILE IN PRODUCTION CODE.
+
+See:
+- cmbagent/workflows/__init__.py for the current phase-based implementation
+- cmbagent/phases/ for phase definitions
+- cmbagent/workflows/phase_wrappers.py for function wrappers
+"""
+
 import asyncio
 import json
 import os
@@ -751,9 +765,8 @@ class StreamCapture:
             "step 1 of", "executing plan", "control_starter", "transition (control)",
             "replyresult transition (control):", "control): engineer"
         ]):
-            # Planning is complete
+            # Planning is complete - store collected plan in planning node
             if "planning" in self.dag_tracker.node_statuses:
-                # Store collected plan in planning node
                 if self.plan_buffer:
                     for node in self.dag_tracker.nodes:
                         if node["id"] == "planning":
@@ -762,13 +775,12 @@ class StreamCapture:
                                 "step_count": len(self.plan_buffer)
                             }
                             break
-                await self.dag_tracker.update_node_status("planning", "completed")
             
-            # Add step nodes from collected plan buffer if not already added
-            if self.plan_buffer and self.dag_tracker.mode == "planning-control":
+            # Add step nodes from collected plan buffer first
+            if self.plan_buffer and self.dag_tracker.mode in ["planning-control", "idea-generation", "hitl-interactive"]:
                 await self.dag_tracker.add_step_nodes(self.plan_buffer)
                 self.steps_added = True
-            elif self.dag_tracker.mode == "planning-control" and not self.plan_buffer:
+            elif self.dag_tracker.mode in ["planning-control", "idea-generation", "hitl-interactive"] and not self.plan_buffer:
                 # No steps collected, create default steps
                 default_steps = [{"title": "Step 1", "description": "Execute task", "task": ""}]
                 await self.dag_tracker.add_step_nodes(default_steps)
@@ -776,6 +788,10 @@ class StreamCapture:
             
             self.planning_complete = True
             self.collecting_plan = False
+            
+            # Now mark planning as completed (after adding all step nodes)
+            if "planning" in self.dag_tracker.node_statuses:
+                await self.dag_tracker.update_node_status("planning", "completed")
             
             # Mark first step as running
             first_exec = self.dag_tracker.get_node_by_step(1)
@@ -1141,27 +1157,29 @@ class DAGTracker:
             print(f"Error sending DAG updated event: {e}")
     
     def _create_idea_generation_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create DAG for idea-generation mode"""
+        """Create initial DAG for idea-generation mode.
+        
+        Like planning-control mode, starts with just a planning node.
+        Steps are added dynamically after the plan is generated.
+        """
         self.nodes = [
-            {"id": "planning", "label": "Plan Generation", "type": "planning", "agent": "planner", "status": "pending", "step_number": 0},
-            {"id": "idea_maker_1", "label": "Generate Ideas", "type": "agent", "agent": "idea_maker", "status": "pending", "step_number": 1},
-            {"id": "idea_hater_1", "label": "Critique Ideas", "type": "agent", "agent": "idea_hater", "status": "pending", "step_number": 2},
-            {"id": "idea_maker_2", "label": "Refine Ideas", "type": "agent", "agent": "idea_maker", "status": "pending", "step_number": 3},
-            {"id": "idea_hater_2", "label": "Final Critique", "type": "agent", "agent": "idea_hater", "status": "pending", "step_number": 4},
-            {"id": "idea_maker_3", "label": "Select Best Idea", "type": "agent", "agent": "idea_maker", "status": "pending", "step_number": 5},
-            {"id": "terminator", "label": "Completion", "type": "terminator", "agent": "system", "status": "pending", "step_number": 6},
+            {
+                "id": "planning",
+                "label": "Idea Planning Phase",
+                "type": "planning",
+                "agent": "planner",
+                "status": "pending",
+                "step_number": 0,
+                "description": "Planning idea generation workflow",
+                "task": task[:100] + "..." if len(task) > 100 else task
+            }
         ]
-        self.edges = [
-            {"source": "planning", "target": "idea_maker_1"},
-            {"source": "idea_maker_1", "target": "idea_hater_1"},
-            {"source": "idea_hater_1", "target": "idea_maker_2"},
-            {"source": "idea_maker_2", "target": "idea_hater_2"},
-            {"source": "idea_hater_2", "target": "idea_maker_3"},
-            {"source": "idea_maker_3", "target": "terminator"},
-        ]
+        self.edges = []
+
         for node in self.nodes:
             self.node_statuses[node["id"]] = "pending"
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 7}
+
+        return {"nodes": self.nodes, "edges": self.edges, "levels": 1}
     
     def _create_one_shot_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create DAG for one-shot mode"""

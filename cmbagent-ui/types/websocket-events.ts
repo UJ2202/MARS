@@ -171,6 +171,7 @@ export interface ApprovalRequestedData {
   step_id: string;
   action: string;
   description: string;
+  message?: string;  // Alternative to description
   context: Record<string, any>;
   options?: string[];
   checkpoint_type?: string;

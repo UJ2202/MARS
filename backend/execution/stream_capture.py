@@ -473,11 +473,16 @@ class StreamCapture:
                                             "breakdown": plan_data.get('sub_task_breakdown', '')
                                         }
                                         break
-                                await self.dag_tracker.update_node_status("planning", "completed")
 
+                            # Add step nodes first, then mark planning as completed
+                            # This ensures the UI receives a single dag_updated event with all data
                             await self.dag_tracker.add_step_nodes(steps)
                             self.steps_added = True
                             self.planning_complete = True
+
+                            # Now mark planning as completed (this sends dag_updated with all nodes + plan data)
+                            if "planning" in self.dag_tracker.node_statuses:
+                                await self.dag_tracker.update_node_status("planning", "completed")
 
                             first_exec = self.dag_tracker.get_node_by_step(1)
                             if first_exec:
@@ -510,8 +515,10 @@ class StreamCapture:
         if not self.steps_added and any(phrase in text_lower for phrase in [
             "executing step", "starting step 1", "running step 1", "beginning execution",
             "step 1 of", "executing plan", "control_starter", "transition (control)",
-            "replyresult transition (control):", "control): engineer"
+            "replyresult transition (control):", "control): engineer",
+            "step 1 approval required", "hitl planning", "human review"
         ]):
+            # Add generated_plan data to planning node
             if "planning" in self.dag_tracker.node_statuses:
                 if self.plan_buffer:
                     for node in self.dag_tracker.nodes:
@@ -521,18 +528,22 @@ class StreamCapture:
                                 "step_count": len(self.plan_buffer)
                             }
                             break
-                await self.dag_tracker.update_node_status("planning", "completed")
 
-            if self.plan_buffer and self.dag_tracker.mode == "planning-control":
+            # Add step nodes first, then update planning status
+            if self.plan_buffer and self.dag_tracker.mode in ["planning-control", "idea-generation", "hitl-interactive"]:
                 await self.dag_tracker.add_step_nodes(self.plan_buffer)
                 self.steps_added = True
-            elif self.dag_tracker.mode == "planning-control" and not self.plan_buffer:
+            elif self.dag_tracker.mode in ["planning-control", "idea-generation", "hitl-interactive"] and not self.plan_buffer:
                 default_steps = [{"title": "Step 1", "description": "Execute task", "task": ""}]
                 await self.dag_tracker.add_step_nodes(default_steps)
                 self.steps_added = True
 
             self.planning_complete = True
             self.collecting_plan = False
+
+            # Mark planning as completed after adding all step nodes
+            if "planning" in self.dag_tracker.node_statuses:
+                await self.dag_tracker.update_node_status("planning", "completed")
 
             first_exec = self.dag_tracker.get_node_by_step(1)
             if first_exec:

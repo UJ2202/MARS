@@ -1,19 +1,17 @@
 """
-Control workflow function for CMBAgent.
+Control workflow implementation using phase-based architecture.
 """
 
 import os
-import json
-import time
-import datetime
+import uuid
+from typing import Dict, Any, Optional
 
 from cmbagent.utils import (
     work_dir_default,
     get_api_keys_from_env,
-    get_model_config,
     default_agents_llm_model,
 )
-from cmbagent.workflows.utils import load_plan
+from cmbagent.workflows.utils import clean_work_dir
 
 
 def control(
@@ -47,131 +45,146 @@ def control(
     bypassing the planning phase.
 
     Args:
-        task: The task description
-        plan: Path to the plan JSON file (defaults to plans/idea_plan.json)
-        max_rounds: Maximum conversation rounds
-        max_plan_steps: Maximum steps in plan
-        n_plan_reviews: Number of plan review iterations
-        plan_instructions: Additional planner instructions
-        engineer_instructions: Additional engineer instructions
-        researcher_instructions: Additional researcher instructions
-        hardware_constraints: Hardware constraints to consider
-        max_n_attempts: Maximum attempts before failure
-        planner_model: Model for planner agent
-        plan_reviewer_model: Model for plan reviewer agent
-        engineer_model: Model for engineer agent
-        researcher_model: Model for researcher agent
-        web_surfer_model: Model for web_surfer agent
-        retrieve_assistant_model: Model for retrieve_assistant agent
-        idea_maker_model: Model for idea maker agent
-        idea_hater_model: Model for idea hater agent
-        plot_judge_model: Model for plot judge agent
-        work_dir: Working directory for outputs
-        clear_work_dir: Whether to clear the work directory
+        task: Task description
+        plan: Path to plan file (JSON) or None to use default
+        max_rounds: Maximum conversation rounds for control
+        max_plan_steps: Maximum steps in plan (not used but kept for compatibility)
+        n_plan_reviews: Number of reviews (not used but kept for compatibility)
+        plan_instructions: Plan instructions (not used but kept for compatibility)
+        engineer_instructions: Instructions for engineer agent
+        researcher_instructions: Instructions for researcher agent
+        hardware_constraints: Hardware constraints (not used but kept for compatibility)
+        max_n_attempts: Maximum retry attempts
+        *_model: Model configurations for different agents
+        work_dir: Working directory
+        clear_work_dir: Whether to clear work directory
         api_keys: API keys dictionary
 
     Returns:
-        Dictionary containing chat history and final context
+        Dictionary with chat_history, final_context, and timing info
     """
-    from cmbagent.cmbagent import CMBAgent
+    from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
+    from cmbagent.workflows.utils import load_plan as load_plan_file
 
-    # Set default plan path if not provided
-    if plan is None:
-        plan = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'plans', 'idea_plan.json')
+    # Setup
+    work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
 
-    # check work_dir exists
-    if not os.path.exists(work_dir):
-        os.makedirs(work_dir)
-
-    planning_input = load_plan(plan)["sub_tasks"]
-
-    context = {
-        'final_plan': planning_input,
-        "number_of_steps_in_plan": len(planning_input),
-        "agent_for_sub_task": planning_input[0]['sub_task_agent'],
-        "current_sub_task": planning_input[0]['sub_task'],
-        "current_instructions": ''
-    }
-    for bullet in planning_input[0]['bullet_points']:
-        context["current_instructions"] += f"\t\t- {bullet}\n"
+    if clear_work_dir:
+        clean_work_dir(work_dir)
 
     if api_keys is None:
         api_keys = get_api_keys_from_env()
 
-    # control
-    engineer_config = get_model_config(engineer_model, api_keys)
-    researcher_config = get_model_config(researcher_model, api_keys)
-    web_surfer_config = get_model_config(web_surfer_model, api_keys)
-    retrieve_assistant_config = get_model_config(retrieve_assistant_model, api_keys)
-    idea_maker_config = get_model_config(idea_maker_model, api_keys)
-    idea_hater_config = get_model_config(idea_hater_model, api_keys)
-    plot_judge_config = get_model_config(plot_judge_model, api_keys)
-    control_dir = os.path.join(os.path.expanduser(work_dir), "control")
-    os.makedirs(control_dir, exist_ok=True)
+    # Load plan if path provided
+    if plan is None:
+        plan = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'plans', 'idea_plan.json')
 
-    start_time = time.time()
-    cmbagent = CMBAgent(
-        cache_seed=42,
-        work_dir=control_dir,
-        agent_llm_configs={
-            'engineer': engineer_config,
-            'researcher': researcher_config,
-            'web_surfer': web_surfer_config,
-            'retrieve_assistant': retrieve_assistant_config,
-            'idea_maker': idea_maker_config,
-            'idea_hater': idea_hater_config,
-            'plot_judge': plot_judge_config,
-        },
-        clear_work_dir=clear_work_dir,
-        api_keys=api_keys
+    plan_data = load_plan_file(plan)
+    plan_steps = plan_data.get("sub_tasks", [])
+
+    # Build workflow definition
+    workflow = WorkflowDefinition(
+        id=f"control_{uuid.uuid4().hex[:8]}",
+        name="Control Only",
+        description="Control-only workflow from existing plan",
+        phases=[{
+            "type": "control",
+            "config": {
+                "max_rounds": max_rounds,
+                "max_n_attempts": max_n_attempts,
+                "execute_all_steps": True,
+                "engineer_model": engineer_model,
+                "researcher_model": researcher_model,
+                "web_surfer_model": web_surfer_model,
+                "retrieve_assistant_model": retrieve_assistant_model,
+                "idea_maker_model": idea_maker_model,
+                "idea_hater_model": idea_hater_model,
+                "plot_judge_model": plot_judge_model,
+                "engineer_instructions": engineer_instructions,
+                "researcher_instructions": researcher_instructions,
+            }
+        }],
     )
 
-    end_time = time.time()
-    initialization_time_control = end_time - start_time
-
-    start_time = time.time()
-    cmbagent.solve(
-        task,
-        max_rounds=max_rounds,
-        initial_agent="control",
-        shared_context=context
+    # Create executor with pre-loaded plan
+    executor = WorkflowExecutor(
+        workflow=workflow,
+        task=task,
+        work_dir=work_dir,
+        api_keys=api_keys,
     )
-    end_time = time.time()
-    execution_time_control = end_time - start_time
 
-    results = {
-        'chat_history': cmbagent.chat_result.chat_history,
-        'final_context': cmbagent.final_context
+    # Inject plan into context
+    executor.context.plan = plan_steps
+    executor.context.total_steps = len(plan_steps)
+    executor.context.agent_state = {
+        'final_plan': plan_steps,
+        'number_of_steps_in_plan': len(plan_steps),
+        'agent_for_sub_task': plan_steps[0].get('sub_task_agent') if plan_steps else None,
+        'current_sub_task': plan_steps[0].get('sub_task') if plan_steps else None,
     }
 
-    results['initialization_time_control'] = initialization_time_control
-    results['execution_time_control'] = execution_time_control
+    # Also set in the phase context
+    executor.phases[0].config.params['preloaded_plan'] = plan_steps
 
-    # Save timing report as JSON
-    timing_report = {
-        'initialization_time_control': initialization_time_control,
-        'execution_time_control': execution_time_control,
-        'total_time': initialization_time_control + execution_time_control
+    # Run workflow
+    print(f"\n{'=' * 60}")
+    print("Control Only Workflow")
+    print(f"{'=' * 60}")
+    print(f"Task: {task[:100]}...")
+    print(f"Plan steps: {len(plan_steps)}")
+    print(f"{'=' * 60}\n")
+
+    try:
+        result = executor.run_sync()
+        return _convert_workflow_result_to_legacy(result, executor)
+
+    except Exception as e:
+        print(f"\nWorkflow failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def _convert_workflow_result_to_legacy(workflow_context, executor) -> Dict[str, Any]:
+    """
+    Convert WorkflowContext result to legacy format.
+
+    The legacy functions return a dictionary with chat_history, final_context,
+    and timing information. This function converts the new format to match.
+    """
+    # Collect all chat history from phases
+    all_chat_history = []
+    for result in executor.results:
+        all_chat_history.extend(result.chat_history)
+
+    # Get final context from last phase
+    final_context = {}
+    if executor.results:
+        last_result = executor.results[-1]
+        final_context = last_result.context.output_data.get('final_context', {})
+        if not final_context:
+            final_context = last_result.context.output_data.get('result', {})
+        if not final_context:
+            final_context = last_result.context.shared_state.get('final_context', {})
+
+    # Build legacy result format
+    result = {
+        'chat_history': all_chat_history,
+        'final_context': final_context,
+        'run_id': workflow_context.run_id,
+        'workflow_id': workflow_context.workflow_id,
+        'phase_timings': workflow_context.phase_timings,
     }
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    timing_path = os.path.join(results['final_context']['work_dir'], f"time/timing_report_control_{timestamp}.json")
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
+    # Add individual timing fields for compatibility
+    total_time = workflow_context.phase_timings.get('total', 0)
+    result['total_time'] = total_time
 
-    # Create a dummy groupchat attribute if it doesn't exist
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
+    # Extract phase-specific timings
+    for phase_id, timing in workflow_context.phase_timings.items():
+        if 'control' in phase_id:
+            result['execution_time_control'] = timing
 
-    cmbagent.display_cost()
-
-    # delete empty folders
-    database_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['database_path'])
-    codebase_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['codebase_path'])
-    time_full_path = os.path.join(results['final_context']['work_dir'], 'time')
-    for folder in [database_full_path, codebase_full_path, time_full_path]:
-        if not os.listdir(folder):
-            os.rmdir(folder)
-
-    return results
+    return result

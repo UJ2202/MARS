@@ -192,8 +192,9 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       updateDAGNode(data.node_id, data.new_status);
     },
     onApprovalRequested: (data: ApprovalRequestedData) => {
+      console.log('[WebSocket] Approval requested event received:', data);
       setPendingApproval(data);
-      addConsoleOutput(`⏸️ Approval requested: ${data.description}`);
+      addConsoleOutput(`⏸️ Approval requested: ${data.description || data.message}`);
     },
     onApprovalReceived: () => {
       clearApproval();

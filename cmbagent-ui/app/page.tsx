@@ -6,6 +6,7 @@ import ConsoleOutput from '@/components/ConsoleOutput'
 import ResultDisplay from '@/components/ResultDisplay'
 import Header from '@/components/Header'
 import TopNavigation from '@/components/TopNavigation'
+import { ApprovalChatPanel } from '@/components/ApprovalChatPanel'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import { WorkflowDashboard } from '@/components/workflow'
 import { DAGWorkspace } from '@/components/dag'
@@ -15,9 +16,7 @@ import { getApiUrl } from '@/lib/config'
 
 export default function Home() {
   const [directoryToOpen, setDirectoryToOpen] = useState<string | null>(null)
-  const [upperHeight, setUpperHeight] = useState(60) // Percentage for upper section
-  const [isResizing, setIsResizing] = useState(false)
-  const [rightPanelTab, setRightPanelTab] = useState<'results' | 'workflow'>('results')
+  const [rightPanelTab, setRightPanelTab] = useState<'console' | 'workflow' | 'results'>('console')
   const [elapsedTime, setElapsedTime] = useState('0:00')
   const [startTime, setStartTime] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -48,6 +47,8 @@ export default function Home() {
     costSummary,
     costTimeSeries,
     filesUpdatedCounter,
+    pendingApproval,
+    clearApproval,
   } = useWebSocketContext()
 
   // Track elapsed time when running
@@ -123,6 +124,22 @@ export default function Home() {
 
   const handleCancel = () => {
     handleStopTask()
+  }
+
+  const handleApprovalResolve = (resolution: string, feedback?: string, modifications?: string) => {
+    if (!pendingApproval) return
+
+    // Send approval response via WebSocket
+    sendMessage({
+      type: 'resolve_approval',
+      approval_id: pendingApproval.approval_id,
+      resolution: resolution,
+      feedback: feedback || '',
+      modifications: modifications || '',
+    })
+
+    addConsoleOutput(`✅ Approval response sent: ${resolution}${feedback ? ` - "${feedback}"` : ''}`)
+    clearApproval()
   }
 
   const handlePlayFromNode = async (nodeId: string) => {
@@ -267,44 +284,6 @@ export default function Home() {
     setResults(mockResults)
   }, [setResults])
 
-  // Handle resizing
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsResizing(true)
-    e.preventDefault()
-  }, [])
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isResizing || !containerRef.current) return
-
-    const containerRect = containerRef.current.getBoundingClientRect()
-    const containerHeight = containerRect.height
-    const mouseY = e.clientY - containerRect.top
-
-    // Calculate percentage (min 20%, max 80%)
-    const newUpperHeight = Math.min(80, Math.max(20, (mouseY / containerHeight) * 100))
-    setUpperHeight(newUpperHeight)
-  }, [isResizing])
-
-  const handleMouseUp = useCallback(() => {
-    setIsResizing(false)
-  }, [])
-
-  useEffect(() => {
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-      document.body.style.cursor = 'ns-resize'
-      document.body.style.userSelect = 'none'
-    }
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-  }, [isResizing, handleMouseMove, handleMouseUp])
-
 
 
 
@@ -314,12 +293,9 @@ export default function Home() {
       <TopNavigation />
       <Header />
 
-      <main ref={containerRef} className="flex-1 flex flex-col min-h-0">
-        {/* Upper Section - Task Input and Results */}
-        <div 
-          className="container mx-auto px-4 py-2 min-h-0 overflow-hidden"
-          style={{ height: `${upperHeight}%` }}
-        >
+      <main ref={containerRef} className="flex-1 flex min-h-0">
+        {/* Main Content - Task Input and Tabbed Panel */}
+        <div className="container mx-auto px-4 py-2 min-h-0 overflow-hidden flex-1">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-full">
             {/* Left Panel - Task Input */}
             <div className="h-full overflow-y-auto">
@@ -332,19 +308,27 @@ export default function Home() {
               />
             </div>
 
-            {/* Right Panel - Results / Workflow Dashboard */}
+            {/* Right Panel - Console / Workflow / Results */}
             <div className="h-full flex flex-col overflow-hidden">
               {/* Tab Bar */}
               <div className="flex border-b border-gray-700 mb-2 flex-shrink-0">
                 <button
-                  onClick={() => setRightPanelTab('results')}
-                  className={`px-4 py-2 text-sm font-medium transition-colors ${
-                    rightPanelTab === 'results'
+                  onClick={() => setRightPanelTab('console')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors flex items-center gap-2 ${
+                    rightPanelTab === 'console'
                       ? 'text-blue-400 border-b-2 border-blue-400'
                       : 'text-gray-400 hover:text-gray-200'
                   }`}
                 >
-                  Results
+                  Console
+                  {isRunning && (
+                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                  )}
+                  {pendingApproval && (
+                    <span className="px-1.5 py-0.5 text-xs bg-yellow-500/20 text-yellow-400 rounded-full animate-pulse">
+                      !
+                    </span>
+                  )}
                 </button>
                 <button
                   onClick={() => setRightPanelTab('workflow')}
@@ -361,13 +345,36 @@ export default function Home() {
                     </span>
                   )}
                 </button>
+                <button
+                  onClick={() => setRightPanelTab('results')}
+                  className={`px-4 py-2 text-sm font-medium transition-colors ${
+                    rightPanelTab === 'results'
+                      ? 'text-blue-400 border-b-2 border-blue-400'
+                      : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Results
+                </button>
               </div>
 
               {/* Tab Content */}
-              <div className="flex-1 min-h-0 overflow-hidden">
-                {rightPanelTab === 'results' && (
-                  <div className="h-full overflow-y-auto">
-                    <ResultDisplay results={results} />
+              <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                {rightPanelTab === 'console' && (
+                  <div className="h-full flex flex-col overflow-hidden">
+                    <div className="flex-1 min-h-0 overflow-hidden">
+                      <ConsoleOutput
+                        output={consoleOutput}
+                        isRunning={isRunning}
+                        onClear={clearConsole}
+                      />
+                    </div>
+                    {/* Approval Chat Panel - appears at bottom when approval is pending */}
+                    {pendingApproval && (
+                      <ApprovalChatPanel
+                        approval={pendingApproval}
+                        onResolve={handleApprovalResolve}
+                      />
+                    )}
                   </div>
                 )}
                 {rightPanelTab === 'workflow' && (
@@ -396,40 +403,14 @@ export default function Home() {
                     />
                   </div>
                 )}
+                {rightPanelTab === 'results' && (
+                  <div className="h-full overflow-y-auto">
+                    <ResultDisplay results={results} />
+                  </div>
+                )}
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Resizer Handle */}
-        <div
-          className={`h-1.5 bg-gray-600/30 hover:bg-blue-500/50 cursor-ns-resize transition-all duration-200 relative group flex-shrink-0 ${isResizing ? 'bg-blue-500/70' : ''}`}
-          onMouseDown={handleMouseDown}
-          title="Drag to resize console height"
-        >
-          <div className="absolute inset-x-0 -top-2 -bottom-2 flex items-center justify-center">
-            <div className={`w-16 h-0.5 bg-gray-500/50 rounded-full group-hover:bg-blue-400/70 group-hover:w-20 transition-all duration-200 ${isResizing ? 'bg-blue-400 w-20' : ''}`}></div>
-          </div>
-          {/* Add dots for better visual indication */}
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="flex space-x-0.5">
-              <div className={`w-1 h-1 bg-gray-400/40 rounded-full transition-opacity duration-200 ${isResizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}></div>
-              <div className={`w-1 h-1 bg-gray-400/40 rounded-full transition-opacity duration-200 ${isResizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}></div>
-              <div className={`w-1 h-1 bg-gray-400/40 rounded-full transition-opacity duration-200 ${isResizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}></div>
-            </div>
-          </div>
-        </div>
-
-        {/* Lower Section - Console Output */}
-        <div 
-          className="px-4 pb-2 min-h-0 overflow-hidden"
-          style={{ height: `${100 - upperHeight}%` }}
-        >
-          <ConsoleOutput
-            output={consoleOutput}
-            isRunning={isRunning}
-            onClear={clearConsole}
-          />
         </div>
       </main>
     </div>

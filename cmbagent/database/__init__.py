@@ -70,6 +70,10 @@ from cmbagent.database.approval_manager import (
     WorkflowCancelledException,
     ApprovalTimeoutError,
 )
+from cmbagent.database.websocket_approval_manager import (
+    WebSocketApprovalManager,
+    SimpleApprovalRequest,
+)
 from cmbagent.database.session_manager import (
     SessionManager,
 )
@@ -126,4 +130,6 @@ __all__ = [
     "ApprovalManager",
     "WorkflowCancelledException",
     "ApprovalTimeoutError",
+    "WebSocketApprovalManager",
+    "SimpleApprovalRequest",
 ]

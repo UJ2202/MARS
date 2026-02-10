@@ -1,0 +1,733 @@
+"""
+Phase-based workflow wrappers for CMBAgent.
+
+This module provides backwards-compatible function wrappers that use the new
+phase-based workflow system internally while maintaining the same function
+signatures as the legacy implementations.
+
+Usage:
+    # Set environment variable to use phase-based implementation
+    export CMBAGENT_USE_PHASES=1
+
+    # Or use directly
+    from cmbagent.workflows.phase_wrappers import (
+        planning_and_control_context_carryover_phases,
+        one_shot_phases,
+        control_phases,
+    )
+"""
+
+import os
+import asyncio
+import uuid
+from typing import Dict, Any, Optional
+from datetime import datetime
+
+from cmbagent.utils import (
+    work_dir_default,
+    get_api_keys_from_env,
+    default_agents_llm_model,
+)
+from cmbagent.utils import default_llm_model as default_llm_model_default
+from cmbagent.utils import default_formatter_model as default_formatter_model_default
+from cmbagent.context import shared_context as shared_context_default
+from cmbagent.workflows.utils import clean_work_dir
+
+
+def planning_and_control_context_carryover_phases(
+    task,
+    max_rounds_planning=50,
+    max_rounds_control=100,
+    max_plan_steps=3,
+    n_plan_reviews=1,
+    plan_instructions='',
+    engineer_instructions='',
+    researcher_instructions='',
+    hardware_constraints='',
+    max_n_attempts=3,
+    planner_model=default_agents_llm_model['planner'],
+    plan_reviewer_model=default_agents_llm_model['plan_reviewer'],
+    engineer_model=default_agents_llm_model['engineer'],
+    researcher_model=default_agents_llm_model['researcher'],
+    web_surfer_model=default_agents_llm_model.get('web_surfer', default_agents_llm_model['researcher']),
+    retrieve_assistant_model=default_agents_llm_model.get('retrieve_assistant', default_agents_llm_model['researcher']),
+    idea_maker_model=default_agents_llm_model['idea_maker'],
+    idea_hater_model=default_agents_llm_model['idea_hater'],
+    camb_context_model=default_agents_llm_model['camb_context'],
+    plot_judge_model=default_agents_llm_model['plot_judge'],
+    default_llm_model=default_llm_model_default,
+    default_formatter_model=default_formatter_model_default,
+    work_dir=work_dir_default,
+    api_keys=None,
+    restart_at_step=-1,
+    clear_work_dir=False,
+    researcher_filename=shared_context_default['researcher_filename'],
+    approval_config=None,
+    callbacks=None,
+    hitl_after_planning=False,
+):
+    """
+    Phase-based implementation of planning_and_control_context_carryover.
+
+    This function uses the new phase-based workflow system internally while
+    maintaining the same signature as the legacy implementation.
+
+    All arguments are the same as the legacy function, plus:
+        hitl_after_planning: If True, adds HITL checkpoint after planning phase
+    """
+    from cmbagent.phases import (
+        PlanningPhase, PlanningPhaseConfig,
+        ControlPhase, ControlPhaseConfig,
+        HITLCheckpointPhase, HITLCheckpointConfig,
+        PhaseContext,
+    )
+    from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
+
+    # Setup
+    work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
+
+    if clear_work_dir:
+        clean_work_dir(work_dir)
+
+    if api_keys is None:
+        api_keys = get_api_keys_from_env()
+
+    # Determine if HITL is needed
+    needs_hitl = hitl_after_planning
+    if approval_config is not None:
+        from cmbagent.database.approval_types import ApprovalMode
+        needs_hitl = approval_config.mode != ApprovalMode.NONE
+
+    # Build workflow definition dynamically based on parameters
+    phases = []
+
+    # Planning phase (skip if restarting)
+    if restart_at_step <= 0:
+        phases.append({
+            "type": "planning",
+            "config": {
+                "max_rounds": max_rounds_planning,
+                "max_plan_steps": max_plan_steps,
+                "n_plan_reviews": n_plan_reviews,
+                "planner_model": planner_model,
+                "plan_reviewer_model": plan_reviewer_model,
+                "plan_instructions": plan_instructions,
+                "hardware_constraints": hardware_constraints,
+                "engineer_instructions": engineer_instructions,
+                "researcher_instructions": researcher_instructions,
+                "max_n_attempts": max_n_attempts,
+            }
+        })
+
+        # HITL checkpoint after planning (if enabled)
+        if needs_hitl:
+            phases.append({
+                "type": "hitl_checkpoint",
+                "config": {
+                    "checkpoint_type": "after_planning",
+                    "require_approval": True,
+                    "show_plan": True,
+                }
+            })
+
+    # Control phase
+    phases.append({
+        "type": "control",
+        "config": {
+            "max_rounds": max_rounds_control,
+            "max_n_attempts": max_n_attempts,
+            "execute_all_steps": True,
+            "engineer_model": engineer_model,
+            "researcher_model": researcher_model,
+            "web_surfer_model": web_surfer_model,
+            "retrieve_assistant_model": retrieve_assistant_model,
+            "idea_maker_model": idea_maker_model,
+            "idea_hater_model": idea_hater_model,
+            "camb_context_model": camb_context_model,
+            "plot_judge_model": plot_judge_model,
+            "engineer_instructions": engineer_instructions,
+            "researcher_instructions": researcher_instructions,
+        }
+    })
+
+    # Create workflow definition
+    workflow = WorkflowDefinition(
+        id=f"planning_control_{uuid.uuid4().hex[:8]}",
+        name="Planning and Control (Phase-Based)",
+        description="Phase-based planning and control workflow",
+        phases=phases,
+    )
+
+    # Create executor
+    executor = WorkflowExecutor(
+        workflow=workflow,
+        task=task,
+        work_dir=work_dir,
+        api_keys=api_keys,
+        callbacks=callbacks,
+        approval_manager=_get_approval_manager(approval_config) if approval_config else None,
+    )
+
+    # Handle restart case - load existing context
+    if restart_at_step > 0:
+        context_path = os.path.join(work_dir, "context", f"context_step_{restart_at_step - 1}.pkl")
+        if os.path.exists(context_path):
+            from cmbagent.workflows.utils import load_context
+            loaded_context = load_context(context_path)
+            executor.context.plan = loaded_context.get('final_plan')
+            executor.context.current_step = restart_at_step - 1
+            executor.context.agent_state = loaded_context
+
+    # Run workflow
+    print(f"\n{'=' * 60}")
+    print("PHASE-BASED WORKFLOW: Planning and Control")
+    print(f"{'=' * 60}")
+    print(f"Task: {task[:100]}...")
+    print(f"Phases: {[p['type'] for p in phases]}")
+    print(f"{'=' * 60}\n")
+
+    try:
+        result = executor.run_sync()
+
+        # Convert result to legacy format
+        return _convert_workflow_result_to_legacy(result, executor)
+
+    except Exception as e:
+        print(f"\nWorkflow failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def one_shot_phases(
+    task,
+    max_rounds=50,
+    max_n_attempts=3,
+    engineer_model=default_agents_llm_model['engineer'],
+    researcher_model=default_agents_llm_model['researcher'],
+    web_surfer_model=default_agents_llm_model.get('web_surfer', default_agents_llm_model['researcher']),
+    plot_judge_model=default_agents_llm_model['plot_judge'],
+    camb_context_model=default_agents_llm_model['camb_context'],
+    default_llm_model=default_llm_model_default,
+    default_formatter_model=default_formatter_model_default,
+    researcher_filename=shared_context_default['researcher_filename'],
+    agent='engineer',
+    work_dir=work_dir_default,
+    api_keys=None,
+    clear_work_dir=False,
+    evaluate_plots=False,
+    max_n_plot_evals=1,
+    inject_wrong_plot: bool | str = False,
+):
+    """
+    Phase-based implementation of one_shot.
+
+    This function uses the new phase-based workflow system internally while
+    maintaining the same signature as the legacy implementation.
+    """
+    from cmbagent.phases import OneShotPhase, OneShotPhaseConfig, PhaseContext
+    from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
+
+    # Setup
+    work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
+
+    if clear_work_dir:
+        clean_work_dir(work_dir)
+
+    if api_keys is None:
+        api_keys = get_api_keys_from_env()
+
+    # Build workflow definition
+    workflow = WorkflowDefinition(
+        id=f"one_shot_{uuid.uuid4().hex[:8]}",
+        name=f"One Shot ({agent})",
+        description="Phase-based one-shot workflow",
+        phases=[{
+            "type": "one_shot",
+            "config": {
+                "max_rounds": max_rounds,
+                "max_n_attempts": max_n_attempts,
+                "agent": agent,
+                "engineer_model": engineer_model,
+                "researcher_model": researcher_model,
+                "web_surfer_model": web_surfer_model,
+                "plot_judge_model": plot_judge_model,
+                "camb_context_model": camb_context_model,
+                "default_llm_model": default_llm_model,
+                "default_formatter_model": default_formatter_model,
+                "evaluate_plots": evaluate_plots,
+                "max_n_plot_evals": max_n_plot_evals,
+                "researcher_filename": researcher_filename,
+                "clear_work_dir": False,  # Already handled above
+            }
+        }],
+    )
+
+    # Create executor
+    executor = WorkflowExecutor(
+        workflow=workflow,
+        task=task,
+        work_dir=work_dir,
+        api_keys=api_keys,
+    )
+
+    # Run workflow
+    print(f"\n{'=' * 60}")
+    print(f"PHASE-BASED WORKFLOW: One Shot ({agent})")
+    print(f"{'=' * 60}")
+    print(f"Task: {task[:100]}...")
+    print(f"{'=' * 60}\n")
+
+    try:
+        result = executor.run_sync()
+        return _convert_workflow_result_to_legacy(result, executor)
+
+    except Exception as e:
+        print(f"\nWorkflow failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def control_phases(
+    task,
+    plan=None,
+    max_rounds=100,
+    max_plan_steps=3,
+    n_plan_reviews=1,
+    plan_instructions='',
+    engineer_instructions='',
+    researcher_instructions='',
+    hardware_constraints='',
+    max_n_attempts=3,
+    planner_model=default_agents_llm_model['planner'],
+    plan_reviewer_model=default_agents_llm_model['plan_reviewer'],
+    engineer_model=default_agents_llm_model['engineer'],
+    researcher_model=default_agents_llm_model['researcher'],
+    web_surfer_model=default_agents_llm_model.get('web_surfer', default_agents_llm_model['researcher']),
+    retrieve_assistant_model=default_agents_llm_model.get('retrieve_assistant', default_agents_llm_model['researcher']),
+    idea_maker_model=default_agents_llm_model['idea_maker'],
+    idea_hater_model=default_agents_llm_model['idea_hater'],
+    plot_judge_model=default_agents_llm_model['plot_judge'],
+    work_dir=work_dir_default,
+    clear_work_dir=True,
+    api_keys=None,
+):
+    """
+    Phase-based implementation of control.
+
+    This function uses the new phase-based workflow system internally while
+    maintaining the same signature as the legacy implementation.
+    """
+    from cmbagent.phases import ControlPhase, ControlPhaseConfig, PhaseContext
+    from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
+    from cmbagent.workflows.utils import load_plan as load_plan_file
+
+    # Setup
+    work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
+
+    if clear_work_dir:
+        clean_work_dir(work_dir)
+
+    if api_keys is None:
+        api_keys = get_api_keys_from_env()
+
+    # Load plan if path provided
+    if plan is None:
+        plan = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'plans', 'idea_plan.json')
+
+    plan_data = load_plan_file(plan)
+    plan_steps = plan_data.get("sub_tasks", [])
+
+    # Build workflow definition
+    workflow = WorkflowDefinition(
+        id=f"control_{uuid.uuid4().hex[:8]}",
+        name="Control Only (Phase-Based)",
+        description="Phase-based control-only workflow",
+        phases=[{
+            "type": "control",
+            "config": {
+                "max_rounds": max_rounds,
+                "max_n_attempts": max_n_attempts,
+                "execute_all_steps": True,
+                "engineer_model": engineer_model,
+                "researcher_model": researcher_model,
+                "web_surfer_model": web_surfer_model,
+                "retrieve_assistant_model": retrieve_assistant_model,
+                "idea_maker_model": idea_maker_model,
+                "idea_hater_model": idea_hater_model,
+                "plot_judge_model": plot_judge_model,
+                "engineer_instructions": engineer_instructions,
+                "researcher_instructions": researcher_instructions,
+            }
+        }],
+    )
+
+    # Create executor with pre-loaded plan
+    executor = WorkflowExecutor(
+        workflow=workflow,
+        task=task,
+        work_dir=work_dir,
+        api_keys=api_keys,
+    )
+
+    # Inject plan into context
+    executor.context.plan = plan_steps
+    executor.context.total_steps = len(plan_steps)
+    executor.context.agent_state = {
+        'final_plan': plan_steps,
+        'number_of_steps_in_plan': len(plan_steps),
+        'agent_for_sub_task': plan_steps[0].get('sub_task_agent') if plan_steps else None,
+        'current_sub_task': plan_steps[0].get('sub_task') if plan_steps else None,
+    }
+
+    # Also set in the phase context
+    executor.phases[0].config.params['preloaded_plan'] = plan_steps
+
+    # Run workflow
+    print(f"\n{'=' * 60}")
+    print("PHASE-BASED WORKFLOW: Control Only")
+    print(f"{'=' * 60}")
+    print(f"Task: {task[:100]}...")
+    print(f"Plan steps: {len(plan_steps)}")
+    print(f"{'=' * 60}\n")
+
+    try:
+        result = executor.run_sync()
+        return _convert_workflow_result_to_legacy(result, executor)
+
+    except Exception as e:
+        print(f"\nWorkflow failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def idea_generation_phases(
+    task,
+    max_rounds=50,
+    n_ideas=3,
+    n_reviews=1,
+    idea_maker_model=default_agents_llm_model['idea_maker'],
+    idea_hater_model=default_agents_llm_model['idea_hater'],
+    work_dir=work_dir_default,
+    api_keys=None,
+    clear_work_dir=False,
+    hitl_after_ideas=True,
+):
+    """
+    Phase-based idea generation workflow.
+
+    Generates and reviews research ideas using maker/hater dynamics.
+
+    Args:
+        task: Research topic or problem to generate ideas for
+        max_rounds: Maximum conversation rounds
+        n_ideas: Number of ideas to generate
+        n_reviews: Number of review iterations
+        idea_maker_model: Model for idea maker agent
+        idea_hater_model: Model for idea hater/critic agent
+        work_dir: Working directory for outputs
+        api_keys: API keys dictionary
+        clear_work_dir: Whether to clear the work directory
+        hitl_after_ideas: If True, adds HITL checkpoint for idea selection
+    """
+    from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
+
+    # Setup
+    work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
+
+    if clear_work_dir:
+        clean_work_dir(work_dir)
+
+    if api_keys is None:
+        api_keys = get_api_keys_from_env()
+
+    # Build workflow definition
+    phases = [{
+        "type": "idea_generation",
+        "config": {
+            "max_rounds": max_rounds,
+            "n_ideas": n_ideas,
+            "n_reviews": n_reviews,
+            "idea_maker_model": idea_maker_model,
+            "idea_hater_model": idea_hater_model,
+        }
+    }]
+
+    if hitl_after_ideas:
+        phases.append({
+            "type": "hitl_checkpoint",
+            "config": {
+                "checkpoint_type": "custom",
+                "custom_message": "Ideas generated. Select an idea to pursue.",
+                "require_approval": True,
+            }
+        })
+
+    workflow = WorkflowDefinition(
+        id=f"idea_generation_{uuid.uuid4().hex[:8]}",
+        name="Idea Generation (Phase-Based)",
+        description="Phase-based idea generation workflow",
+        phases=phases,
+    )
+
+    # Create executor
+    executor = WorkflowExecutor(
+        workflow=workflow,
+        task=task,
+        work_dir=work_dir,
+        api_keys=api_keys,
+    )
+
+    # Run workflow
+    print(f"\n{'=' * 60}")
+    print("PHASE-BASED WORKFLOW: Idea Generation")
+    print(f"{'=' * 60}")
+    print(f"Task: {task[:100]}...")
+    print(f"Generating {n_ideas} ideas with {n_reviews} review rounds")
+    print(f"{'=' * 60}\n")
+
+    try:
+        result = executor.run_sync()
+        return _convert_workflow_result_to_legacy(result, executor)
+
+    except Exception as e:
+        print(f"\nWorkflow failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def idea_to_execution_phases(
+    task,
+    # Idea generation params
+    n_ideas=3,
+    n_reviews=1,
+    idea_maker_model=default_agents_llm_model['idea_maker'],
+    idea_hater_model=default_agents_llm_model['idea_hater'],
+    # Planning params
+    max_rounds_planning=50,
+    max_plan_steps=5,
+    n_plan_reviews=1,
+    planner_model=default_agents_llm_model['planner'],
+    plan_reviewer_model=default_agents_llm_model['plan_reviewer'],
+    plan_instructions='',
+    # Control params
+    max_rounds_control=100,
+    max_n_attempts=3,
+    engineer_model=default_agents_llm_model['engineer'],
+    researcher_model=default_agents_llm_model['researcher'],
+    engineer_instructions='',
+    researcher_instructions='',
+    # General params
+    work_dir=work_dir_default,
+    api_keys=None,
+    clear_work_dir=False,
+    hitl_enabled=True,
+):
+    """
+    Phase-based idea-to-execution workflow.
+
+    Full pipeline: Generate ideas → Select idea → Plan → Execute
+
+    Args:
+        task: Research topic or problem
+        n_ideas: Number of ideas to generate
+        n_reviews: Number of idea review iterations
+        idea_maker_model: Model for idea maker
+        idea_hater_model: Model for idea critic
+        max_rounds_planning: Max rounds for planning
+        max_plan_steps: Max steps in plan
+        n_plan_reviews: Number of plan reviews
+        planner_model: Model for planner
+        plan_reviewer_model: Model for plan reviewer
+        plan_instructions: Additional planner instructions
+        max_rounds_control: Max rounds per control step
+        max_n_attempts: Max attempts per step
+        engineer_model: Model for engineer
+        researcher_model: Model for researcher
+        engineer_instructions: Additional engineer instructions
+        researcher_instructions: Additional researcher instructions
+        work_dir: Working directory
+        api_keys: API keys
+        clear_work_dir: Clear work directory first
+        hitl_enabled: Enable HITL checkpoints
+    """
+    from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
+
+    # Setup
+    work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
+
+    if clear_work_dir:
+        clean_work_dir(work_dir)
+
+    if api_keys is None:
+        api_keys = get_api_keys_from_env()
+
+    # Build full workflow
+    phases = [
+        # Phase 1: Idea Generation
+        {
+            "type": "idea_generation",
+            "config": {
+                "n_ideas": n_ideas,
+                "n_reviews": n_reviews,
+                "idea_maker_model": idea_maker_model,
+                "idea_hater_model": idea_hater_model,
+            }
+        },
+    ]
+
+    if hitl_enabled:
+        # Phase 2: HITL - Select idea
+        phases.append({
+            "type": "hitl_checkpoint",
+            "config": {
+                "checkpoint_type": "custom",
+                "custom_message": "Select an idea to develop",
+                "require_approval": True,
+            }
+        })
+
+    # Phase 3: Planning
+    phases.append({
+        "type": "planning",
+        "config": {
+            "max_rounds": max_rounds_planning,
+            "max_plan_steps": max_plan_steps,
+            "n_plan_reviews": n_plan_reviews,
+            "planner_model": planner_model,
+            "plan_reviewer_model": plan_reviewer_model,
+            "plan_instructions": plan_instructions,
+        }
+    })
+
+    if hitl_enabled:
+        # Phase 4: HITL - Approve plan
+        phases.append({
+            "type": "hitl_checkpoint",
+            "config": {
+                "checkpoint_type": "after_planning",
+                "require_approval": True,
+            }
+        })
+
+    # Phase 5: Control/Execution
+    phases.append({
+        "type": "control",
+        "config": {
+            "max_rounds": max_rounds_control,
+            "max_n_attempts": max_n_attempts,
+            "execute_all_steps": True,
+            "engineer_model": engineer_model,
+            "researcher_model": researcher_model,
+            "engineer_instructions": engineer_instructions,
+            "researcher_instructions": researcher_instructions,
+        }
+    })
+
+    workflow = WorkflowDefinition(
+        id=f"idea_to_execution_{uuid.uuid4().hex[:8]}",
+        name="Idea to Execution (Phase-Based)",
+        description="Full pipeline: Ideas → Plan → Execute",
+        phases=phases,
+    )
+
+    # Create executor
+    executor = WorkflowExecutor(
+        workflow=workflow,
+        task=task,
+        work_dir=work_dir,
+        api_keys=api_keys,
+    )
+
+    # Run workflow
+    print(f"\n{'=' * 60}")
+    print("PHASE-BASED WORKFLOW: Idea to Execution")
+    print(f"{'=' * 60}")
+    print(f"Task: {task[:100]}...")
+    print(f"Pipeline: {' → '.join(p['type'] for p in phases)}")
+    print(f"{'=' * 60}\n")
+
+    try:
+        result = executor.run_sync()
+        return _convert_workflow_result_to_legacy(result, executor)
+
+    except Exception as e:
+        print(f"\nWorkflow failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def _get_approval_manager(approval_config):
+    """Get approval manager from config if available."""
+    try:
+        from cmbagent.database.approval_manager import ApprovalManager
+        return ApprovalManager(approval_config)
+    except ImportError:
+        return None
+
+
+def _convert_workflow_result_to_legacy(workflow_context, executor) -> Dict[str, Any]:
+    """
+    Convert WorkflowContext result to legacy format.
+
+    The legacy functions return a dictionary with chat_history, final_context,
+    and timing information. This function converts the new format to match.
+    """
+    # Collect all chat history from phases
+    all_chat_history = []
+    for result in executor.results:
+        all_chat_history.extend(result.chat_history)
+
+    # Get final context from last phase
+    final_context = {}
+    if executor.results:
+        last_result = executor.results[-1]
+        final_context = last_result.context.output_data.get('final_context', {})
+        if not final_context:
+            final_context = last_result.context.output_data.get('result', {})
+        if not final_context:
+            final_context = last_result.context.shared_state.get('final_context', {})
+
+    # Build legacy result format
+    result = {
+        'chat_history': all_chat_history,
+        'final_context': final_context,
+        'run_id': workflow_context.run_id,
+        'workflow_id': workflow_context.workflow_id,
+        'phase_timings': workflow_context.phase_timings,
+    }
+
+    # Add individual timing fields for compatibility
+    total_time = workflow_context.phase_timings.get('total', 0)
+    result['total_time'] = total_time
+
+    # Extract phase-specific timings
+    for phase_id, timing in workflow_context.phase_timings.items():
+        if 'planning' in phase_id:
+            result['execution_time_planning'] = timing
+        elif 'control' in phase_id:
+            result['execution_time_control'] = timing
+
+    return result
+
+
+# =============================================================================
+# Auto-selection based on environment variable
+# =============================================================================
+
+def should_use_phases() -> bool:
+    """Check if phase-based implementation should be used."""
+    return os.environ.get('CMBAGENT_USE_PHASES', '').lower() in ('1', 'true', 'yes')

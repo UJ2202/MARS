@@ -33,7 +33,7 @@ interface TaskInputProps {
 export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = false, onOpenDirectory }: TaskInputProps) {
   const [task, setTask] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [mode, setMode] = useState<'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input'>('one-shot')
+  const [mode, setMode] = useState<'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive'>('one-shot')
   const [showOcrDropdown, setShowOcrDropdown] = useState(false)
   const [showCredentialsModal, setShowCredentialsModal] = useState(false)
   const [showOpenAIError, setShowOpenAIError] = useState(false)
@@ -70,7 +70,7 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
     maxAttempts: 1,
     agent: 'engineer',
     workDir: '~/cmbagent_workdir',
-    mode: 'one-shot' as 'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input',
+    mode: 'one-shot' as 'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive',
     // Global model options
     defaultModel: 'gpt-4.1-2025-04-14',
     defaultFormatterModel: 'o3-mini-2025-01-31',
@@ -84,6 +84,14 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
     // Idea Generation specific options
     ideaMakerModel: 'gpt-4.1-2025-04-14',
     ideaHaterModel: 'o3-mini-2025-01-31',
+    // HITL specific options
+    hitlVariant: 'full_interactive', // full_interactive, planning_only, error_recovery
+    maxHumanIterations: 3,
+    approvalMode: 'both', // both, before_step, after_step, on_error
+    allowPlanModification: true,
+    allowStepSkip: true,
+    allowStepRetry: true,
+    showStepContext: true,
     // OCR specific options
     saveMarkdown: true,
     saveJson: true,
@@ -123,6 +131,12 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
         'Bank customer data during covid-19',
         'Galaxy cluster observations from Hubble telescope', 
         'Climate change temperature records 1900-2020'
+      ]
+    } else if (mode === 'hitl-interactive') {
+      return [
+        'Analyze CMB power spectrum with custom parameters and plot results',
+        'Build a market impact model incorporating order flow and volatility',
+        'Process astronomical data from JWST and identify candidate exoplanets'
       ]
     } else if (mode === 'ocr') {
       return [
@@ -240,6 +254,28 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               💡 Idea Generation
+            </button>
+          </Tooltip>
+          <Tooltip text="Full human-in-the-loop control - guide planning and approve each step during execution" wide position="bottom">
+            <button
+              onClick={() => {
+                setMode('hitl-interactive')
+                setConfig(prev => ({ 
+                  ...prev, 
+                  mode: 'hitl-interactive',
+                  maxPlanSteps: 5,
+                  maxHumanIterations: 3,
+                  approvalMode: 'both',
+                }))
+              }}
+              disabled={isRunning}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                mode === 'hitl-interactive'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-black/30 text-gray-300 hover:text-white hover:bg-black/50'
+              } disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              🤝 HITL Interactive
             </button>
           </Tooltip>
           {/* More Tools Dropdown */}
@@ -438,7 +474,7 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
         {showAdvanced && (
           <div className="space-y-2 p-2 bg-black/20 rounded-lg border border-white/10">
             <h3 className="text-xs font-medium text-gray-300">
-              Advanced Configuration - {mode === 'one-shot' ? 'One Shot' : mode === 'planning-control' ? 'Deep Research' : mode === 'idea-generation' ? 'Idea Generation' : mode === 'arxiv' ? 'arXiv Filter' : mode === 'enhance-input' ? 'Enhance Input' : 'OCR'} Mode
+              Advanced Configuration - {mode === 'one-shot' ? 'One Shot' : mode === 'planning-control' ? 'Deep Research' : mode === 'idea-generation' ? 'Idea Generation' : mode === 'hitl-interactive' ? 'HITL Interactive' : mode === 'arxiv' ? 'arXiv Filter' : mode === 'enhance-input' ? 'Enhance Input' : 'OCR'} Mode
             </h3>
             
             {/* Credential Status Message in Advanced Section */}
@@ -531,6 +567,119 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
                     <select
                       value={config.planReviewerModel || 'o3-mini-2025-01-31'}
                       onChange={(e) => setConfig({...config, planReviewerModel: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="gpt-4o">GPT-4o</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="gpt-4.1-2025-04-14">GPT-4.1</option>
+                      <option value="gpt-5-2025-08-07">GPT-5</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                      <option value="o3-mini-2025-01-31">o3-mini</option>
+                    </select>
+                  </div>
+                </>
+              ) : /* HITL Interactive Agent Models */
+              mode === 'hitl-interactive' ? (
+                <>
+                  <div>
+                    <Tooltip text="Choose the HITL workflow variant: Full Interactive (both phases), Planning Only (interactive planning + auto execution), or Error Recovery (auto execution with error intervention)" wide position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">HITL Variant</label>
+                    </Tooltip>
+                    <select
+                      value={config.hitlVariant || 'full_interactive'}
+                      onChange={(e) => setConfig({...config, hitlVariant: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="full_interactive">Full Interactive (Planning + Control)</option>
+                      <option value="planning_only">Planning Only (Auto Execute)</option>
+                      <option value="error_recovery">Error Recovery (Auto + Intervention)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="Maximum number of plan refinement iterations with human feedback" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Max Planning Iterations</label>
+                    </Tooltip>
+                    <input
+                      type="number"
+                      value={config.maxHumanIterations}
+                      onChange={(e) => setConfig({...config, maxHumanIterations: parseInt(e.target.value)})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      min="1"
+                      max="10"
+                      disabled={isRunning}
+                    />
+                  </div>
+
+                  {(config.hitlVariant === 'full_interactive' || !config.hitlVariant) && (
+                    <div>
+                      <Tooltip text="When to request human approval during execution" wide position="bottom">
+                        <label className="block text-xs text-gray-400 mb-1">Approval Mode</label>
+                      </Tooltip>
+                      <select
+                        value={config.approvalMode}
+                        onChange={(e) => setConfig({...config, approvalMode: e.target.value})}
+                        className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        disabled={isRunning}
+                      >
+                        <option value="both">Before & After Each Step</option>
+                        <option value="before_step">Before Each Step</option>
+                        <option value="after_step">After Each Step</option>
+                        <option value="on_error">Only On Errors</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <div>
+                    <Tooltip text="Agent that breaks down tasks and creates execution plans with human feedback" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Planner</label>
+                    </Tooltip>
+                    <select
+                      value={config.plannerModel || 'gpt-4.1-2025-04-14'}
+                      onChange={(e) => setConfig({...config, plannerModel: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="gpt-4o">GPT-4o</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="gpt-4.1-2025-04-14">GPT-4.1</option>
+                      <option value="gpt-5-2025-08-07">GPT-5</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                      <option value="o3-mini-2025-01-31">o3-mini</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="Agent that handles technical implementation with step-by-step human approval" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Engineer</label>
+                    </Tooltip>
+                    <select
+                      value={config.model}
+                      onChange={(e) => setConfig({...config, model: e.target.value})}
+                      className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      disabled={isRunning}
+                    >
+                      <option value="gpt-4o">GPT-4o</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option value="gpt-4.1-2025-04-14">GPT-4.1</option>
+                      <option value="gpt-5-2025-08-07">GPT-5</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                      <option value="o3-mini-2025-01-31">o3-mini</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <Tooltip text="Agent that provides detailed reasoning and comprehensive reports" position="bottom">
+                      <label className="block text-xs text-gray-400 mb-1">Researcher</label>
+                    </Tooltip>
+                    <select
+                      value={config.researcherModel || 'gpt-4.1-2025-04-14'}
+                      onChange={(e) => setConfig({...config, researcherModel: e.target.value})}
                       className="w-full px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
                       disabled={isRunning}
                     >

@@ -1,27 +1,20 @@
 """
-One-shot and human-in-the-loop workflow functions for CMBAgent.
+One-shot workflow implementation using phase-based architecture.
 """
 
 import os
-import json
-import time
 import uuid
-import requests
-import datetime
-from typing import Optional
+from typing import Dict, Any
 
 from cmbagent.utils import (
     work_dir_default,
     get_api_keys_from_env,
-    get_model_config,
     default_agents_llm_model,
-    camb_context_url,
-    classy_context_url,
 )
 from cmbagent.utils import default_llm_model as default_llm_model_default
 from cmbagent.utils import default_formatter_model as default_formatter_model_default
 from cmbagent.context import shared_context as shared_context_default
-from cmbagent.execution.output_collector import WorkflowOutputManager
+from cmbagent.workflows.utils import clean_work_dir
 
 
 def one_shot(
@@ -47,165 +40,131 @@ def one_shot(
     """
     Execute a single-shot task with a specified agent.
 
+    This workflow runs a single agent to complete the task without
+    multi-step planning.
+
     Args:
-        task: The task description to execute
+        task: Task description
         max_rounds: Maximum conversation rounds
-        max_n_attempts: Maximum attempts before failure
+        max_n_attempts: Maximum retry attempts
         engineer_model: Model for engineer agent
         researcher_model: Model for researcher agent
-        web_surfer_model: Model for web_surfer agent
+        web_surfer_model: Model for web surfer agent
         plot_judge_model: Model for plot judge agent
         camb_context_model: Model for CAMB context agent
         default_llm_model: Default LLM model
         default_formatter_model: Default formatter model
-        researcher_filename: Output filename for researcher
-        agent: Which agent to use ('engineer', 'researcher', 'camb_context', etc.)
-        work_dir: Working directory for outputs
+        researcher_filename: Filename for researcher outputs
+        agent: Agent to use ('engineer' or 'researcher')
+        work_dir: Working directory
         api_keys: API keys dictionary
-        clear_work_dir: Whether to clear the work directory
-        evaluate_plots: Whether to evaluate generated plots
-        max_n_plot_evals: Maximum plot evaluation iterations
-        inject_wrong_plot: Whether to inject wrong plot for testing
+        clear_work_dir: Whether to clear work directory
+        evaluate_plots: Whether to evaluate plots
+        max_n_plot_evals: Maximum plot evaluations
+        inject_wrong_plot: Whether to inject wrong plots for testing
 
     Returns:
-        Dictionary containing chat history, final context, and agent objects
+        Dictionary with chat_history, final_context, and timing info
     """
-    from cmbagent.cmbagent import CMBAgent
+    from cmbagent.workflows.composer import WorkflowDefinition, WorkflowExecutor
 
-    start_time = time.time()
+    # Setup
     work_dir = os.path.abspath(os.path.expanduser(work_dir))
+    os.makedirs(work_dir, exist_ok=True)
 
-    # Initialize file tracking system
-    run_id = str(uuid.uuid4())
-    output_manager = WorkflowOutputManager(
-        work_dir=work_dir,
-        run_id=run_id
-    )
-    output_manager.set_phase("execution")
-    output_manager.set_agent(agent)
+    if clear_work_dir:
+        clean_work_dir(work_dir)
 
     if api_keys is None:
         api_keys = get_api_keys_from_env()
 
-    engineer_config = get_model_config(engineer_model, api_keys)
-    researcher_config = get_model_config(researcher_model, api_keys)
-    web_surfer_config = get_model_config(web_surfer_model, api_keys)
-    plot_judge_config = get_model_config(plot_judge_model, api_keys)
-    camb_context_config = get_model_config(camb_context_model, api_keys)
+    # Build workflow definition
+    workflow = WorkflowDefinition(
+        id=f"one_shot_{uuid.uuid4().hex[:8]}",
+        name=f"One Shot ({agent})",
+        description="One-shot workflow with single agent",
+        phases=[{
+            "type": "one_shot",
+            "config": {
+                "max_rounds": max_rounds,
+                "max_n_attempts": max_n_attempts,
+                "agent": agent,
+                "engineer_model": engineer_model,
+                "researcher_model": researcher_model,
+                "web_surfer_model": web_surfer_model,
+                "plot_judge_model": plot_judge_model,
+                "camb_context_model": camb_context_model,
+                "default_llm_model": default_llm_model,
+                "default_formatter_model": default_formatter_model,
+                "evaluate_plots": evaluate_plots,
+                "max_n_plot_evals": max_n_plot_evals,
+                "researcher_filename": researcher_filename,
+            }
+        }],
+    )
 
-    cmbagent = CMBAgent(
-        cache_seed=42,
-        mode="one_shot",
+    # Create executor
+    executor = WorkflowExecutor(
+        workflow=workflow,
+        task=task,
         work_dir=work_dir,
-        agent_llm_configs={
-            'engineer': engineer_config,
-            'researcher': researcher_config,
-            'web_surfer': web_surfer_config,
-            'plot_judge': plot_judge_config,
-            'camb_context': camb_context_config,
-        },
-        clear_work_dir=clear_work_dir,
         api_keys=api_keys,
-        default_llm_model=default_llm_model,
-        default_formatter_model=default_formatter_model,
     )
 
-    end_time = time.time()
-    initialization_time = end_time - start_time
+    # Run workflow
+    print(f"\n{'=' * 60}")
+    print(f"One Shot Workflow ({agent})")
+    print(f"{'=' * 60}")
+    print(f"Task: {task[:100]}...")
+    print(f"{'=' * 60}\n")
 
-    start_time = time.time()
-
-    shared_context = {
-        'max_n_attempts': max_n_attempts,
-        'evaluate_plots': evaluate_plots,
-        'max_n_plot_evals': max_n_plot_evals,
-        'inject_wrong_plot': inject_wrong_plot
-    }
-
-    if agent == 'camb_context':
-        resp = requests.get(camb_context_url, timeout=30)
-        resp.raise_for_status()
-        camb_context = resp.text
-        shared_context["camb_context"] = camb_context
-
-    if agent == 'classy_context':
-        resp = requests.get(classy_context_url, timeout=30)
-        resp.raise_for_status()
-        classy_context = resp.text
-        shared_context["classy_context"] = classy_context
-
-    if researcher_filename is not None:
-        shared_context["researcher_filename"] = researcher_filename
-
-    cmbagent.solve(
-        task,
-        max_rounds=max_rounds,
-        initial_agent=agent,
-        mode="one_shot",
-        shared_context=shared_context
-    )
-
-    end_time = time.time()
-    execution_time = end_time - start_time
-
-    if not hasattr(cmbagent, 'groupchat'):
-        Dummy = type('Dummy', (object,), {'new_conversable_agents': []})
-        cmbagent.groupchat = Dummy()
-
-    cmbagent.display_cost()
-
-    results = {
-        'chat_history': cmbagent.chat_result.chat_history,
-        'final_context': cmbagent.final_context,
-        'engineer': cmbagent.get_agent_object_from_name('engineer'),
-        'engineer_response_formatter': cmbagent.get_agent_object_from_name('engineer_response_formatter'),
-        'researcher': cmbagent.get_agent_object_from_name('researcher'),
-        'researcher_response_formatter': cmbagent.get_agent_object_from_name('researcher_response_formatter'),
-        'plot_judge': cmbagent.get_agent_object_from_name('plot_judge'),
-        'plot_debugger': cmbagent.get_agent_object_from_name('plot_debugger')
-    }
-
-    results['initialization_time'] = initialization_time
-    results['execution_time'] = execution_time
-
-    timing_report = {
-        'initialization_time': initialization_time,
-        'execution_time': execution_time,
-        'total_time': initialization_time + execution_time
-    }
-
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    timing_path = os.path.join(work_dir, f"time/timing_report_{timestamp}.json")
-
-    with open(timing_path, 'w') as f:
-        json.dump(timing_report, f, indent=2)
-
-    print("\nTiming report saved to", timing_path)
-    print("\nTask took", f"{execution_time:.4f}", "seconds")
-
-    # Collect and finalize file outputs
     try:
-        workflow_outputs = output_manager.finalize(write_manifest=True)
-        results['outputs'] = workflow_outputs.to_dict()
-        results['run_id'] = run_id
-        print(f"\nCollected {workflow_outputs.total_files} output files")
+        result = executor.run_sync()
+        return _convert_workflow_result_to_legacy(result, executor)
+
     except Exception as e:
-        print(f"\nWarning: Could not collect outputs: {e}")
-        results['outputs'] = None
-        results['run_id'] = run_id
+        print(f"\nWorkflow failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
-    # delete empty folders
-    database_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['database_path'])
-    codebase_full_path = os.path.join(results['final_context']['work_dir'], results['final_context']['codebase_path'])
-    time_full_path = os.path.join(results['final_context']['work_dir'], 'time')
-    for folder in [database_full_path, codebase_full_path, time_full_path]:
-        try:
-            if os.path.exists(folder) and not os.listdir(folder):
-                os.rmdir(folder)
-        except OSError:
-            pass  # Folder not empty or doesn't exist
 
-    return results
+def _convert_workflow_result_to_legacy(workflow_context, executor) -> Dict[str, Any]:
+    """
+    Convert WorkflowContext result to legacy format.
+
+    The legacy functions return a dictionary with chat_history, final_context,
+    and timing information. This function converts the new format to match.
+    """
+    # Collect all chat history from phases
+    all_chat_history = []
+    for result in executor.results:
+        all_chat_history.extend(result.chat_history)
+
+    # Get final context from last phase
+    final_context = {}
+    if executor.results:
+        last_result = executor.results[-1]
+        final_context = last_result.context.output_data.get('final_context', {})
+        if not final_context:
+            final_context = last_result.context.output_data.get('result', {})
+        if not final_context:
+            final_context = last_result.context.shared_state.get('final_context', {})
+
+    # Build legacy result format
+    result = {
+        'chat_history': all_chat_history,
+        'final_context': final_context,
+        'run_id': workflow_context.run_id,
+        'workflow_id': workflow_context.workflow_id,
+        'phase_timings': workflow_context.phase_timings,
+    }
+
+    # Add individual timing fields for compatibility
+    total_time = workflow_context.phase_timings.get('total', 0)
+    result['total_time'] = total_time
+
+    return result
 
 
 def human_in_the_loop(
@@ -222,19 +181,28 @@ def human_in_the_loop(
     """
     Execute an interactive human-in-the-loop workflow.
 
+    This workflow provides interactive chat mode with human-in-the-loop control.
+    Uses legacy implementation (not yet migrated to phases).
+
     Args:
         task: The task description
         work_dir: Working directory for outputs
         max_rounds: Maximum conversation rounds
         max_n_attempts: Maximum attempts before failure
         engineer_model: Model for engineer agent
-        researcher_model: Model for researcher agent        web_surfer_model: Model for web_surfer agent        agent: Which agent to use
+        researcher_model: Model for researcher agent
+        web_surfer_model: Model for web_surfer agent
+        agent: Which agent to use
         api_keys: API keys dictionary
 
     Returns:
         Dictionary containing chat history, final context, and agent objects
     """
+    import time
+    import json
+    import datetime
     from cmbagent.cmbagent import CMBAgent
+    from cmbagent.utils import get_model_config
 
     start_time = time.time()
 
