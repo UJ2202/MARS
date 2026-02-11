@@ -158,6 +158,17 @@ async def get_copilot_workflows():
                 autoApproveSimple=True,
             )
         ),
+        CopilotWorkflowInfo(
+            id="copilot_interactive",
+            name="Interactive Copilot",
+            description="True conversational copilot - proposes before acting, reviews after",
+            default_config=CopilotConfig(
+                enablePlanning=True,
+                approvalMode="conversational",
+                continuousMode=True,
+                maxTurns=50,
+            )
+        ),
     ]
 
 

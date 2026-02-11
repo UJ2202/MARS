@@ -94,10 +94,17 @@ class EnhanceInputResponse(BaseModel):
 
 class BranchRequest(BaseModel):
     """Request model for creating a workflow branch."""
-    step_id: str
+    node_id: str  # DAG node ID (e.g., "step_1", "planning")
     branch_name: str
     hypothesis: Optional[str] = None
+    new_instructions: Optional[str] = None  # New instructions for branch planning
     modifications: Optional[Dict[str, Any]] = None
+    execute_immediately: bool = False  # Whether to start execution right away
+
+
+class BranchExecuteRequest(BaseModel):
+    """Request model for executing a branch."""
+    config_overrides: Optional[Dict[str, Any]] = None
 
 
 class PlayFromNodeRequest(BaseModel):

@@ -57,6 +57,9 @@ class DAGTracker:
                 print(f"[DAGTracker] No run_id provided, using task_id: {task_id}")
                 self.run_id = task_id
 
+            # Create WorkflowRun record if it doesn't exist
+            self._ensure_workflow_run_exists(mode, task_id)
+
             self.dag_builder = DAGBuilder(self.db_session, self.session_id)
             self.dag_visualizer = DAGVisualizer(self.db_session)
             print(f"Database DAG system initialized with run_id: {self.run_id}")
@@ -65,8 +68,78 @@ class DAGTracker:
             import traceback
             traceback.print_exc()
 
+    def _ensure_workflow_run_exists(self, mode: str, task_id: str):
+        """Ensure a WorkflowRun record exists for this run_id.
+
+        This is critical for play-from-node and branching features to work,
+        as they query WorkflowRun by run_id.
+        """
+        try:
+            from cmbagent.database.models import WorkflowRun
+
+            # Check if WorkflowRun already exists
+            existing_run = self.db_session.query(WorkflowRun).filter(
+                WorkflowRun.id == self.run_id
+            ).first()
+
+            if existing_run:
+                print(f"[DAGTracker] WorkflowRun {self.run_id} already exists")
+                return
+
+            # Create new WorkflowRun record with all required fields
+            workflow_run = WorkflowRun(
+                id=self.run_id,
+                session_id=self.session_id,
+                mode=mode,
+                agent="unknown",  # Will be updated in _update_workflow_run_task
+                model="unknown",  # Will be updated in _update_workflow_run_task
+                status="executing",
+                started_at=datetime.now(timezone.utc),
+                task_description=f"Task {task_id}",  # Will be updated later
+                meta={"task_id": task_id}
+            )
+            self.db_session.add(workflow_run)
+            self.db_session.commit()
+            print(f"[DAGTracker] Created WorkflowRun record: {self.run_id}")
+
+        except Exception as e:
+            print(f"[DAGTracker] Error ensuring WorkflowRun exists: {e}")
+            import traceback
+            traceback.print_exc()
+            self.db_session.rollback()
+
+    def _update_workflow_run_task(self, task: str, config: Dict[str, Any]):
+        """Update WorkflowRun with actual task description and config."""
+        if not self.db_session or not self.run_id:
+            return
+
+        try:
+            from cmbagent.database.models import WorkflowRun
+
+            run = self.db_session.query(WorkflowRun).filter(
+                WorkflowRun.id == self.run_id
+            ).first()
+
+            if run:
+                run.task_description = task[:500] if task else "No task description"
+                run.agent = config.get("agent", "engineer")
+                run.model = config.get("model", "gpt-4o")
+                if run.meta:
+                    run.meta["config"] = {
+                        k: v for k, v in config.items()
+                        if k not in ["apiKeys", "api_keys"]  # Don't store API keys
+                    }
+                self.db_session.commit()
+                print(f"[DAGTracker] Updated WorkflowRun task description")
+        except Exception as e:
+            print(f"[DAGTracker] Error updating WorkflowRun task: {e}")
+            self.db_session.rollback()
+
     def create_dag_for_mode(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create initial DAG structure based on execution mode."""
+        # Update WorkflowRun with actual task description
+        self._update_workflow_run_task(task, config)
+
         if self.mode == "planning-control":
             return self._create_planning_control_dag(task, config)
         elif self.mode == "idea-generation":

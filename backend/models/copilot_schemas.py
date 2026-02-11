@@ -54,7 +54,19 @@ class CopilotConfig(BaseModel):
     # HITL settings
     approvalMode: str = Field(
         default="after_step",
-        description="When to request human approval: before_step, after_step, both, none"
+        description="When to request human approval: before_step, after_step, both, none, conversational"
+    )
+    conversational: bool = Field(
+        default=False,
+        description="Enable conversational mode - human participates in every turn like Claude Code"
+    )
+    toolApproval: str = Field(
+        default="none",
+        description="Tool execution approval mode: prompt (ask before dangerous ops with auto-allow), auto_allow_all (skip all), none (no tool-level approval)"
+    )
+    intelligentRouting: str = Field(
+        default="balanced",
+        description="Intelligent routing mode: aggressive (always clarify ambiguous tasks, propose for complex), balanced (clarify when clearly ambiguous), minimal (prefer direct action)"
     )
     autoApproveSimple: bool = Field(
         default=True,

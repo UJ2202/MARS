@@ -4,42 +4,132 @@ Workflow branching and DAG management endpoints.
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 
-from models.schemas import BranchRequest, PlayFromNodeRequest
+from models.schemas import BranchRequest, PlayFromNodeRequest, BranchExecuteRequest
 
 router = APIRouter(tags=["Branching"])
 
 
 @router.post("/api/runs/{run_id}/branch")
-async def create_branch(run_id: str, request: BranchRequest):
-    """Create a new branch from a specific step."""
+async def create_branch(run_id: str, request: BranchRequest, background_tasks: BackgroundTasks):
+    """
+    Create a new branch from a specific DAG node.
+
+    The branch will have access to all context from the parent workflow up to the
+    branch point. If new_instructions are provided, a NEW planning phase will be
+    triggered that:
+    1. Is aware of all completed work (will not repeat it)
+    2. Has access to all files generated so far
+    3. Will create a new plan based on the new instructions
+    """
     try:
         from cmbagent.database import get_db_session as get_session
-        from cmbagent.branching import BranchManager
+        from cmbagent.branching import BranchManager, BranchExecutor
 
         db_session = get_session()
         branch_manager = BranchManager(db_session, run_id)
 
         new_run_id = branch_manager.create_branch(
-            step_id=request.step_id,
+            node_id=request.node_id,
             branch_name=request.branch_name,
             hypothesis=request.hypothesis,
+            new_instructions=request.new_instructions,
             modifications=request.modifications
         )
 
-        db_session.close()
-
-        return {
+        result = {
             "status": "success",
             "branch_run_id": new_run_id,
             "message": f"Branch '{request.branch_name}' created successfully"
         }
+
+        # If execute_immediately is set, prepare and return execution context
+        if request.execute_immediately:
+            branch_executor = BranchExecutor(db_session, new_run_id)
+            execution_context = branch_executor.prepare_for_execution()
+            result["execution_context"] = execution_context
+            result["status"] = "ready_to_execute"
+            result["message"] = f"Branch '{request.branch_name}' created and ready for execution"
+
+        db_session.close()
+
+        return result
     except Exception as e:
         print(f"Error creating branch: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Error creating branch: {str(e)}"
+        )
+
+
+@router.post("/api/branches/{branch_run_id}/execute")
+async def execute_branch(branch_run_id: str, request: BranchExecuteRequest = None):
+    """
+    Execute a branch workflow.
+
+    This endpoint prepares the branch for execution and returns the execution
+    context needed to start the workflow. The actual execution is triggered
+    via WebSocket connection.
+    """
+    try:
+        from cmbagent.database import get_db_session as get_session
+        from cmbagent.branching import BranchExecutor
+
+        db_session = get_session()
+        branch_executor = BranchExecutor(db_session, branch_run_id)
+
+        # Prepare execution context
+        execution_context = branch_executor.prepare_for_execution()
+
+        # Apply config overrides if provided
+        if request and request.config_overrides:
+            execution_context["config_overrides"].update(request.config_overrides)
+
+        db_session.close()
+
+        return {
+            "status": "ready_to_execute",
+            "branch_run_id": branch_run_id,
+            "execution_context": execution_context,
+            "message": "Branch prepared for execution. Connect via WebSocket to start."
+        }
+    except Exception as e:
+        print(f"Error preparing branch execution: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error preparing branch execution: {str(e)}"
+        )
+
+
+@router.get("/api/branches/{branch_run_id}/context")
+async def get_branch_context(branch_run_id: str):
+    """
+    Get the execution context for a branch.
+
+    Returns the augmented task, plan instructions, and all context
+    that will be passed to the planning phase.
+    """
+    try:
+        from cmbagent.database import get_db_session as get_session
+        from cmbagent.branching import BranchExecutor
+
+        db_session = get_session()
+        branch_executor = BranchExecutor(db_session, branch_run_id)
+
+        context = branch_executor.build_execution_context()
+
+        db_session.close()
+
+        return {
+            "status": "success",
+            "context": context
+        }
+    except Exception as e:
+        print(f"Error getting branch context: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting branch context: {str(e)}"
         )
 
 
