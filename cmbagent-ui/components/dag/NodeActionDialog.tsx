@@ -38,6 +38,7 @@ interface NodeActionDialogProps {
   runId?: string;
   onClose: () => void;
   onPlayFromNode?: (nodeId: string) => void;
+  onCreateBranch?: (nodeId: string) => void;
 }
 
 interface NodeFile {
@@ -75,13 +76,14 @@ const nodeTypeIcons: Record<NodeType, any> = {
   terminator: CheckCircle,
 };
 
-export function NodeActionDialog({ node, runId, onClose, onPlayFromNode }: NodeActionDialogProps) {
+export function NodeActionDialog({ node, runId, onClose, onPlayFromNode, onCreateBranch }: NodeActionDialogProps) {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [files, setFiles] = useState<NodeFile[]>([]);
   const [events, setEvents] = useState<ExecutionEvent[]>([]);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [playConfirm, setPlayConfirm] = useState(false);
+  const [branchConfirm, setBranchConfirm] = useState(false);
 
   useEffect(() => {
     if (node) {
@@ -962,9 +964,10 @@ export function NodeActionDialog({ node, runId, onClose, onPlayFromNode }: NodeA
         </div>
 
         {/* Actions Footer */}
-        {onPlayFromNode && node.status !== 'running' && (
-          <div className="px-6 py-4 border-t border-gray-700 bg-gray-800/50">
-            {!playConfirm ? (
+        {(onPlayFromNode || onCreateBranch) && node.status !== 'running' && (
+          <div className="px-6 py-4 border-t border-gray-700 bg-gray-800/50 space-y-3">
+            {/* Play from Node Button */}
+            {onPlayFromNode && !playConfirm && !branchConfirm && (
               <button
                 onClick={() => setPlayConfirm(true)}
                 className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-700 hover:to-blue-600 text-white text-sm font-semibold rounded-lg transition-all shadow-lg hover:shadow-xl transform hover:scale-[1.02]"
@@ -973,7 +976,21 @@ export function NodeActionDialog({ node, runId, onClose, onPlayFromNode }: NodeA
                 Play Workflow from This Node
                 <Zap className="w-4 h-4" />
               </button>
-            ) : (
+            )}
+
+            {/* Create Branch Button */}
+            {onCreateBranch && !playConfirm && !branchConfirm && (node.status === 'completed' || node.status === 'failed') && (
+              <button
+                onClick={() => setBranchConfirm(true)}
+                className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-700 hover:to-purple-600 text-white text-sm font-semibold rounded-lg transition-all shadow-lg hover:shadow-xl transform hover:scale-[1.02]"
+              >
+                <GitBranch className="w-4 h-4" />
+                Create Branch from This Node
+              </button>
+            )}
+
+            {/* Play Confirmation */}
+            {playConfirm && (
               <div className="space-y-3 animate-in slide-in-from-bottom-2 duration-200">
                 <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                   <div className="flex items-start gap-2">
@@ -996,13 +1013,49 @@ export function NodeActionDialog({ node, runId, onClose, onPlayFromNode }: NodeA
                   </button>
                   <button
                     onClick={() => {
-                      onPlayFromNode(node.id);
+                      onPlayFromNode!(node.id);
                       onClose();
                     }}
                     className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-green-600 to-green-500 hover:from-green-700 hover:to-green-600 text-white text-sm font-semibold rounded-lg transition-all shadow-lg"
                   >
                     <Zap className="w-4 h-4" />
                     Confirm & Execute
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Branch Confirmation */}
+            {branchConfirm && (
+              <div className="space-y-3 animate-in slide-in-from-bottom-2 duration-200">
+                <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-lg">
+                  <div className="flex items-start gap-2">
+                    <GitBranch className="w-5 h-5 text-purple-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <div className="text-sm font-medium text-purple-300">Create Branch</div>
+                      <div className="text-xs text-purple-200/80 mt-1">
+                        This will open the branch creation dialog. You can provide new instructions
+                        for the planner while keeping all work completed up to this point.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setBranchConfirm(false)}
+                    className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      onCreateBranch!(node.id);
+                      onClose();
+                    }}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-700 hover:to-purple-600 text-white text-sm font-semibold rounded-lg transition-all shadow-lg"
+                  >
+                    <GitBranch className="w-4 h-4" />
+                    Open Branch Dialog
                   </button>
                 </div>
               </div>

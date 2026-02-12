@@ -25,7 +25,7 @@ interface WorkflowDashboardProps {
   onResume?: () => void;
   onCancel?: () => void;
   onPlayFromNode?: (nodeId: string) => void;
-  onCreateBranch?: (nodeId: string, name: string, hypothesis?: string) => void;
+  onCreateBranch?: (nodeId: string, name: string, hypothesis?: string, newInstructions?: string, executeImmediately?: boolean) => void;
   onSelectBranch?: (branchId: string) => void;
   onViewBranch?: (branchId: string) => void;
   onCompareBranches?: (branchIdA: string, branchIdB: string) => void;
@@ -75,12 +75,14 @@ export function WorkflowDashboard({
     // Extract resumable nodes for branch creation
     const resumable: ResumableNode[] = dagData.nodes
       .filter((n) => n.status === 'completed' || n.status === 'failed')
-      .map((n) => ({
-        step_id: n.id,
-        step_number: n.step_number || 0,
-        description: n.label || n.id,
+      .map((n, index) => ({
+        node_id: n.id,
+        order_index: n.step_number || index,
+        node_type: n.type || 'agent',
+        agent: n.agent,
         status: n.status,
-        completed_at: n.completed_at,
+        has_checkpoint: true,  // Assume checkpoint exists for completed nodes
+        can_resume: true,
       }));
 
     return {
@@ -91,8 +93,14 @@ export function WorkflowDashboard({
     };
   }, [dagData]);
 
-  const handleCreateBranch = (nodeId: string, name: string, hypothesis?: string) => {
-    onCreateBranch?.(nodeId, name, hypothesis);
+  const handleCreateBranch = (
+    nodeId: string,
+    name: string,
+    hypothesis?: string,
+    newInstructions?: string,
+    executeImmediately?: boolean
+  ) => {
+    onCreateBranch?.(nodeId, name, hypothesis, newInstructions, executeImmediately);
     setShowCreateBranchDialog(false);
   };
 

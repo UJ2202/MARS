@@ -8,6 +8,8 @@ import Header from '@/components/Header'
 import TopNavigation from '@/components/TopNavigation'
 import { ApprovalChatPanel } from '@/components/ApprovalChatPanel'
 import { CopilotView } from '@/components/CopilotView'
+import { SessionList } from '@/components/SessionManager'
+import { SessionDetailPanel } from '@/components/SessionManager/SessionDetailPanel'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import { WorkflowDashboard } from '@/components/workflow'
 import { DAGWorkspace } from '@/components/dag'
@@ -17,7 +19,7 @@ import { getApiUrl } from '@/lib/config'
 
 export default function Home() {
   const [directoryToOpen, setDirectoryToOpen] = useState<string | null>(null)
-  const [rightPanelTab, setRightPanelTab] = useState<'console' | 'workflow' | 'results'>('console')
+  const [rightPanelTab, setRightPanelTab] = useState<'console' | 'workflow' | 'results' | 'sessions'>('console')
   const [elapsedTime, setElapsedTime] = useState('0:00')
   const [startTime, setStartTime] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -33,18 +35,24 @@ export default function Home() {
   }>>([])
   const [copilotConfig, setCopilotConfig] = useState({
     enablePlanning: true,
-    approvalMode: 'after_step',
+    approvalMode: 'none',  // Don't use approval mode for chat - each message is explicit human turn
     autoApproveSimple: true,
     maxPlanSteps: 5,
     model: 'gpt-4.1-2025-04-14',
     researcherModel: 'gpt-4.1-2025-04-14',
     plannerModel: 'gpt-4.1-2025-04-14',
+    toolApproval: 'prompt',
+    intelligentRouting: 'balanced',
+    conversational: false,  // Don't use conversational mode - chat messages are the conversation
   })
 
   // Branch and history state
   const [branches, setBranches] = useState<Branch[]>([])
   const [currentBranchId, setCurrentBranchId] = useState<string | undefined>()
   const [workflowHistory, setWorkflowHistory] = useState<WorkflowRow[]>([])
+
+  // Session detail state
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
 
   // Use WebSocket context instead of local state
   const {
@@ -71,6 +79,8 @@ export default function Home() {
     clearApproval,
     agentMessages,
     clearAgentMessages,
+    copilotSessionId,
+    setCopilotSessionId,
   } = useWebSocketContext()
 
   // Track elapsed time when running
@@ -147,6 +157,9 @@ export default function Home() {
         model: config.model ?? 'gpt-4.1-2025-04-14',
         researcherModel: config.researcherModel ?? 'gpt-4.1-2025-04-14',
         plannerModel: config.plannerModel ?? 'gpt-4.1-2025-04-14',
+        toolApproval: config.toolApproval ?? 'prompt',
+        intelligentRouting: config.intelligentRouting ?? 'balanced',
+        conversational: config.conversational ?? false,
       })
       return // Don't start a task, just show the UI
     }
@@ -166,6 +179,9 @@ export default function Home() {
         model: config.model ?? 'gpt-4.1-2025-04-14',
         researcherModel: config.researcherModel ?? 'gpt-4.1-2025-04-14',
         plannerModel: config.plannerModel ?? 'gpt-4.1-2025-04-14',
+        toolApproval: config.toolApproval ?? 'prompt',
+        intelligentRouting: config.intelligentRouting ?? 'balanced',
+        conversational: config.conversational ?? false,
       })
 
       // Add user message to copilot messages
@@ -257,6 +273,13 @@ export default function Home() {
   }
 
   // Handler for sending messages from CopilotView
+  // HUMAN INPUT FLOW:
+  // - Each user message is a human turn in the conversation
+  // - First message creates a new orchestrator session
+  // - Subsequent messages continue the same session (preserves context)
+  // - approvalMode='none' and conversational=false means no mid-execution pauses
+  // - Tool approvals (dangerous operations) still work via toolApproval setting
+  // - maxRounds per message keeps responses concise
   const handleCopilotSendMessage = async (message: string) => {
     if (isRunning || !message.trim()) return
 
@@ -276,7 +299,12 @@ export default function Home() {
     const config = {
       mode: 'copilot',
       ...copilotConfig,
-      continuousMode: true,
+      continuousMode: false,  // Don't auto-continue - wait for next user message
+      conversational: false,   // Chat interface handles conversation flow
+      approvalMode: 'none',    // No mid-execution approvals in chat mode
+      maxRounds: 10,           // Allow more rounds for complex tasks (was 5)
+      // Indicate if this is a continuation of existing session
+      copilotSessionId: copilotSessionId,
     }
 
     // Start the task
@@ -285,6 +313,8 @@ export default function Home() {
     setResults(null)
     setStartTime(Date.now())
 
+    // Always generate a unique task ID for each message
+    // The copilotSessionId is passed in config for session continuity
     const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
     try {
@@ -303,6 +333,155 @@ export default function Home() {
         status: 'error' as const,
       }
       setCopilotMessages(prev => [...prev, errorMessage])
+    }
+  }
+
+  // Handler to clear copilot session and start fresh
+  const handleClearCopilotSession = () => {
+    setCopilotSessionId(null)
+    setCopilotMessages([])
+    clearAgentMessages()
+    clearConsole()
+    setResults(null)
+  }
+
+  // Handler to view session console logs
+  const handleViewSessionLogs = async (sessionId: string, mode?: string) => {
+    try {
+      const response = await fetch(getApiUrl(`/api/sessions/${sessionId}/history?limit=500`))
+      if (!response.ok) throw new Error('Failed to load session history')
+
+      const data = await response.json()
+      const messages = data.messages || []
+
+      clearConsole()
+
+      if (messages.length === 0) {
+        addConsoleOutput(`[Session ${sessionId}] No logs recorded for this session.`)
+      } else {
+        addConsoleOutput(`--- Session Logs (${mode || 'unknown'}) - ${messages.length} entries ---`)
+        messages.forEach((msg: any) => {
+          const agent = msg.agent ? `[${msg.agent}]` : ''
+          const role = msg.role || 'system'
+          const content = msg.content || ''
+          const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ''
+          const prefix = ts ? `${ts} ` : ''
+
+          if (role === 'user') {
+            addConsoleOutput(`${prefix}[USER] ${content}`)
+          } else if (agent) {
+            addConsoleOutput(`${prefix}${agent} ${content}`)
+          } else {
+            addConsoleOutput(`${prefix}${content}`)
+          }
+        })
+        addConsoleOutput(`--- End of Session Logs ---`)
+      }
+
+      // Switch to console tab to show the logs
+      setRightPanelTab('console')
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error'
+      addConsoleOutput(`Failed to load session logs: ${msg}`)
+    }
+  }
+
+  // Handler to resume a session from the Sessions tab (works for ALL modes)
+  const handleResumeSessionFromList = async (sessionId: string, mode?: string) => {
+    if (isRunning) return
+
+    try {
+      // Fetch session details to get task context
+      const response = await fetch(getApiUrl(`/api/sessions/${sessionId}`))
+      if (!response.ok) throw new Error('Failed to load session')
+
+      const sessionData = await response.json()
+      const sessionMode = mode || sessionData.mode || 'one-shot'
+
+      addConsoleOutput(`Resuming session ${sessionId} (mode: ${sessionMode})`)
+
+      // Mark session as active in DB
+      await fetch(getApiUrl(`/api/sessions/${sessionId}/resume`), { method: 'POST' })
+
+      // For copilot mode, switch to copilot view and let user send next message
+      if (sessionMode === 'copilot') {
+        setIsCopilotMode(true)
+        setCopilotSessionId(sessionId)
+
+        // Restore copilot config from session
+        if (sessionData.config) {
+          setCopilotConfig(prev => ({
+            ...prev,
+            enablePlanning: sessionData.config.enablePlanning ?? prev.enablePlanning,
+            model: sessionData.config.model ?? prev.model,
+            researcherModel: sessionData.config.researcherModel ?? prev.researcherModel,
+            plannerModel: sessionData.config.plannerModel ?? prev.plannerModel,
+            toolApproval: sessionData.config.toolApproval ?? prev.toolApproval,
+            intelligentRouting: sessionData.config.intelligentRouting ?? prev.intelligentRouting,
+          }))
+        }
+
+        // Load conversation history into chat
+        if (sessionData.conversation_history?.length > 0) {
+          const messages = sessionData.conversation_history.map((msg: any, idx: number) => ({
+            id: `session_${idx}`,
+            role: msg.role === 'user' ? 'user' as const : 'assistant' as const,
+            content: msg.agent ? `[${msg.agent}] ${msg.content}` : msg.content,
+            timestamp: new Date(msg.timestamp || Date.now()),
+            status: 'complete' as const,
+          }))
+          setCopilotMessages(messages)
+        }
+
+        addConsoleOutput(`Copilot session restored. Type a message to continue.`)
+        // Switch to workflow tab to show the copilot view
+        setRightPanelTab('workflow')
+        return
+      }
+
+      // For resumable modes (planning-control, hitl-interactive, idea-generation),
+      // start a new WebSocket task that continues from the saved session state
+      const resumableModes = ['planning-control', 'hitl-interactive', 'idea-generation']
+      if (resumableModes.includes(sessionMode)) {
+        // Build config from session data
+        const resumeConfig = {
+          ...(sessionData.config || {}),
+          mode: sessionMode,
+          session_id: sessionId,
+          copilotSessionId: sessionId, // Backend checks both keys
+        }
+
+        // Get the last user task from conversation history
+        const lastUserMsg = sessionData.conversation_history
+          ?.filter((m: any) => m.role === 'user')
+          ?.pop()
+        const taskDescription = lastUserMsg?.content || sessionData.config?.task || 'Continue previous session'
+
+        // Start execution via WebSocket
+        setIsRunning(true)
+        clearConsole()
+        setResults(null)
+        setStartTime(Date.now())
+
+        const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+        await connect(taskId, taskDescription, resumeConfig)
+        return
+      }
+
+      // For non-resumable modes (one-shot, ocr, arxiv, enhance-input),
+      // just show previous output
+      if (sessionData.conversation_history?.length > 0) {
+        sessionData.conversation_history.forEach((msg: any) => {
+          if (msg.content) {
+            addConsoleOutput(`[${msg.agent || msg.role || 'system'}] ${msg.content.substring(0, 200)}`)
+          }
+        })
+      }
+
+      addConsoleOutput(`Session ${sessionId} history loaded. This mode does not support mid-execution resume.`)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error'
+      addConsoleOutput(`Failed to resume session: ${msg}`)
     }
   }
 
@@ -358,20 +537,67 @@ export default function Home() {
   }
 
   // Branch handlers
-  const handleCreateBranch = (nodeId: string, name: string, hypothesis?: string) => {
-    const newBranch: Branch = {
-      branch_id: `branch_${Date.now()}`,
-      run_id: currentRunId || '',
-      parent_branch_id: currentBranchId,
-      branch_point_step_id: nodeId,
-      hypothesis,
-      name,
-      created_at: new Date().toISOString(),
-      status: 'draft',
-      is_main: false,
+  const handleCreateBranch = async (
+    nodeId: string,
+    name: string,
+    hypothesis?: string,
+    newInstructions?: string,
+    executeImmediately?: boolean
+  ) => {
+    if (!currentRunId) {
+      addConsoleOutput(`❌ Cannot create branch: No active workflow run`)
+      return
     }
-    setBranches(prev => [...prev, newBranch])
-    addConsoleOutput(`🌿 Created branch "${name}" from node ${nodeId}`)
+
+    try {
+      addConsoleOutput(`🌿 Creating branch "${name}" from node ${nodeId}...`)
+
+      const response = await fetch(`http://localhost:8000/api/runs/${currentRunId}/branch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          node_id: nodeId,
+          branch_name: name,
+          hypothesis: hypothesis || null,
+          new_instructions: newInstructions || null,
+          execute_immediately: executeImmediately || false
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to create branch')
+      }
+
+      const result = await response.json()
+
+      // Create local branch record
+      const newBranch: Branch = {
+        branch_id: result.branch_run_id,
+        run_id: currentRunId,
+        parent_branch_id: currentBranchId,
+        branch_point_step_id: nodeId,
+        hypothesis,
+        name,
+        created_at: new Date().toISOString(),
+        status: executeImmediately ? 'executing' : 'draft',
+        is_main: false,
+      }
+      setBranches(prev => [...prev, newBranch])
+      addConsoleOutput(`✅ Branch "${name}" created successfully (ID: ${result.branch_run_id})`)
+
+      // If execute_immediately was set and we got execution context, the branch is ready
+      if (result.status === 'ready_to_execute' && executeImmediately) {
+        addConsoleOutput(`🚀 Branch execution prepared. Connect via WebSocket to start.`)
+        // TODO: Trigger WebSocket connection for branch execution
+      }
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      addConsoleOutput(`❌ Failed to create branch: ${errorMessage}`)
+    }
   }
 
   const handleSelectBranch = (branchId: string) => {
@@ -470,6 +696,7 @@ export default function Home() {
                   isRunning={isRunning}
                   onSendMessage={handleCopilotSendMessage}
                   onStop={handleStopTask}
+                  onClearSession={handleClearCopilotSession}
                   pendingApproval={pendingApproval}
                   onApprovalResolve={handleApprovalResolve}
                   messages={copilotMessages}
@@ -618,6 +845,16 @@ export default function Home() {
                   >
                     Results
                   </button>
+                  <button
+                    onClick={() => setRightPanelTab('sessions')}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${
+                      rightPanelTab === 'sessions'
+                        ? 'text-blue-400 border-b-2 border-blue-400'
+                        : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Sessions
+                  </button>
                 </div>
 
                 {/* Tab Content */}
@@ -669,6 +906,28 @@ export default function Home() {
                   {rightPanelTab === 'results' && (
                     <div className="h-full overflow-y-auto">
                       <ResultDisplay results={results} />
+                    </div>
+                  )}
+                  {rightPanelTab === 'sessions' && (
+                    <div className="h-full flex">
+                      <div className={`${selectedSessionId ? 'w-1/3 border-r border-gray-700' : 'w-full'} h-full overflow-y-auto p-3`}>
+                        <SessionList
+                          onResume={handleResumeSessionFromList}
+                          onViewLogs={handleViewSessionLogs}
+                          onSelect={(id) => setSelectedSessionId(id)}
+                          selectedSessionId={selectedSessionId}
+                          compact={!!selectedSessionId}
+                        />
+                      </div>
+                      {selectedSessionId && (
+                        <div className="w-2/3 h-full overflow-hidden">
+                          <SessionDetailPanel
+                            sessionId={selectedSessionId}
+                            onClose={() => setSelectedSessionId(null)}
+                            onResume={handleResumeSessionFromList}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

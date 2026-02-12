@@ -52,9 +52,11 @@ export interface FileComparison {
 }
 
 export interface ResumableNode {
-  step_id: string;
-  step_number: number;
-  description: string;
+  node_id: string;  // DAG node ID (e.g., "step_1", "planning")
+  order_index: number;
+  node_type: string;
+  agent?: string;
   status: string;
-  completed_at?: string;
+  has_checkpoint: boolean;
+  can_resume: boolean;
 }

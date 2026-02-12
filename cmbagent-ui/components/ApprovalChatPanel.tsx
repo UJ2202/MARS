@@ -30,6 +30,31 @@ const OPTION_CONFIG: Record<string, { icon: React.ReactNode; color: string; labe
     label: 'Continue',
     description: 'Continue to next step'
   },
+  // Tool approval options
+  allow: {
+    icon: <CheckCircle className="w-4 h-4" />,
+    color: 'bg-green-600 hover:bg-green-700 border-green-500',
+    label: 'Allow Once',
+    description: 'Allow this operation once'
+  },
+  allow_session: {
+    icon: <CheckCircle className="w-4 h-4" />,
+    color: 'bg-emerald-600 hover:bg-emerald-700 border-emerald-500',
+    label: 'Allow for Session',
+    description: 'Auto-approve this tool type for the rest of this session'
+  },
+  deny: {
+    icon: <XCircle className="w-4 h-4" />,
+    color: 'bg-red-600 hover:bg-red-700 border-red-500',
+    label: 'Deny',
+    description: 'Block this operation'
+  },
+  edit: {
+    icon: <Edit3 className="w-4 h-4" />,
+    color: 'bg-blue-600 hover:bg-blue-700 border-blue-500',
+    label: 'Edit',
+    description: 'Modify the operation'
+  },
   submit: {
     icon: <Send className="w-4 h-4" />,
     color: 'bg-blue-600 hover:bg-blue-700 border-blue-500',
@@ -89,6 +114,31 @@ const OPTION_CONFIG: Record<string, { icon: React.ReactNode; color: string; labe
     color: 'bg-gray-600 hover:bg-gray-700 border-gray-500',
     label: 'Skip',
     description: 'Skip this step'
+  },
+  // Proposal options
+  option_1: {
+    icon: <CheckCircle className="w-4 h-4" />,
+    color: 'bg-blue-600 hover:bg-blue-700 border-blue-500',
+    label: 'Option 1',
+    description: 'Quick & Direct approach'
+  },
+  option_2: {
+    icon: <CheckCircle className="w-4 h-4" />,
+    color: 'bg-purple-600 hover:bg-purple-700 border-purple-500',
+    label: 'Option 2',
+    description: 'Planned & Thorough approach'
+  },
+  option_3: {
+    icon: <CheckCircle className="w-4 h-4" />,
+    color: 'bg-cyan-600 hover:bg-cyan-700 border-cyan-500',
+    label: 'Option 3',
+    description: 'Research First approach'
+  },
+  custom: {
+    icon: <Edit3 className="w-4 h-4" />,
+    color: 'bg-amber-600 hover:bg-amber-700 border-amber-500',
+    label: 'Custom',
+    description: 'Describe your own approach'
   }
 }
 
@@ -154,9 +204,21 @@ export function ApprovalChatPanel({ approval, onResolve, isExpanded = true, onTo
         return '⏸️ Manual Pause'
       case 'ag2_dynamic':
         return '🤖 Agent Requesting Input'
+      case 'tool_approval':
+        return '🔧 Tool Approval Required'
+      case 'clarification':
+        return '❓ Quick Question'
+      case 'proposal':
+        return '💡 Choose an Approach'
       case 'chat_input':
       case 'next_task':
         return '💬 Your Turn'
+      case 'copilot_turn':
+        return '💬 Your Turn'
+      case 'copilot_proposal':
+        return '🤖 Copilot Proposal'
+      case 'copilot_result':
+        return '📊 Results Ready'
       default:
         return '🔔 Approval Required'
     }
@@ -165,10 +227,116 @@ export function ApprovalChatPanel({ approval, onResolve, isExpanded = true, onTo
   // Check if this is a chat input type (requires primary text input)
   const isChatInput = approval.checkpoint_type === 'chat_input' ||
                       approval.checkpoint_type === 'next_task' ||
+                      approval.checkpoint_type === 'clarification' ||
+                      approval.checkpoint_type === 'copilot_turn' ||
                       approval.context?.requires_text_input === true
 
   const formatContext = (context: Record<string, any>) => {
     if (!context) return null
+
+    // Handle tool approval context specially
+    if (context.tool_category) {
+      const categoryLabels: Record<string, { icon: string; label: string; color: string }> = {
+        bash: { icon: '💻', label: 'Shell Command', color: 'bg-orange-500/20 text-orange-300 border-orange-500/50' },
+        code_exec: { icon: '🐍', label: 'Code Execution', color: 'bg-blue-500/20 text-blue-300 border-blue-500/50' },
+        file_write: { icon: '📝', label: 'File Write', color: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/50' },
+        install: { icon: '📦', label: 'Package Install', color: 'bg-purple-500/20 text-purple-300 border-purple-500/50' },
+        web: { icon: '🌐', label: 'Web Request', color: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50' },
+      }
+      const catInfo = categoryLabels[context.tool_category] || { 
+        icon: '🔧', 
+        label: context.tool_category, 
+        color: 'bg-gray-500/20 text-gray-300 border-gray-500/50' 
+      }
+      
+      return (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${catInfo.color}`}>
+              <span>{catInfo.icon}</span>
+              {catInfo.label}
+            </span>
+            {context.agent_name && context.agent_name !== 'unknown' && (
+              <span className="text-xs text-gray-500">from {context.agent_name}</span>
+            )}
+          </div>
+          {context.prompt && (
+            <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
+              <pre className="text-sm text-gray-300 whitespace-pre-wrap font-mono overflow-auto max-h-48">
+                {context.prompt}
+              </pre>
+            </div>
+          )}
+          {context.can_auto_allow && (
+            <div className="text-xs text-gray-500 italic">
+              💡 Tip: Click "Allow for Session" to auto-approve future {catInfo.label.toLowerCase()} operations
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    // Handle proposals display
+    if (context.proposals && Array.isArray(context.proposals)) {
+      return (
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-gray-300">💡 Suggested Approaches:</div>
+          <div className="space-y-3">
+            {context.proposals.map((proposal: any, idx: number) => {
+              const title = proposal.title || `Option ${idx + 1}`
+              const description = proposal.description || ''
+              const pros = proposal.pros || []
+              const cons = proposal.cons || []
+
+              return (
+                <div key={idx} className="bg-gray-800/30 rounded-lg p-3 border border-gray-700/50">
+                  <div className="flex items-start gap-2">
+                    <span className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600/30 text-blue-300 text-xs flex items-center justify-center font-medium">
+                      {idx + 1}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-200">{title}</div>
+                      {description && (
+                        <div className="text-sm text-gray-400 mt-1">{description}</div>
+                      )}
+                      {pros.length > 0 && (
+                        <div className="mt-2 text-xs text-green-400">
+                          ✅ {pros.join(' • ')}
+                        </div>
+                      )}
+                      {cons.length > 0 && (
+                        <div className="mt-1 text-xs text-yellow-400">
+                          ⚠️ {cons.join(' • ')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="text-xs text-gray-500 italic">
+            Select an option above or describe your own approach
+          </div>
+        </div>
+      )
+    }
+
+    // Handle clarification questions
+    if (context.questions && Array.isArray(context.questions)) {
+      return (
+        <div className="space-y-3">
+          <div className="text-sm font-medium text-gray-300">❓ Questions:</div>
+          <ol className="space-y-2">
+            {context.questions.map((question: string, idx: number) => (
+              <li key={idx} className="bg-gray-800/30 rounded-lg p-2 border border-gray-700/50 text-sm text-gray-300">
+                {idx + 1}. {question}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )
+    }
     
     // Handle plan display specially
     if (context.plan && Array.isArray(context.plan)) {

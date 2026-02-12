@@ -96,7 +96,8 @@ export function useEventHandler(handlers: EventHandlers) {
         handlers.onWorkflowCompleted?.();
         break;
       case WebSocketEventType.WORKFLOW_FAILED:
-        handlers.onWorkflowFailed?.(data.error || 'Unknown error');
+      case 'workflow_cancelled':  // Backend sends this on cancel
+        handlers.onWorkflowFailed?.(data.error || data.message || 'Unknown error');
         break;
 
       // Step events
@@ -203,7 +204,12 @@ export function useEventHandler(handlers: EventHandlers) {
 
       // Error events
       case WebSocketEventType.ERROR_OCCURRED:
-        handlers.onError?.(data as ErrorOccurredData);
+      case 'error':  // Backend sends 'error' not 'error_occurred'
+        handlers.onError?.({
+          error_type: data.error_type || 'ExecutionError',
+          message: data.message || 'Unknown error',
+          traceback: data.traceback,
+        });
         handlers.onOutput?.(`❌ Error: ${data.message}`);
         break;
 

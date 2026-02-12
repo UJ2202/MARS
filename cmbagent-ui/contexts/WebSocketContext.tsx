@@ -5,7 +5,7 @@
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react';
 import { useEventHandler } from '@/hooks/useEventHandler';
 import { WebSocketEvent, DAGCreatedData, DAGNodeStatusChangedData, ApprovalRequestedData, DAGNodeData, DAGEdgeData, CostUpdateData, FilesUpdatedData, AgentMessageData } from '@/types/websocket-events';
-import { getWsUrl } from '@/lib/config';
+import { getWsUrl, getApiUrl } from '@/lib/config';
 import { CostSummary, CostTimeSeries, ModelCost, AgentCost, StepCost } from '@/types/cost';
 
 interface WebSocketContextValue {
@@ -24,6 +24,10 @@ interface WebSocketContextValue {
   // Current run
   currentRunId: string | null;
   setCurrentRunId: (runId: string | null) => void;
+
+  // Copilot session (for conversation continuation)
+  copilotSessionId: string | null;
+  setCopilotSessionId: (sessionId: string | null) => void;
 
   // Workflow state
   workflowStatus: string | null;
@@ -60,6 +64,10 @@ interface WebSocketContextValue {
   // Agent messages for copilot chat
   agentMessages: AgentMessageData[];
   clearAgentMessages: () => void;
+
+  // Session management (Stage 11)
+  resumeSession: (sessionId: string, additionalContext?: string) => Promise<void>;
+  loadSessionHistory: (sessionId: string) => Promise<any>;
 }
 
 const WebSocketContext = createContext<WebSocketContextValue | undefined>(undefined);
@@ -77,6 +85,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
   // Local state
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [copilotSessionId, setCopilotSessionId] = useState<string | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
   const [dagData, setDAGData] = useState<{ run_id?: string; nodes: DAGNodeData[]; edges: DAGEdgeData[] } | null>(null);
   const [pendingApproval, setPendingApproval] = useState<ApprovalRequestedData | null>(null);
@@ -211,7 +220,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       clearApproval();
     },
     onOutput: addConsoleOutput,
-    onResult: setResults,
+    onResult: (result: any) => {
+      setResults(result);
+      // Store session_id for continuation (works for ALL modes)
+      if (result?.session_id) {
+        setCopilotSessionId(result.session_id);
+      }
+    },
     onComplete: () => {
       setWorkflowStatus('completed');
       setIsRunning(false);
@@ -221,8 +236,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     onError: (data) => {
       addConsoleOutput(`❌ ${data.error_type}: ${data.message}`);
     },
-    onStatus: (status) => {
-      addConsoleOutput(`📊 ${status}`);
+    onStatus: (status: any) => {
+      const message = typeof status === 'string' ? status : status?.message || String(status);
+      addConsoleOutput(`📊 ${message}`);
+      // Capture session_id from initial status event (Stages 10-11)
+      if (typeof status === 'object' && status?.session_id) {
+        setCopilotSessionId(status.session_id);
+      }
     },
     onFilesUpdated: (data: FilesUpdatedData) => {
       // Increment counter to trigger file refresh in DAGFilesView
@@ -572,6 +592,40 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     };
   }, [stopHeartbeat]);
 
+  // Session management (Stage 11)
+  const resumeSession = useCallback(async (sessionId: string, additionalContext?: string) => {
+    try {
+      // Load session info to get config
+      const response = await fetch(getApiUrl(`/api/sessions/${sessionId}`));
+      if (!response.ok) throw new Error("Failed to load session");
+
+      const session = await response.json();
+
+      // Resume the session via API
+      await fetch(getApiUrl(`/api/sessions/${sessionId}/resume`), { method: "POST" });
+
+      // Generate a task ID and connect with session context
+      const taskId = `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      await connect(taskId, additionalContext || "Continue the previous session.", {
+        ...session.config,
+        copilotSessionId: sessionId,
+        additionalContext: additionalContext || "",
+        mode: session.mode,
+      });
+
+      setCopilotSessionId(sessionId);
+    } catch (error) {
+      console.error("Failed to resume session:", error);
+      throw error;
+    }
+  }, [connect, setCopilotSessionId]);
+
+  const loadSessionHistory = useCallback(async (sessionId: string) => {
+    const response = await fetch(getApiUrl(`/api/sessions/${sessionId}/history`));
+    if (!response.ok) throw new Error("Failed to load history");
+    return response.json();
+  }, []);
+
   const value: WebSocketContextValue = {
     connected,
     reconnectAttempt,
@@ -583,6 +637,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     reconnect,
     currentRunId,
     setCurrentRunId,
+    copilotSessionId,
+    setCopilotSessionId,
     workflowStatus,
     setWorkflowStatus,
     dagData,
@@ -601,6 +657,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     filesUpdatedCounter,
     agentMessages,
     clearAgentMessages,
+    resumeSession,
+    loadSessionHistory,
   };
 
   return (

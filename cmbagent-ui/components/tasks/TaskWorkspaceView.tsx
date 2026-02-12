@@ -14,6 +14,7 @@ interface TaskWorkspaceViewProps {
   isCollapsible?: boolean
   defaultCollapsed?: boolean
   showProgress?: boolean
+  isRunning?: boolean
 }
 
 export default function TaskWorkspaceView({
@@ -24,7 +25,8 @@ export default function TaskWorkspaceView({
   costTimeSeries,
   isCollapsible = true,
   defaultCollapsed = false,
-  showProgress = true
+  showProgress = true,
+  isRunning = false
 }: TaskWorkspaceViewProps) {
   const [workspaceView, setWorkspaceView] = useState<'dag' | 'console'>('dag')
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed)
@@ -142,7 +144,7 @@ export default function TaskWorkspaceView({
                 </div>
               )
             ) : (
-              <ConsoleOutput output={consoleOutput} />
+              <ConsoleOutput output={consoleOutput} isRunning={isRunning} />
             )}
           </div>
         )}

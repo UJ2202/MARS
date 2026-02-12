@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Send, Bot, User, Loader2, StopCircle, Settings, ChevronDown, ChevronUp, Terminal, Code, Copy, Check } from 'lucide-react'
+import { Send, Bot, User, Loader2, StopCircle, Settings, ChevronDown, ChevronUp, Terminal, Code, Copy, Check, FolderOpen } from 'lucide-react'
 import { ApprovalRequestedData } from '@/types/websocket-events'
 import { CredentialsKeyIcon } from './CredentialsKeyIcon'
 import { CredentialsModal } from './CredentialsModal'
 import { useCredentials } from '../hooks/useCredentials'
+import { SessionList } from './SessionManager/SessionList'
 
 interface Message {
   id: string
@@ -20,6 +21,8 @@ interface CopilotViewProps {
   isRunning: boolean
   onSendMessage: (message: string) => void
   onStop: () => void
+  onClearSession?: () => void  // Optional: clear session and start fresh
+  onResumeSession?: (sessionId: string) => void  // Resume a saved session
   pendingApproval: ApprovalRequestedData | null
   onApprovalResolve: (resolution: string, feedback?: string, modifications?: string) => void
   messages?: Message[]
@@ -31,6 +34,8 @@ interface CopilotViewProps {
     model: string
     researcherModel: string
     plannerModel: string
+    toolApproval?: string
+    intelligentRouting?: string
   }
   onConfigChange?: (config: any) => void
 }
@@ -144,8 +149,7 @@ export function CopilotView({
   consoleOutput,
   isRunning,
   onSendMessage,
-  onStop,
-  pendingApproval,
+  onStop,  onClearSession,  onResumeSession,  pendingApproval,
   onApprovalResolve,
   messages = [],
   config,
@@ -154,6 +158,7 @@ export function CopilotView({
   const [inputValue, setInputValue] = useState('')
   const [showLogs, setShowLogs] = useState(true)
   const [showSettings, setShowSettings] = useState(false)
+  const [showSessions, setShowSessions] = useState(false)
   const [showCredentialsModal, setShowCredentialsModal] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const logsRef = useRef<HTMLDivElement>(null)
@@ -217,6 +222,13 @@ export function CopilotView({
                       pendingApproval?.checkpoint_type === 'next_task' ||
                       pendingApproval?.context?.requires_text_input === true
 
+  const handleResumeSession = async (sessionId: string) => {
+    if (onResumeSession) {
+      onResumeSession(sessionId)
+      setShowSessions(false)
+    }
+  }
+
   // Filter recent logs (last 50 for performance)
   const recentLogs = consoleOutput.slice(-50)
 
@@ -241,6 +253,13 @@ export function CopilotView({
             title={showLogs ? 'Hide logs' : 'Show logs'}
           >
             <Terminal className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowSessions(!showSessions)}
+            className={`p-1 rounded transition-colors ${showSessions ? 'text-purple-400 bg-purple-500/20' : 'text-gray-400 hover:text-white'}`}
+            title="Saved Sessions"
+          >
+            <FolderOpen className="w-4 h-4" />
           </button>
           <button
             onClick={() => setShowSettings(!showSettings)}
@@ -269,7 +288,7 @@ export function CopilotView({
       {/* Settings Panel - Compact */}
       {showSettings && config && onConfigChange && (
         <div className="px-3 py-2 border-b border-gray-700 bg-gray-800/30 flex-shrink-0">
-          <div className="grid grid-cols-4 gap-2 text-xs">
+          <div className="grid grid-cols-6 gap-2 text-xs">
             <div>
               <label className="block text-gray-400 mb-0.5">Planning</label>
               <select
@@ -316,7 +335,50 @@ export function CopilotView({
                 <option value="false">No</option>
               </select>
             </div>
+            <div>
+              <label className="block text-gray-400 mb-0.5">Tool Approval</label>
+              <select
+                value={config.toolApproval || 'none'}
+                onChange={(e) => onConfigChange({ ...config, toolApproval: e.target.value })}
+                className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs"
+              >
+                <option value="none">None</option>
+                <option value="prompt">Prompt</option>
+                <option value="auto_allow_all">Auto Allow</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-gray-400 mb-0.5">Intelligence</label>
+              <select
+                value={config.intelligentRouting || 'balanced'}
+                onChange={(e) => onConfigChange({ ...config, intelligentRouting: e.target.value })}
+                className="w-full px-1.5 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs"
+              >
+                <option value="aggressive">Cautious</option>
+                <option value="balanced">Balanced</option>
+                <option value="minimal">Direct</option>
+              </select>
+            </div>
           </div>
+        </div>
+      )}
+
+      {/* Sessions Panel */}
+      {showSessions && (
+        <div className="flex-shrink-0 border-b border-gray-700 p-3 bg-gray-800/30" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+          <div className="flex justify-between items-center mb-2">
+            <h2 className="text-sm font-bold text-white">Saved Sessions</h2>
+            <button
+              onClick={() => setShowSessions(false)}
+              className="text-xs text-gray-400 hover:text-white transition-colors"
+            >
+              Close
+            </button>
+          </div>
+          <SessionList
+            onResume={handleResumeSession}
+            modeFilter="copilot"
+          />
         </div>
       )}
 

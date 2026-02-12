@@ -31,6 +31,12 @@ export enum WebSocketEventType {
   DAG_UPDATED = 'dag_updated',
   DAG_NODE_STATUS_CHANGED = 'dag_node_status_changed',
 
+  // Branch events
+  BRANCH_CREATED = 'branch_created',
+  BRANCH_EXECUTING = 'branch_executing',
+  BRANCH_COMPLETED = 'branch_completed',
+  BRANCH_FAILED = 'branch_failed',
+
   // Agent events
   AGENT_MESSAGE = 'agent_message',
   AGENT_THINKING = 'agent_thinking',
@@ -222,4 +228,35 @@ export interface FilesUpdatedData {
   node_id?: string;
   step_id?: string;
   files_tracked: number;
+}
+
+// Branch event data types
+export interface BranchCreatedData {
+  branch_run_id: string;
+  parent_run_id: string;
+  branch_name: string;
+  hypothesis?: string;
+  new_instructions?: string;
+  branched_from_step: string;
+}
+
+export interface BranchExecutingData {
+  branch_run_id: string;
+  parent_run_id: string;
+  branch_name: string;
+  augmented_task?: string;
+}
+
+export interface BranchCompletedData {
+  branch_run_id: string;
+  parent_run_id: string;
+  branch_name: string;
+  result?: Record<string, any>;
+}
+
+export interface BranchFailedData {
+  branch_run_id: string;
+  parent_run_id: string;
+  branch_name: string;
+  error: string;
 }

@@ -733,7 +733,7 @@ Keep each section concise and actionable. Focus on quality over quantity.`
               <div className="flex-1 min-h-0">
                 <TaskWorkspaceView
                   dagData={dagData}
-                  currentRunId={currentRunId}
+                  currentRunId={currentRunId ?? undefined}
                   consoleOutput={consoleOutput}
                   costSummary={costSummary}
                   costTimeSeries={costTimeSeries}
@@ -758,7 +758,7 @@ Keep each section concise and actionable. Focus on quality over quantity.`
                   )}
                 </div>
                 <div className="flex-1 overflow-auto">
-                  <ConsoleOutput output={consoleOutput} />
+                  <ConsoleOutput output={consoleOutput} isRunning={isRunning} />
                 </div>
               </div>
 
