@@ -10,6 +10,9 @@ from typing import Any, Dict, List, Optional
 import json
 import pickle
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -97,14 +100,14 @@ class WorkflowContext:
         for key, value in original_shared_state.items():
             # Skip private keys (often contain closures or non-picklable objects)
             if key.startswith('_'):
-                print(f"[Context.save] Skipping non-picklable key: {key}")
+                logger.debug("Skipping non-picklable key: %s", key)
                 continue
             try:
                 # Test if item is picklable
                 pickle.dumps(value)
                 filtered_shared_state[key] = value
             except (TypeError, pickle.PicklingError) as e:
-                print(f"[Context.save] Skipping non-picklable item '{key}': {e}")
+                logger.debug("Skipping non-picklable item '%s': %s", key, e)
         
         # Temporarily replace shared_state with filtered version
         self.shared_state = filtered_shared_state

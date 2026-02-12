@@ -32,18 +32,24 @@ class BranchManager:
 
     def create_branch(
         self,
-        step_id: str,
+        node_id: str,
         branch_name: str,
         hypothesis: Optional[str] = None,
+        new_instructions: Optional[str] = None,
         modifications: Optional[Dict[str, Any]] = None
     ) -> str:
         """
-        Create a new branch from a specific step.
+        Create a new branch from a specific DAG node.
 
         Args:
-            step_id: ID of step to branch from
+            node_id: ID of DAG node to branch from (e.g., "step_1", "planning")
             branch_name: Descriptive name for branch
             hypothesis: Scientific hypothesis being tested
+            new_instructions: New instructions for the branch planning phase.
+                These instructions will be passed to the planner along with
+                context from completed work. The planner will create a NEW
+                plan based on these instructions while being aware of what
+                has already been done.
             modifications: Dict of changes to apply to branch
                 {
                     "context_changes": {...},
@@ -54,36 +60,63 @@ class BranchManager:
         Returns:
             new_run_id: ID of newly created branch workflow
         """
-        # 1. Load parent run and step
+        # 1. Load parent run
         parent_run = self.db.query(WorkflowRun).filter(WorkflowRun.id == self.run_id).first()
-        parent_step = self.db.query(WorkflowStep).filter(WorkflowStep.id == step_id).first()
-
         if not parent_run:
             raise ValueError(f"Run {self.run_id} not found")
 
-        if not parent_step:
-            raise ValueError(f"Step {step_id} not found")
+        # 2. Find DAG node to get step number
+        dag_node = self.db.query(DAGNode).filter(
+            DAGNode.id == node_id,
+            DAGNode.run_id == self.run_id
+        ).first()
 
-        # 2. Load checkpoint at branch point
+        if not dag_node:
+            raise ValueError(f"DAG node {node_id} not found for run {self.run_id}")
+
+        # 3. Find corresponding WorkflowStep by step_number matching order_index
+        # DAG node order_index corresponds to WorkflowStep step_number
+        parent_step = self.db.query(WorkflowStep).filter(
+            WorkflowStep.run_id == self.run_id,
+            WorkflowStep.step_number == dag_node.order_index
+        ).first()
+
+        # If no WorkflowStep found, create a minimal one to track branch point
+        if not parent_step:
+            logger.warning(f"No WorkflowStep found for node {node_id} (order_index={dag_node.order_index}), creating placeholder")
+            parent_step = WorkflowStep(
+                run_id=self.run_id,
+                session_id=parent_run.session_id,
+                step_number=dag_node.order_index,
+                goal=f"Branch point at {node_id}",
+                summary=f"Branch created from DAG node {node_id}",
+                status=dag_node.status or "pending",
+                meta={"created_for_branch": True, "dag_node_id": node_id}
+            )
+            self.db.add(parent_step)
+            self.db.commit()
+            self.db.refresh(parent_step)
+
+        # 4. Load checkpoint at branch point
         checkpoint = self.db.query(Checkpoint).filter(
-            Checkpoint.step_id == step_id
+            Checkpoint.step_id == str(parent_step.id)
         ).order_by(Checkpoint.created_at.desc()).first()
 
         if not checkpoint:
-            logger.warning(f"No checkpoint found for step {step_id}, will create initial checkpoint")
+            logger.warning(f"No checkpoint found for step {parent_step.id} (node {node_id}), will create initial checkpoint")
             # Create a minimal checkpoint if none exists
             checkpoint = Checkpoint(
                 run_id=self.run_id,
-                step_id=step_id,
+                step_id=str(parent_step.id),
                 checkpoint_type="manual",
                 context_snapshot={},
-                meta={"created_for_branch": True}
+                meta={"created_for_branch": True, "dag_node_id": node_id}
             )
             self.db.add(checkpoint)
             self.db.commit()
             self.db.refresh(checkpoint)
 
-        # 3. Create new workflow run (branch)
+        # 5. Create new workflow run (branch)
         branch_run = WorkflowRun(
             session_id=parent_run.session_id,
             project_id=parent_run.project_id,
@@ -98,7 +131,9 @@ class BranchManager:
             meta={
                 "branch_name": branch_name,
                 "hypothesis": hypothesis,
-                "branched_from_step": str(step_id),
+                "new_instructions": new_instructions,
+                "branched_from_node": node_id,
+                "branched_from_step": str(parent_step.id),
                 "modifications": modifications or {}
             }
         )
@@ -107,36 +142,36 @@ class BranchManager:
         self.db.commit()
         self.db.refresh(branch_run)
 
-        # 4. Create branch relationship record
+        # 6. Create branch relationship record
         branch = Branch(
             parent_run_id=self.run_id,
-            parent_step_id=step_id,
+            parent_step_id=str(parent_step.id),
             child_run_id=branch_run.id,
             branch_name=branch_name,
             hypothesis=hypothesis,
             status="active",
-            meta=modifications or {}
+            meta={"dag_node_id": node_id, **(modifications or {})}
         )
 
         self.db.add(branch)
         self.db.commit()
 
-        # 5. Copy execution history up to branch point
+        # 7. Copy execution history up to branch point
         self._copy_execution_history(
             parent_run_id=self.run_id,
             child_run_id=branch_run.id,
             up_to_step=parent_step
         )
 
-        # 6. Apply modifications to branch context
+        # 8. Apply modifications to branch context
         if modifications:
             self._apply_modifications(branch_run.id, checkpoint, modifications)
 
-        # 7. Create isolated work directory for branch
+        # 9. Create isolated work directory for branch
         self._create_branch_work_directory(branch_run.id, parent_run)
 
         logger.info(
-            f"Created branch '{branch_name}' from step {step_id}. "
+            f"Created branch '{branch_name}' from node {node_id} (step {parent_step.id}). "
             f"New run ID: {branch_run.id}"
         )
 

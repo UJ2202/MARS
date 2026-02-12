@@ -7,11 +7,14 @@ This module provides functions to extract keywords from text using various taxon
 - AAS (American Astronomical Society) keywords
 """
 
+import logging
 import os
 import json
 import time
 import datetime
 from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.utils import (
     work_dir_default,
@@ -56,38 +59,34 @@ def get_keywords(
         n_keywords_level1 = ukw.n_keywords_level1
         domains = get_keywords_from_string(input_text, keywords_string, n_keywords_level1, work_dir, api_keys)
 
-        print('domains:')
-        print(domains)
+        logger.debug("domains: %s", domains)
         domains.append('MATHEMATICS') if 'MATHEMATICS' not in domains else None
         aggregated_keywords.extend(domains)
 
         for domain in domains:
-            print('inside domain: ', domain)
+            logger.debug("inside domain: %s", domain)
             if '&' in domain:
                 domain = domain.replace('&', '\\&')
             keywords_string = ', '.join(ukw.get_unesco_level2_names(domain))
             n_keywords_level2 = ukw.n_keywords_level2
             sub_fields = get_keywords_from_string(input_text, keywords_string, n_keywords_level2, work_dir, api_keys)
 
-            print('sub_fields:')
-            print(sub_fields)
+            logger.debug("sub_fields: %s", sub_fields)
             aggregated_keywords.extend(sub_fields)
 
             for sub_field in sub_fields:
-                print('inside sub_field: ', sub_field)
+                logger.debug("inside sub_field: %s", sub_field)
                 keywords_string = ', '.join(ukw.get_unesco_level3_names(sub_field))
                 n_keywords_level3 = ukw.n_keywords_level3
                 specific_areas = get_keywords_from_string(input_text, keywords_string, n_keywords_level3, work_dir, api_keys)
-                print('specific_areas:')
-                print(specific_areas)
+                logger.debug("specific_areas: %s", specific_areas)
                 aggregated_keywords.extend(specific_areas)
 
         aggregated_keywords = list(set(aggregated_keywords))
         keywords_string = ', '.join(aggregated_keywords)
         keywords = get_keywords_from_string(input_text, keywords_string, n_keywords, work_dir, api_keys)
 
-        print('keywords in unesco:')
-        print(keywords)
+        logger.debug("keywords in unesco: %s", keywords)
         return keywords
     elif kw_type == 'aaai':
         return get_keywords_from_aaai(input_text, n_keywords, work_dir, api_keys)
@@ -320,6 +319,6 @@ def get_aas_keywords(
     with open(timing_path, 'w') as f:
         json.dump(timing_report, f, indent=2)
 
-    print('aas_keywords: ', aas_keywords)
+    logger.debug("aas_keywords: %s", aas_keywords)
 
     return aas_keywords

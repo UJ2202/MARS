@@ -5,11 +5,14 @@ This module provides functionality for creating and managing OpenAI Assistants
 for RAG agents.
 """
 
+import logging
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 
 from cmbagent.utils import path_to_assistants, update_yaml_preserving_format
 from cmbagent.cmbagent_utils import cmbagent_debug
+
+logger = logging.getLogger(__name__)
 
 
 class AssistantManager:
@@ -47,9 +50,7 @@ class AssistantManager:
             New assistant object from OpenAI
         """
         if cmbagent_debug:
-            print(f"-->Creating assistant {agent.name}")
-            print(f"--> llm_config: {self.llm_config}")
-            print(f"--> agent.llm_config: {agent.llm_config}")
+            logger.debug("creating_assistant", agent=agent.name, llm_config=str(self.llm_config), agent_llm_config=str(agent.llm_config))
 
         new_assistant = self.client.beta.assistants.create(
             name=agent.name,
@@ -60,10 +61,7 @@ class AssistantManager:
         )
 
         if cmbagent_debug:
-            print("New assistant created.")
-            print(f"--> New assistant id: {new_assistant.id}")
-            print(f"--> New assistant model: {new_assistant.model}")
-            print("\n")
+            logger.debug("assistant_created", assistant_id=new_assistant.id, model=new_assistant.model)
 
         return new_assistant
 
@@ -96,29 +94,26 @@ class AssistantManager:
 
         for agent in agents:
             if cmbagent_debug:
-                print('check_assistants: agent: ', agent.name)
-                print('non_rag_agent_names: ', non_rag_agent_names)
+                logger.debug("check_assistants_agent", agent=agent.name, non_rag_agent_names=str(non_rag_agent_names))
 
             # Skip non-RAG agents
             if agent.name in non_rag_agent_names:
                 continue
 
             if cmbagent_debug:
-                print(f"Checking agent: {agent.name}")
+                logger.debug("checking_agent", agent=agent.name)
 
             # Check if agent name exists in available assistants
             if agent.name in assistant_names:
                 idx = assistant_names.index(agent.name)
 
                 if cmbagent_debug:
-                    print(f"Agent {agent.name} exists with id: {assistant_ids[idx]}")
-                    print(f"assistant model from openai: {assistant_models[idx]}")
-                    print(f"assistant model from llm_config: {agent.llm_config['config_list'][0]['model']}")
+                    logger.debug("agent_exists", agent=agent.name, assistant_id=assistant_ids[idx], openai_model=assistant_models[idx], config_model=agent.llm_config['config_list'][0]['model'])
 
                 # Update model if different
                 if assistant_models[idx] != agent.llm_config['config_list'][0]['model']:
                     if cmbagent_debug:
-                        print("Assistant model mismatch. Updating.")
+                        logger.debug("assistant_model_mismatch_updating", agent=agent.name)
                     self.client.beta.assistants.update(
                         assistant_id=assistant_ids[idx],
                         model=agent.llm_config['config_list'][0]['model']
@@ -126,10 +121,9 @@ class AssistantManager:
 
                 # Handle reset
                 if reset_assistant and agent.name.replace('_agent', '') in reset_assistant:
-                    print("Resetting assistant...")
-                    print("Deleting the assistant...")
+                    logger.info("resetting_assistant", agent=agent.name)
                     self.client.beta.assistants.delete(assistant_ids[idx])
-                    print("Assistant deleted. Creating a new one...")
+                    logger.info("assistant_deleted_creating_new", agent=agent.name)
                     new_assistant = self.create_assistant(agent)
                     agent.info['assistant_config']['assistant_id'] = new_assistant.id
                 else:
@@ -137,14 +131,11 @@ class AssistantManager:
                     assistant_id = agent.info['assistant_config']['assistant_id']
                     if assistant_id != assistant_ids[idx]:
                         if cmbagent_debug:
-                            print("--> Assistant ID mismatch between yaml and openai.")
-                            print(f"--> yaml: {assistant_id}")
-                            print(f"--> openai: {assistant_ids[idx]}")
-                            print("--> Using openai ID")
+                            logger.debug("assistant_id_mismatch", agent=agent.name, yaml_id=assistant_id, openai_id=assistant_ids[idx])
 
                         agent.info['assistant_config']['assistant_id'] = assistant_ids[idx]
                         if cmbagent_debug:
-                            print(f"--> Updating yaml file with new assistant id")
+                            logger.debug("updating_yaml_with_new_assistant_id", agent=agent.name)
                         update_yaml_preserving_format(
                             f"{path_to_assistants}/{agent.name.replace('_agent', '')}.yaml",
                             agent.name,

@@ -1,9 +1,12 @@
+import logging
 import os
 import base64
 import tempfile
 import matplotlib.pyplot as plt
 from typing import Tuple, Literal
 from math import pi
+
+logger = logging.getLogger(__name__)
 
 # Default plot type for VLM injection
 vlm_injection_plot_type: str = "wrong_scalar_amplitude"
@@ -21,9 +24,9 @@ def _save_plot_to_files() -> str:
             os.makedirs(synthetic_dir, exist_ok=True)
             debug_path = os.path.join(synthetic_dir, "injected_plot.png")
             plt.savefig(debug_path, dpi=300, bbox_inches='tight')
-            print(f"Injected plot saved to {debug_path} for reference")
+            logger.debug("injected_plot_saved", path=debug_path)
         except Exception as e:
-            print(f"Could not save injected plot to synthetic_output: {e}")
+            logger.warning("injected_plot_save_failed", error=str(e))
         
         plt.close()
         

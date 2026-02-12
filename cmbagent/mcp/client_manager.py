@@ -51,7 +51,7 @@ class MCPClientManager:
         self.settings = self.config.get('settings', {})
         self.servers_config = self.config.get('mcp_servers', {})
         
-        logger.info(f"Initialized MCP Client Manager with {len(self.servers_config)} server configs")
+        logger.info("mcp_client_manager_initialized", server_count=len(self.servers_config))
     
     async def connect_to_server(self, server_name: str) -> bool:
         """
@@ -64,13 +64,13 @@ class MCPClientManager:
             True if connection successful, False otherwise
         """
         if server_name not in self.servers_config:
-            logger.error(f"Server {server_name} not found in config")
+            logger.error("mcp_server_not_in_config", server_name=server_name)
             return False
         
         server_config = self.servers_config[server_name]
         
         if not server_config.get('enabled', False):
-            logger.info(f"Server {server_name} is disabled in config")
+            logger.info("mcp_server_disabled", server_name=server_name)
             return False
         
         try:
@@ -81,7 +81,7 @@ class MCPClientManager:
                     env_var = value[2:-1]
                     env_value = os.getenv(env_var)
                     if env_value is None:
-                        logger.warning(f"Environment variable {env_var} not set for {server_name}")
+                        logger.warning("mcp_env_var_not_set", env_var=env_var, server_name=server_name)
                         return False
                     env[key] = env_value
                 else:
@@ -95,7 +95,7 @@ class MCPClientManager:
             )
             
             # Connect to server using context manager properly
-            logger.info(f"Connecting to MCP server: {server_name}")
+            logger.info("mcp_server_connecting", server_name=server_name)
             
             # stdio_client returns an async context manager - we need to enter it
             client_context = stdio_client(server_params)
@@ -116,15 +116,11 @@ class MCPClientManager:
             if self.settings.get('auto_discover_tools', True):
                 await self._discover_tools(server_name)
             
-            logger.info(f"Successfully connected to {server_name}")
+            logger.info("mcp_server_connected", server_name=server_name)
             return True
             
         except Exception as e:
-            logger.error(f"Failed to connect to {server_name}: {e}")
-            # Print to console for debugging
-            print(f"   ⚠ MCP Connection Error ({server_name}): {e}")
-            import traceback
-            print(f"   ⚠ Traceback: {traceback.format_exc()}")
+            logger.error("mcp_server_connection_failed", server_name=server_name, error=str(e), exc_info=True)
             return False
     
     async def connect_all(self) -> Dict[str, bool]:
@@ -142,7 +138,7 @@ class MCPClientManager:
                 results[server_name] = success
         
         connected_count = sum(1 for v in results.values() if v)
-        logger.info(f"Connected to {connected_count}/{len(results)} MCP servers")
+        logger.info("mcp_servers_connect_all_complete", connected=connected_count, total=len(results))
         
         return results
     
@@ -157,7 +153,7 @@ class MCPClientManager:
             List of tool definitions
         """
         if server_name not in self.sessions:
-            logger.error(f"No session found for {server_name}")
+            logger.error("mcp_no_session_for_server", server_name=server_name)
             return []
         
         try:
@@ -178,11 +174,11 @@ class MCPClientManager:
             if self.settings.get('cache_tool_schemas', True):
                 self.tools_cache[server_name] = tools
             
-            logger.info(f"Discovered {len(tools)} tools from {server_name}")
+            logger.info("mcp_tools_discovered", server_name=server_name, tool_count=len(tools))
             return tools
             
         except Exception as e:
-            logger.error(f"Failed to discover tools from {server_name}: {e}")
+            logger.error("mcp_tool_discovery_failed", server_name=server_name, error=str(e))
             return []
     
     def get_all_tools(self) -> List[Dict]:
@@ -254,13 +250,13 @@ class MCPClientManager:
             }
             
         except asyncio.TimeoutError:
-            logger.error(f"Tool call timed out: {server_name}.{tool_name}")
+            logger.error("mcp_tool_call_timed_out", server_name=server_name, tool_name=tool_name)
             return {
                 'status': 'error',
                 'error': 'Tool call timed out'
             }
         except Exception as e:
-            logger.error(f"Tool call failed: {server_name}.{tool_name} - {e}")
+            logger.error("mcp_tool_call_failed", server_name=server_name, tool_name=tool_name, error=str(e))
             return {
                 'status': 'error',
                 'error': str(e)
@@ -279,9 +275,9 @@ class MCPClientManager:
                 del self.sessions[server_name]
                 if server_name in self.tools_cache:
                     del self.tools_cache[server_name]
-                logger.info(f"Disconnected from {server_name}")
+                logger.info("mcp_server_disconnected", server_name=server_name)
             except Exception as e:
-                logger.error(f"Error disconnecting from {server_name}: {e}")
+                logger.error("mcp_server_disconnect_failed", server_name=server_name, error=str(e))
     
     async def disconnect_all(self):
         """Disconnect from all servers."""
@@ -289,11 +285,11 @@ class MCPClientManager:
         for server_name in server_names:
             await self.disconnect_server(server_name)
         
-        logger.info("Disconnected from all MCP servers")
+        logger.info("mcp_all_servers_disconnected")
     
     def __del__(self):
         """Cleanup on deletion."""
         # Note: In production, you should call disconnect_all() explicitly
         # This is just a safety net
         if self.sessions:
-            logger.warning("MCPClientManager deleted with active sessions - cleanup may be incomplete")
+            logger.warning("mcp_client_manager_deleted_with_active_sessions")

@@ -5,10 +5,13 @@ Manages creation and updates of retry context, including loading
 previous attempts, analyzing errors, and formatting retry prompts.
 """
 
+import logging
 import re
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.retry.retry_context import RetryContext, RetryAttempt
 from cmbagent.retry.error_analyzer import ErrorAnalyzer
@@ -146,7 +149,7 @@ class RetryContextManager:
 
         except Exception as e:
             # Don't fail retry if event emission fails
-            print(f"Warning: Could not emit retry started event: {e}")
+            logger.warning("retry_started_event_emission_failed", error=str(e))
 
     def _emit_retry_backoff_event(self, step, attempt_number, backoff_seconds, strategy):
         """Emit retry backoff event to WebSocket"""
@@ -174,7 +177,7 @@ class RetryContextManager:
 
         except Exception as e:
             # Don't fail retry if event emission fails
-            print(f"Warning: Could not emit retry backoff event: {e}")
+            logger.warning("retry_backoff_event_emission_failed", error=str(e))
 
     def _load_previous_attempts(self, step: WorkflowStep) -> List[RetryAttempt]:
         """
@@ -199,7 +202,7 @@ class RetryContextManager:
 
                 attempts.append(RetryAttempt(**attempt_data))
             except Exception as e:
-                print(f"Warning: Could not load retry attempt: {e}")
+                logger.warning("retry_attempt_load_failed", error=str(e))
                 continue
 
         return attempts

@@ -10,6 +10,9 @@ from typing import List, Dict, Any, Optional
 from enum import Enum
 import time
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 
@@ -134,11 +137,11 @@ class HITLCheckpointPhase(Phase):
 
         if not approval_manager:
             # No approval manager - auto-approve (for non-HITL runs)
-            print("\n" + "=" * 60)
-            print("HITL CHECKPOINT (Auto-approved - no approval manager)")
-            print("=" * 60)
-            print(message)
-            print("=" * 60 + "\n")
+            logger.info("=" * 60)
+            logger.info("HITL CHECKPOINT (Auto-approved - no approval manager)")
+            logger.info("=" * 60)
+            logger.info("%s", message)
+            logger.info("=" * 60)
 
             context.output_data = {
                 'approval_status': 'auto_approved',
@@ -161,12 +164,12 @@ class HITLCheckpointPhase(Phase):
                 options=self.config.options,
             )
 
-            print("\n" + "=" * 60)
-            print(f"HITL CHECKPOINT: {self.display_name}")
-            print("=" * 60)
-            print(message)
-            print("\nWaiting for approval...")
-            print("=" * 60 + "\n")
+            logger.info("=" * 60)
+            logger.info("HITL CHECKPOINT: %s", self.display_name)
+            logger.info("=" * 60)
+            logger.info("%s", message)
+            logger.info("Waiting for approval...")
+            logger.info("=" * 60)
 
             # Wait for approval
             resolved = await approval_manager.wait_for_approval_async(
@@ -224,7 +227,7 @@ class HITLCheckpointPhase(Phase):
         except asyncio.TimeoutError:
             # Handle timeout
             if self.config.default_on_timeout == "approve":
-                print("\nApproval timeout - auto-approving")
+                logger.info("Approval timeout - auto-approving")
                 context.output_data = {
                     'approval_status': 'timeout_auto_approved',
                 }
@@ -234,7 +237,7 @@ class HITLCheckpointPhase(Phase):
                     context=context,
                 )
             else:
-                print("\nApproval timeout - rejecting")
+                logger.warning("Approval timeout - rejecting")
                 self._status = PhaseStatus.FAILED
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
@@ -244,7 +247,7 @@ class HITLCheckpointPhase(Phase):
 
         except Exception as e:
             # Handle other errors
-            print(f"\nApproval error: {e}")
+            logger.error("Approval error: %s", e)
             if self.config.default_on_timeout == "approve":
                 context.output_data = {
                     'approval_status': 'error_auto_approved',

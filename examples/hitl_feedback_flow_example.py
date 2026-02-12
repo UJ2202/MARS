@@ -16,7 +16,7 @@ from cmbagent.phases.hitl_checkpoint import HITLCheckpointPhase, HITLCheckpointP
 from cmbagent.phases.hitl_planning import HITLPlanningPhase, HITLPlanningPhaseConfig
 from cmbagent.phases.hitl_control import HITLControlPhase, HITLControlPhaseConfig
 from cmbagent.phases import PhaseContext, PhaseExecutionManager
-from cmbagent.database.approval_manager import ApprovalManager
+from cmbagent.database.websocket_approval_manager import WebSocketApprovalManager
 
 
 async def example_complete_feedback_flow():
@@ -29,8 +29,11 @@ async def example_complete_feedback_flow():
     3. Control that uses planning feedback
     """
     
-    # Setup
-    approval_manager = ApprovalManager()
+    # Setup - use a no-op send for demonstration
+    def _noop_send(event_type, data):
+        print(f"  [WS Event] {event_type}: {data.get('message', '')[:80]}...")
+
+    approval_manager = WebSocketApprovalManager(_noop_send, run_id="hitl_feedback_demo_001")
     run_id = "hitl_feedback_demo_001"
     
     # === Phase 1: Initial Checkpoint ===
@@ -353,7 +356,7 @@ async def main():
     # Example 1: Complete flow
     print("\n\nEXAMPLE 1: Complete Feedback Flow")
     print("="*70)
-    # Note: This would require actual ApprovalManager setup
+    # Note: This would require actual WebSocketApprovalManager setup
     # await example_complete_feedback_flow()
     print("(See code for async implementation)")
     

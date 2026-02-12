@@ -8,6 +8,9 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 
 from models.schemas import BranchRequest, PlayFromNodeRequest, BranchExecuteRequest
 
+from core.logging import get_logger
+logger = get_logger(__name__)
+
 router = APIRouter(tags=["Branching"])
 
 
@@ -56,7 +59,7 @@ async def create_branch(run_id: str, request: BranchRequest, background_tasks: B
 
         return result
     except Exception as e:
-        print(f"Error creating branch: {str(e)}")
+        logger.error("branch_create_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error creating branch: {str(e)}"
@@ -95,7 +98,7 @@ async def execute_branch(branch_run_id: str, request: BranchExecuteRequest = Non
             "message": "Branch prepared for execution. Connect via WebSocket to start."
         }
     except Exception as e:
-        print(f"Error preparing branch execution: {str(e)}")
+        logger.error("branch_execution_prepare_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error preparing branch execution: {str(e)}"
@@ -126,7 +129,7 @@ async def get_branch_context(branch_run_id: str):
             "context": context
         }
     except Exception as e:
-        print(f"Error getting branch context: {str(e)}")
+        logger.error("branch_context_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error getting branch context: {str(e)}"
@@ -156,7 +159,7 @@ async def play_from_node(run_id: str, request: PlayFromNodeRequest):
             "message": "Workflow prepared for resumption"
         }
     except Exception as e:
-        print(f"Error in play-from-node: {str(e)}")
+        logger.error("play_from_node_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error resuming from node: {str(e)}"
@@ -182,7 +185,7 @@ async def compare_branches(run_id_1: str, run_id_2: str):
             "comparison": comparison
         }
     except Exception as e:
-        print(f"Error comparing branches: {str(e)}")
+        logger.error("branch_compare_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error comparing branches: {str(e)}"
@@ -208,7 +211,7 @@ async def get_branch_tree(run_id: str):
             "tree": tree
         }
     except Exception as e:
-        print(f"Error getting branch tree: {str(e)}")
+        logger.error("branch_tree_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error getting branch tree: {str(e)}"
@@ -234,7 +237,7 @@ async def get_resumable_nodes(run_id: str):
             "nodes": nodes
         }
     except Exception as e:
-        print(f"Error getting resumable nodes: {str(e)}")
+        logger.error("resumable_nodes_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error getting resumable nodes: {str(e)}"

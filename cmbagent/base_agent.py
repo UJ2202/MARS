@@ -1,4 +1,4 @@
-import os 
+import os
 import logging
 from cobaya.yaml import yaml_load_file
 from autogen.coding import LocalCommandLineCodeExecutor
@@ -10,6 +10,8 @@ from autogen.agentchat import ConversableAgent, UpdateSystemMessage
 import autogen
 import copy
 from cmbagent.cmbagent_utils import cmbagent_debug
+
+logger = logging.getLogger(__name__)
 
 # cmbagent_debug=True
 
@@ -36,8 +38,7 @@ class BaseAgent:
         self.kwargs = kwargs
 
         if cmbagent_debug:
-            print('\n\n in base_agent.py: __init__: llm_config: ', llm_config)
-            print('\n\n')
+            logger.debug("base_agent_init llm_config=%s", llm_config)
 
         self.llm_config = copy.deepcopy(llm_config)
 
@@ -61,9 +62,7 @@ class BaseAgent:
         self.agent_type = agent_type
 
         if cmbagent_debug:
-            print('\n---------------------------------- setting name: ', self.info["name"])
-            print('work_dir: ', self.work_dir)
-            print('\n----------------------------------')
+            logger.debug("base_agent_setting_name name=%s work_dir=%s", self.info["name"], self.work_dir)
 
     ## for oai rag agents
     def set_gpt_assistant_agent(self,
@@ -74,17 +73,8 @@ class BaseAgent:
                   agent_top_p=None):
 
         if cmbagent_debug:
-            print('\n\n\n\nin base_agent.py set_agent')
-            print('name: ',self.name)
-            # import sys; sys.exit()  
-
-            print('setting agent: ',self.name)
-            print('instructions: ',instructions)
-            print('description: ',description)
-            print('vector_store_ids: ',vector_store_ids)
-            print('agent_temperature: ',agent_temperature)
-            print('agent_top_p: ',agent_top_p)
-            print('\n\n')
+            logger.debug("set_gpt_assistant_agent name=%s instructions=%s description=%s vector_store_ids=%s agent_temperature=%s agent_top_p=%s",
+                         self.name, instructions, description, vector_store_ids, agent_temperature, agent_top_p)
         # print(self.info['assistant_config']['tool_resources']['file_search'])
         # print()    
         if instructions is not None:
@@ -98,8 +88,7 @@ class BaseAgent:
         
         if agent_temperature is not None:
             if cmbagent_debug:
-                print('\n\n\n\nin base_agent.py set_agent')
-                print('setting agent temperature: ', agent_temperature)
+                logger.debug("setting_agent_temperature agent=%s temperature=%s", self.name, agent_temperature)
             self.info['assistant_config']['temperature'] = agent_temperature
 
         if agent_top_p is not None:
@@ -112,12 +101,9 @@ class BaseAgent:
         # List files in the data_path excluding unwanted files
         files = [f for f in os.listdir(data_path) if not (f.startswith('.') or f.endswith('.ipynb') or f.endswith('.yaml') or f.endswith('.txt') or os.path.isdir(os.path.join(data_path, f)))]
 
-        # cmbagent debug
         if cmbagent_debug:
-            print('\n\n\n\nin base_agent.py set_agent')
-            print('files: ',files)
-            # import sys; sys.exit()
-            print("\n adding files to instructions: ", files)
+            logger.debug("set_gpt_assistant_files files=%s", files)
+            logger.debug("adding_files_to_instructions files=%s", files)
 
         self.info["instructions"] += f'\n You have access to the following files: {files}.\n'
 
@@ -135,9 +121,7 @@ class BaseAgent:
         self.info['assistant_config']['tools'][0]['file_search'] ={'max_num_results': file_search_max_num_results} 
         # self.llm_config['check_every_ms'] = 500 # does not do anything
         if cmbagent_debug:
-            print('\n\n\n\nin base_agent.py set_agent')
-            print('working with llm_config: ',self.llm_config)
-            # import sys; sys.exit()
+            logger.debug("set_gpt_assistant_llm_config llm_config=%s", self.llm_config)
 
         # self.info['assistant_config']['check_every_ms'] = 500 # does not do anything
 
@@ -152,15 +136,14 @@ class BaseAgent:
             )
         
         if cmbagent_debug:
-            print("GPTAssistant set.... moving on.\n")
+            logger.debug("gpt_assistant_set name=%s", self.name)
 
         if self.agent._assistant_error is not None:
 
             # print(self.agent._assistant_error)
             if "No vector store" in self.agent._assistant_error:
                 if cmbagent_debug:
-                    print(f"Vector store not found for {self.name}")
-                    print(f"re-instantiating with make_vector_stores=['{self.name.rstrip('_agent')}'],")
+                    logger.debug("vector_store_not_found agent=%s", self.name)
                 
                 return 1
 
@@ -171,9 +154,7 @@ class BaseAgent:
                             description=None):
         
         if cmbagent_debug:
-            print('\n\n\n\nin base_agent.py set_assistant_agent')
-            print('name: ',self.name)
-            # import sys; sys.exit()  
+            logger.debug("set_assistant_agent name=%s", self.name)
 
         if instructions is not None:
 
@@ -218,7 +199,7 @@ class BaseAgent:
 
 
         if cmbagent_debug:
-            print("AssistantAgent set.... moving on.\n")
+            logger.debug("assistant_agent_set name=%s", self.name)
 
     def set_code_agent(self,instructions=None):
 
@@ -276,7 +257,7 @@ class BaseAgent:
         )
 
         if cmbagent_debug:
-            print('code_agent set with work_dir: ', self.work_dir, '.... moving on.\n')
+            logger.debug("code_agent_set name=%s work_dir=%s", self.name, self.work_dir)
 
 
 

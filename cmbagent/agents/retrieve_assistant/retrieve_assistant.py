@@ -1,13 +1,16 @@
 import os
+import logging
 from cmbagent.base_agent import BaseAgent
 from autogen.agentchat.contrib.retrieve_assistant_agent import RetrieveAssistantAgent as AG2RetrieveAssistant
+
+logger = logging.getLogger(__name__)
 
 class RetrieveAssistantAgent(BaseAgent):
     """
     Retrieve Assistant agent with RAG (Retrieval-Augmented Generation) capabilities.
     Uses AG2's built-in RetrieveAssistantAgent.
     """
-    
+
     def __init__(self, llm_config=None, **kwargs):
         agent_id = os.path.splitext(os.path.abspath(__file__))[0]
         super().__init__(llm_config=llm_config, agent_id=agent_id, **kwargs)
@@ -23,9 +26,9 @@ class RetrieveAssistantAgent(BaseAgent):
                 llm_config=self.llm_config,
                 **kwargs
             )
-            print(f"✓ Created RetrieveAssistantAgent: {self.name}")
+            logger.info("retrieve_assistant_agent_created", agent_name=self.name)
         except Exception as e:
-            print(f"⚠ Could not create RetrieveAssistantAgent, falling back to AssistantAgent: {e}")
+            logger.warning("retrieve_assistant_agent_fallback", error=str(e), agent_name=self.name)
             # Make sure we have instructions in self.info for fallback
             if 'instructions' not in self.info:
                 self.info['instructions'] = self.system_message

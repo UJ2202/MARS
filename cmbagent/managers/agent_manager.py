@@ -4,6 +4,7 @@ Agent management for CMBAgent.
 This module provides agent initialization, lookup, and management functionality.
 """
 
+import logging
 import os
 import sys
 import copy
@@ -14,6 +15,8 @@ from cmbagent.utils import path_to_agents, get_model_config, clean_llm_config
 from cmbagent.utils import default_formatter_model as default_formatter_model_default
 from cmbagent.rag_utils import import_rag_agents
 from cmbagent.cmbagent_utils import cmbagent_debug
+
+logger = logging.getLogger(__name__)
 
 
 def import_non_rag_agents() -> Dict[str, Dict[str, Any]]:
@@ -140,9 +143,7 @@ class AgentManager:
             self.non_rag_agent_names.append(imported_non_rag_agents[k]['agent_name'])
 
         if cmbagent_debug:
-            print('self.agent_classes: ', self.agent_classes)
-            print('self.rag_agent_names: ', self.rag_agent_names)
-            print('self.non_rag_agent_names: ', self.non_rag_agent_names)
+            logger.debug("agent_classes_loaded", agent_classes=str(self.agent_classes), rag_agent_names=str(self.rag_agent_names), non_rag_agent_names=str(self.non_rag_agent_names))
 
         # All agents list
         self.agents = []
@@ -167,16 +168,14 @@ class AgentManager:
             self.agent_classes.pop('rag_software_formatter', None)
 
         if cmbagent_debug:
-            print('self.agent_classes after skipping agents:')
-            for agent_class, value in self.agent_classes.items():
-                print(f'{agent_class}: {value}')
+            logger.debug("agent_classes_after_skipping", agents={k: str(v) for k, v in self.agent_classes.items()})
 
         # Instantiate agents
         for agent_name in self.agent_classes:
             agent_class = self.agent_classes[agent_name]
 
             if cmbagent_debug:
-                print('instantiating agent: ', agent_name)
+                logger.debug("instantiating_agent", agent=agent_name)
 
             if agent_name in agent_llm_configs:
                 llm_config = copy.deepcopy(self.llm_config)
@@ -184,8 +183,7 @@ class AgentManager:
                 clean_llm_config(llm_config)
 
                 if cmbagent_debug:
-                    print('found agent_llm_configs for: ', agent_name)
-                    print('llm_config updated to: ', llm_config)
+                    logger.debug("agent_llm_config_found", agent=agent_name, llm_config=str(llm_config))
             else:
                 llm_config = copy.deepcopy(self.llm_config)
 
@@ -216,11 +214,9 @@ class AgentManager:
             clean_llm_config(agent.llm_config)
 
         if self.verbose or cmbagent_debug:
-            print("Using following agents: ", self.agent_names)
-            print("Using following llm for agents: ")
+            logger.info("agents_initialized", agent_names=str(self.agent_names))
             for agent in self.agents:
-                print(f"{agent.name}: {agent.llm_config['config_list'][0]['model']}")
-            print()
+                logger.info("agent_model", agent=agent.name, model=agent.llm_config['config_list'][0]['model'])
 
         return self.agents
 
@@ -237,7 +233,7 @@ class AgentManager:
         for agent in self.agents:
             if agent.info['name'] == name:
                 return agent.agent
-        print(f"get_agent_from_name: agent {name} not found")
+        logger.error("agent_not_found", method="get_agent_from_name", agent=name)
         sys.exit()
 
     def get_agent_object_from_name(self, name: str) -> Any:
@@ -253,7 +249,7 @@ class AgentManager:
         for agent in self.agents:
             if agent.info['name'] == name:
                 return agent
-        print(f"get_agent_object_from_name: agent {name} not found")
+        logger.error("agent_not_found", method="get_agent_object_from_name", agent=name)
         sys.exit()
 
     def filter_and_combine_agent_names(self, input_list: List[str]) -> str:

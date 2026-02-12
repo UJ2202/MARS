@@ -16,6 +16,10 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 import os
 import time
+import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.phases.execution_manager import PhaseExecutionManager
@@ -192,8 +196,8 @@ class PlanningPhase(Phase):
             plan_file = save_final_plan(cmbagent.final_context, planning_dir)
             manager.track_file(plan_file)
 
-            print(f"\nStructured plan written to {plan_file}")
-            print(f"Planning took {exec_time:.4f} seconds\n")
+            logger.info("Structured plan written to %s", plan_file)
+            logger.info("Planning took %.4f seconds", exec_time)
 
             # Extract plan steps as a list (normalize different formats)
             raw_plan = cmbagent.final_context.get('final_plan')
@@ -261,8 +265,7 @@ class PlanningPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
-            import traceback
-            traceback.print_exc()
+            logger.error("Planning phase failed: %s", e, exc_info=True)
             return manager.fail(str(e), traceback.format_exc())
 
     def validate_input(self, context: PhaseContext) -> List[str]:

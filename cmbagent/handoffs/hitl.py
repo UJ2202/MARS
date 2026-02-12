@@ -6,10 +6,13 @@ Includes WebSocket integration for UI-based approval.
 """
 
 import asyncio
+import logging
 from typing import Dict, List, Optional, Any
 from autogen.agentchat.group import AgentTarget, OnCondition, StringLLMCondition
 from .debug import debug_print
 from .agent_retrieval import get_all_agents
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -46,8 +49,8 @@ def configure_admin_for_websocket(admin_agent, approval_manager, run_id: str):
         This is needed because AG2's get_human_input is synchronous,
         but our WebSocket approval is async.
         """
-        print(f"[AG2 Admin] Human input requested via WebSocket")
-        print(f"[AG2 Admin] Prompt: {prompt[:200]}...")
+        logger.info("human_input_requested", source="ag2_admin", transport="websocket")
+        logger.debug("human_input_prompt", prompt_preview=prompt[:200])
 
         try:
             # Parse the prompt to extract agent name and context
@@ -69,8 +72,8 @@ def configure_admin_for_websocket(admin_agent, approval_manager, run_id: str):
                 options=["continue", "provide_instructions", "abort"],
             )
 
-            print(f"[AG2 Admin] Approval request created: {approval_request.id}")
-            print(f"[AG2 Admin] Waiting for WebSocket approval...")
+            logger.info("approval_request_created", approval_id=str(approval_request.id), source="ag2_admin")
+            logger.debug("waiting_for_websocket_approval", approval_id=str(approval_request.id))
 
             # Create event loop if needed and wait for approval
             try:
@@ -87,7 +90,7 @@ def configure_admin_for_websocket(admin_agent, approval_manager, run_id: str):
                 )
             )
 
-            print(f"[AG2 Admin] Approval resolved: {resolved.resolution}")
+            logger.info("approval_resolved", resolution=resolved.resolution, source="ag2_admin")
 
             # Process the resolution
             if resolved.resolution in ["continue", "approved", "approve"]:
@@ -96,34 +99,32 @@ def configure_admin_for_websocket(admin_agent, approval_manager, run_id: str):
             elif resolved.resolution in ["provide_instructions", "modify", "modified"]:
                 # User provided specific instructions
                 feedback = resolved.user_feedback or ""
-                print(f"[AG2 Admin] User provided instructions: {feedback[:100]}...")
+                logger.info("user_provided_instructions", feedback_preview=feedback[:100], source="ag2_admin")
                 return feedback
             else:  # abort, reject, rejected
                 # User wants to stop
-                print(f"[AG2 Admin] User aborted via resolution: {resolved.resolution}")
+                logger.info("user_aborted", resolution=resolved.resolution, source="ag2_admin")
                 return "TERMINATE"
 
         except TimeoutError:
-            print(f"[AG2 Admin] WebSocket approval timeout - falling back to auto-abort")
+            logger.warning("websocket_approval_timeout", source="ag2_admin", action="auto_abort")
             return "TERMINATE"
         except Exception as e:
-            print(f"[AG2 Admin] Error in WebSocket approval: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("websocket_approval_error", error=str(e), source="ag2_admin", exc_info=True)
 
             # Fall back to original input if available
             if original_input:
-                print(f"[AG2 Admin] Falling back to original get_human_input")
+                logger.info("falling_back_to_original_input", source="ag2_admin")
                 return original_input(prompt)
             else:
-                print(f"[AG2 Admin] No fallback available - aborting")
+                logger.warning("no_fallback_available", source="ag2_admin", action="abort")
                 return "TERMINATE"
 
     # Override the agent's get_human_input method
     admin_agent.agent.get_human_input = websocket_human_input_sync
 
     debug_print('Admin agent configured for WebSocket input', indent=2)
-    print(f"[AG2 Admin] WebSocket input handler installed successfully")
+    logger.info("websocket_input_handler_installed", source="ag2_admin")
 
 
 def enable_websocket_for_hitl(
@@ -418,3 +419,136 @@ def disable_hitl_checkpoints(cmbagent_instance):
     register_all_hand_offs(cmbagent_instance, hitl_config=None)
 
     debug_print('HITL checkpoints disabled\n', indent=2)
+
+
+# ============================================================================
+# COPILOT TOOL APPROVAL (with auto-allow session support)
+# ============================================================================
+
+def configure_admin_for_copilot_tool_approval(
+    admin_agent,
+    approval_manager,
+    run_id: str,
+    permission_manager,
+):
+    """
+    Configure admin agent for copilot tool approval with auto-allow support.
+
+    Overrides admin's get_human_input to:
+    1. Classify the tool operation category (bash, code_exec, install, etc.)
+    2. Check if auto-allowed for this session (via ToolPermissionManager)
+    3. If not, send WebSocket approval with [Allow] [Allow for Session] [Deny] [Edit]
+    4. On "Allow for Session", auto-allow that category for the rest of the session
+
+    Args:
+        admin_agent: The admin agent instance
+        approval_manager: WebSocketApprovalManager for UI communication
+        run_id: Current workflow run ID
+        permission_manager: ToolPermissionManager tracking session permissions
+    """
+    debug_print(f'→ Configuring admin for copilot tool approval (run_id: {run_id})')
+
+    def copilot_tool_approval_sync(prompt: str) -> str:
+        """
+        Synchronous tool approval handler for AG2's get_human_input.
+
+        Checks session permissions first, then sends WebSocket approval if needed.
+        """
+        # 1. Classify the operation
+        category = permission_manager.classify_from_prompt(prompt)
+
+        # Also try agent-based classification from the prompt
+        agent_name = "unknown"
+        if "From:" in prompt:
+            try:
+                agent_name = prompt.split("From:")[1].split("\n")[0].strip()
+                agent_category = permission_manager.classify_from_agent(agent_name)
+                # Prefer more specific agent-based classification
+                if agent_category != "code_exec" or category == "code_exec":
+                    category = agent_category
+            except (IndexError, AttributeError):
+                pass
+
+        logger.info("copilot_tool_approval_check", category=category, agent=agent_name)
+
+        # 2. Check auto-allow
+        if permission_manager.is_allowed(category):
+            logger.debug("copilot_tool_auto_allowed", category=category)
+            permission_manager.allow_once(category)
+            return ""  # Continue without asking
+
+        # 3. Send WebSocket approval request
+        try:
+            # Build a user-friendly message
+            prompt_preview = prompt[:500] + "..." if len(prompt) > 500 else prompt
+            message = (
+                f"**{category.upper().replace('_', ' ')} Approval**\n\n"
+                f"Agent `{agent_name}` wants to perform a **{category}** operation:\n\n"
+                f"```\n{prompt_preview}\n```"
+            )
+
+            approval_request = approval_manager.create_approval_request(
+                run_id=run_id,
+                step_id=f"tool_{category}_{agent_name}",
+                checkpoint_type="tool_approval",
+                context_snapshot={
+                    "tool_category": category,
+                    "agent_name": agent_name,
+                    "prompt": prompt_preview,
+                    "can_auto_allow": True,
+                    "session_permissions": permission_manager.get_session_permissions(),
+                },
+                message=message,
+                options=["allow", "allow_session", "deny", "edit"],
+            )
+
+            logger.debug("copilot_tool_waiting_for_response", approval_id=str(approval_request.id))
+
+            # Wait for approval (blocking)
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            resolved = loop.run_until_complete(
+                approval_manager.wait_for_approval_async(
+                    str(approval_request.id),
+                    timeout_seconds=1800,
+                )
+            )
+
+            resolution = resolved.resolution
+            user_feedback = getattr(resolved, 'user_feedback', '') or ''
+
+            logger.info("copilot_tool_approval_resolved", resolution=resolution)
+
+            if resolution == "allow_session":
+                permission_manager.allow_for_session(category)
+                return user_feedback or ""
+            elif resolution in ("allow", "approve", "approved", "continue"):
+                permission_manager.allow_once(category)
+                return user_feedback or ""
+            elif resolution in ("edit", "modify", "modified"):
+                permission_manager.allow_once(category)
+                return user_feedback or ""
+            elif resolution in ("deny", "reject", "rejected", "abort"):
+                logger.info("copilot_tool_operation_denied", category=category)
+                return "TERMINATE"
+            else:
+                # Unknown resolution — treat as allow
+                return user_feedback or ""
+
+        except TimeoutError:
+            logger.warning("copilot_tool_approval_timeout", action="auto_deny")
+            return "TERMINATE"
+        except Exception as e:
+            logger.error("copilot_tool_approval_error", error=str(e), exc_info=True)
+            # On error, allow to prevent hanging
+            return ""
+
+    # Override admin's human input handler
+    admin_agent.agent.get_human_input = copilot_tool_approval_sync
+
+    debug_print('Admin configured for copilot tool approval with auto-allow', indent=2)
+    logger.info("copilot_tool_approval_handler_installed")

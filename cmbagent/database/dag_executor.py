@@ -736,19 +736,19 @@ class DAGExecutor:
             # Try to send immediately via WebSocket if available
             try:
                 import asyncio
-                from backend.websocket_manager import ws_manager
+                from services.connection_manager import connection_manager
 
                 # Try to get the event loop
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # Schedule coroutine on the running loop
-                        asyncio.create_task(ws_manager.broadcast_event(event))
+                        asyncio.create_task(connection_manager.send_event(run_id, event))
                 except RuntimeError:
                     # No event loop running (sync context), event is queued for later
                     pass
             except ImportError:
-                # WebSocket manager not available, event is queued
+                # Connection manager not available, event is queued
                 pass
 
         except Exception as e:

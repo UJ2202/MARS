@@ -7,6 +7,7 @@ Writes to both database (primary) and pickle files (secondary/backup).
 import os
 import pickle
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 from datetime import datetime
@@ -17,6 +18,8 @@ from cmbagent.database.repository import (
     WorkflowRepository,
     CheckpointRepository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DualPersistenceManager:
@@ -66,7 +69,7 @@ class DualPersistenceManager:
 
         # Filter out non-picklable items from context
         filtered_context = self._filter_picklable(context)
-        
+
         with open(pickle_path, 'wb') as f:
             pickle.dump(filtered_context, f)
 
@@ -82,7 +85,7 @@ class DualPersistenceManager:
             return checkpoint.id
         except Exception as e:
             # If database save fails, we still have the pickle file
-            print(f"Warning: Failed to save checkpoint to database: {e}")
+            logger.warning("checkpoint_db_save_failed", error=str(e), checkpoint_id=checkpoint_id)
             # Create a fallback record in a JSON file
             fallback_path = self.context_dir / f"checkpoint_{checkpoint_id}.json"
             with open(fallback_path, 'w') as f:
@@ -116,7 +119,7 @@ class DualPersistenceManager:
                     with open(checkpoint.pickle_file_path, 'rb') as f:
                         return pickle.load(f)
                 except Exception as e:
-                    print(f"Warning: Failed to load from pickle {checkpoint.pickle_file_path}: {e}")
+                    logger.warning("pickle_load_failed", path=checkpoint.pickle_file_path, error=str(e))
 
             # Fallback to database context_snapshot
             if checkpoint.context_snapshot:
@@ -129,7 +132,7 @@ class DualPersistenceManager:
                 with open(pickle_path, 'rb') as f:
                     return pickle.load(f)
             except Exception as e:
-                print(f"Warning: Failed to load from fallback pickle {pickle_path}: {e}")
+                logger.warning("fallback_pickle_load_failed", path=str(pickle_path), error=str(e))
 
         return None
 
@@ -173,7 +176,7 @@ class DualPersistenceManager:
             )
             return checkpoint.id
         except Exception as e:
-            print(f"Warning: Failed to save step context to database: {e}")
+            logger.warning("step_context_db_save_failed", error=str(e), step_number=step_number)
             # Pickle file is still saved
             return f"step_{step_number}"
 
@@ -194,7 +197,7 @@ class DualPersistenceManager:
                 with open(pickle_path, 'rb') as f:
                     return pickle.load(f)
             except Exception as e:
-                print(f"Warning: Failed to load step {step_number} context: {e}")
+                logger.warning("step_context_load_failed", step_number=step_number, error=str(e))
 
         return None
 
@@ -206,27 +209,27 @@ class DualPersistenceManager:
     def _filter_picklable(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Filter context dictionary to only include picklable items.
-        
+
         Args:
             context: Original context dictionary
-            
+
         Returns:
             Filtered dictionary with only picklable items
         """
         filtered = {}
-        
+
         for key, value in context.items():
             # Skip private keys (often contain closures or non-picklable objects)
             if key.startswith('_'):
-                print(f"[Persistence] Skipping non-picklable key: {key}")
+                logger.debug("skipping_non_picklable_key", key=key)
                 continue
             try:
                 # Test if value is picklable
                 pickle.dumps(value)
                 filtered[key] = value
             except (TypeError, pickle.PicklingError, AttributeError) as e:
-                print(f"[Persistence] Skipping non-picklable item '{key}': {type(e).__name__}")
-        
+                logger.debug("skipping_non_picklable_item", key=key, error_type=type(e).__name__)
+
         return filtered
 
     def _serialize_context_for_db(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -298,12 +301,12 @@ class DualPersistenceManager:
                     try:
                         os.remove(checkpoint.pickle_file_path)
                     except Exception as e:
-                        print(f"Warning: Failed to delete pickle {checkpoint.pickle_file_path}: {e}")
+                        logger.warning("pickle_delete_failed", path=checkpoint.pickle_file_path, error=str(e))
 
                 # Delete database record
                 try:
                     self.db.delete(checkpoint)
                 except Exception as e:
-                    print(f"Warning: Failed to delete checkpoint {checkpoint.id}: {e}")
+                    logger.warning("checkpoint_delete_failed", checkpoint_id=str(checkpoint.id), error=str(e))
 
             self.db.commit()

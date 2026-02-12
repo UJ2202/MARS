@@ -5,9 +5,12 @@ Monkey-patches AG2 classes to automatically capture events without
 requiring code changes in CMBAgent.
 """
 
+import logging
 from typing import Optional, Any, Dict
 import functools
 import time
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.execution.event_capture import get_event_captor
 
@@ -82,11 +85,11 @@ def patch_conversable_agent():
         ConversableAgent.generate_reply = enhanced_generate_reply
         ConversableAgent.send = enhanced_send
         
-        print("[AG2 Hooks] ConversableAgent patched successfully")
+        logger.info("ConversableAgent patched successfully")
         return True
-        
+
     except Exception as e:
-        print(f"[AG2 Hooks] Failed to patch ConversableAgent: {e}")
+        logger.error("Failed to patch ConversableAgent: %s", e)
         return False
 
 
@@ -120,11 +123,11 @@ def patch_group_chat():
         # Apply patch
         GroupChat.select_speaker = enhanced_select_speaker
         
-        print("[AG2 Hooks] GroupChat patched successfully")
+        logger.info("GroupChat patched successfully")
         return True
-        
+
     except Exception as e:
-        print(f"[AG2 Hooks] Failed to patch GroupChat: {e}")
+        logger.error("Failed to patch GroupChat: %s", e)
         return False
 
 
@@ -138,11 +141,11 @@ def patch_code_executor():
         # This is a simplified version - actual implementation may vary
         # based on how code execution is done in AG2
         
-        print("[AG2 Hooks] Code executor hooks registered")
+        logger.info("Code executor hooks registered")
         return True
-        
+
     except Exception as e:
-        print(f"[AG2 Hooks] Failed to patch code executor: {e}")
+        logger.error("Failed to patch code executor: %s", e)
         return False
 
 
@@ -158,7 +161,7 @@ def install_ag2_hooks() -> bool:
 
     # Check if already installed
     if _hooks_installed:
-        print("[AG2 Hooks] Already installed, skipping")
+        logger.debug("Already installed, skipping")
         return True
 
     results = [
@@ -170,9 +173,9 @@ def install_ag2_hooks() -> bool:
     success = all(results)
     if success:
         _hooks_installed = True
-        print("[AG2 Hooks] All hooks installed successfully")
+        logger.info("All hooks installed successfully")
     else:
-        print("[AG2 Hooks] Some hooks failed to install")
+        logger.warning("Some hooks failed to install")
 
     return success
 
@@ -183,4 +186,4 @@ def uninstall_ag2_hooks():
     Note: This is currently not implemented as it requires storing
     original methods. Add if needed for testing.
     """
-    print("[AG2 Hooks] Uninstall not implemented - restart process to remove hooks")
+    logger.warning("Uninstall not implemented - restart process to remove hooks")

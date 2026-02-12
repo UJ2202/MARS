@@ -19,7 +19,10 @@ Architecture:
 import os
 import uuid
 import asyncio
+import logging
 from typing import Dict, Any, List, Optional, Callable
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.utils import (
     work_dir_default,
@@ -35,7 +38,10 @@ from cmbagent.orchestrator import (
 )
 
 
-# Global session storage for continuation support
+# In-memory orchestrator tracking for live session continuation.
+# These are volatile references to running SwarmOrchestrator instances.
+# Durable session state is managed by SessionManager (Stages 10-11).
+# This dict holds live orchestrator references needed by continue_copilot_sync().
 _active_copilot_sessions: Dict[str, SwarmOrchestrator] = {}
 
 
@@ -60,6 +66,10 @@ def copilot(
     # HITL settings
     approval_mode: str = "after_step",
     auto_approve_simple: bool = True,
+    # Tool approval (like Claude Code's permission system)
+    tool_approval: str = "none",  # "prompt" | "auto_allow_all" | "none"
+    # Intelligent routing - controls clarification and proposal behavior
+    intelligent_routing: str = "balanced",  # "aggressive" | "balanced" | "minimal"
     # Instructions
     engineer_instructions: str = "",
     researcher_instructions: str = "",
@@ -75,6 +85,8 @@ def copilot(
     enable_phase_tools: bool = True,
     load_all_agents: bool = False,
     auto_continue: bool = False,
+    # Conversational mode (like Claude Code / AG2 human_input_mode="ALWAYS")
+    conversational: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute a unified copilot workflow using SwarmOrchestrator.
@@ -102,6 +114,10 @@ def copilot(
         max_n_attempts: Maximum retry attempts per step
         approval_mode: HITL approval mode ("before_step", "after_step", "both", "none")
         auto_approve_simple: Skip approval for simple one-shot tasks
+        tool_approval: Tool execution approval mode:
+            - "prompt": Ask before dangerous ops with "Allow for Session" option
+            - "auto_allow_all": Skip all tool approval prompts
+            - "none": No tool-level approval (default)
         engineer_instructions: Additional instructions for engineer
         researcher_instructions: Additional instructions for researcher
         planner_instructions: Additional instructions for planner
@@ -140,6 +156,8 @@ def copilot(
         max_n_attempts=max_n_attempts,
         approval_mode=approval_mode,
         auto_approve_simple=auto_approve_simple,
+        tool_approval=tool_approval,
+        intelligent_routing=intelligent_routing,
         engineer_instructions=engineer_instructions,
         researcher_instructions=researcher_instructions,
         planner_instructions=planner_instructions,
@@ -151,6 +169,7 @@ def copilot(
         enable_phase_tools=enable_phase_tools,
         load_all_agents=load_all_agents,
         auto_continue=auto_continue,
+        conversational=conversational,
     ))
 
 
@@ -171,6 +190,8 @@ async def copilot_async(
     max_n_attempts: int = 3,
     approval_mode: str = "after_step",
     auto_approve_simple: bool = True,
+    tool_approval: str = "none",  # "prompt" | "auto_allow_all" | "none"
+    intelligent_routing: str = "balanced",  # "aggressive" | "balanced" | "minimal"
     engineer_instructions: str = "",
     researcher_instructions: str = "",
     planner_instructions: str = "",
@@ -182,6 +203,7 @@ async def copilot_async(
     enable_phase_tools: bool = True,
     load_all_agents: bool = False,
     auto_continue: bool = False,
+    conversational: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute copilot workflow asynchronously using SwarmOrchestrator.
@@ -197,6 +219,7 @@ async def copilot_async(
             "executor", "executor_bash", "installer",
             "planner", "plan_reviewer", "control",
             "summarizer", "admin", "copilot_control",
+            "assistant",  # For user interaction/clarification
         ]
 
     if engineer_model is None:
@@ -236,6 +259,9 @@ async def copilot_async(
         "control": control_model,
     }
 
+    # Detect conversational mode from either explicit flag or approval_mode
+    is_conversational = conversational or approval_mode == "conversational"
+
     # Build swarm config
     config = SwarmConfig(
         max_rounds=max_rounds,
@@ -250,6 +276,9 @@ async def copilot_async(
         default_model=engineer_model,
         agent_models=agent_models,
         approval_mode=approval_mode,
+        conversational=is_conversational,
+        tool_approval=tool_approval,
+        intelligent_routing=intelligent_routing,
     )
 
     # Build orchestrator config
@@ -298,11 +327,11 @@ async def copilot_async(
 
         # Handle paused state
         if result.get('status') == 'paused':
-            print(f"\n{'=' * 60}")
-            print(f"⏸  COPILOT PAUSED - Max rounds ({max_rounds}) reached")
-            print(f"   Session ID: {session_id}")
-            print(f"   Call continue_copilot('{session_id}') to continue")
-            print(f"{'=' * 60}\n")
+            logger.info(
+                "COPILOT PAUSED - Max rounds (%s) reached | Session ID: %s | "
+                "Call continue_copilot('%s') to continue",
+                max_rounds, session_id, session_id,
+            )
         else:
             # Clean up completed session
             await _cleanup_copilot_session(session_id)
@@ -311,15 +340,14 @@ async def copilot_async(
 
     except Exception as e:
         await _cleanup_copilot_session(session_id)
-        print(f"\nCopilot workflow failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Copilot workflow failed: %s", e, exc_info=True)
         raise
 
 
 async def continue_copilot(
     session_id: str,
     additional_context: str = None,
+    approval_manager=None,
 ) -> Dict[str, Any]:
     """
     Continue a paused copilot session.
@@ -327,6 +355,7 @@ async def continue_copilot(
     Args:
         session_id: Session ID from paused result
         additional_context: Optional additional instructions
+        approval_manager: Optional approval manager to re-attach for this continuation
 
     Returns:
         Result dictionary (same format as copilot)
@@ -341,11 +370,16 @@ async def continue_copilot(
 
     orchestrator = _active_copilot_sessions[session_id]
 
-    print(f"\n{'=' * 60}")
-    print(f"▶  CONTINUING COPILOT SESSION: {session_id}")
-    print(f"   Previous rounds: {orchestrator.state.total_rounds_across_continuations}")
-    print(f"   Continuation #{orchestrator.state.continuation_count + 1}")
-    print(f"{'=' * 60}\n")
+    # Re-attach approval manager for this continuation
+    if approval_manager and hasattr(orchestrator, '_approval_manager'):
+        orchestrator._approval_manager = approval_manager
+
+    logger.info(
+        "CONTINUING COPILOT SESSION: %s | Previous rounds: %s | Continuation #%s",
+        session_id,
+        orchestrator.state.total_rounds_across_continuations,
+        orchestrator.state.continuation_count + 1,
+    )
 
     try:
         result = await orchestrator.continue_execution(additional_context)
@@ -365,9 +399,10 @@ async def continue_copilot(
 def continue_copilot_sync(
     session_id: str,
     additional_context: str = None,
+    approval_manager=None,
 ) -> Dict[str, Any]:
     """Synchronous wrapper for continue_copilot."""
-    return asyncio.run(continue_copilot(session_id, additional_context))
+    return asyncio.run(continue_copilot(session_id, additional_context, approval_manager))
 
 
 async def _cleanup_copilot_session(session_id: str) -> None:
@@ -427,17 +462,17 @@ def _print_copilot_banner(
     config: SwarmConfig,
     session_id: str,
 ) -> None:
-    """Print the copilot startup banner."""
-    print(f"\n{'=' * 60}")
-    print(f"🤖 COPILOT (Unified Swarm Mode)")
-    print(f"{'=' * 60}")
-    print(f"Task: {task[:200]}{'...' if len(task) > 200 else ''}")
-    print(f"Session: {session_id}")
-    print(f"Max rounds: {config.max_rounds}")
-    print(f"Agents: {len(config.available_agents)} loaded")
-    print(f"Phase tools: {config.enable_phase_tools}")
-    print(f"Routing: {'LLM-based' if config.use_copilot_control else 'Heuristic'}")
-    print(f"{'=' * 60}\n")
+    """Log the copilot startup banner."""
+    logger.info(
+        "COPILOT (Unified Swarm Mode) | Task: %s | Session: %s | "
+        "Max rounds: %s | Agents: %s loaded | Phase tools: %s | Routing: %s",
+        task[:200] + ('...' if len(task) > 200 else ''),
+        session_id,
+        config.max_rounds,
+        len(config.available_agents),
+        config.enable_phase_tools,
+        'LLM-based' if config.use_copilot_control else 'Heuristic',
+    )
 
 
 # Convenience functions for common use cases
@@ -539,14 +574,51 @@ def interactive_session(
     )
 
 
+def interactive_copilot(
+    task: str,
+    work_dir: str = work_dir_default,
+    api_keys: Dict[str, str] = None,
+    approval_manager=None,
+    callbacks: Dict[str, Any] = None,
+) -> Dict[str, Any]:
+    """
+    True interactive copilot — conversational mode like Claude Code.
+
+    The human is a participant in every round of the conversation.
+    After each agent action, the human can provide feedback, redirect,
+    or give a completely new task. Uses AG2-style human_input_mode="ALWAYS"
+    pattern at the orchestrator level.
+
+    Args:
+        task: Initial task description
+        work_dir: Working directory
+        api_keys: API keys
+        approval_manager: WebSocket approval manager (required for web UI)
+        callbacks: Optional callbacks
+
+    Returns:
+        Result dictionary with full conversation history
+    """
+    return copilot(
+        task=task,
+        conversational=True,
+        enable_planning=True,
+        enable_phase_tools=True,
+        work_dir=work_dir,
+        api_keys=api_keys,
+        approval_manager=approval_manager,
+        callbacks=callbacks,
+    )
+
+
 # Export for backwards compatibility
 __all__ = [
     'copilot',
     'copilot_async',
     'continue_copilot',
     'continue_copilot_sync',
-    'get_active_copilot_sessions',
     'quick_task',
     'planned_task',
     'interactive_session',
+    'interactive_copilot',
 ]

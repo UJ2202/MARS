@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any
 import os
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.utils import get_model_config, default_agents_llm_model
@@ -136,7 +139,7 @@ class IdeaGenerationPhase(Phase):
             # Display cost
             cmbagent.display_cost()
 
-            print(f"\nIdea generation took {exec_time:.4f} seconds\n")
+            logger.info("Idea generation took %.4f seconds", exec_time)
 
             # Build output
             context.output_data = {
@@ -166,8 +169,7 @@ class IdeaGenerationPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
-            import traceback
-            traceback.print_exc()
+            logger.error("Idea generation phase failed: %s", e, exc_info=True)
             return PhaseResult(
                 status=PhaseStatus.FAILED,
                 context=context,

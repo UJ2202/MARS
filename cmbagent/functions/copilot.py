@@ -1,5 +1,6 @@
 """Copilot routing functionality - intelligent task analysis and agent selection."""
 
+import logging
 from typing import List, Optional
 from autogen import register_function
 from autogen.agentchat.group import ContextVariables, AgentTarget, ReplyResult, TerminateTarget
@@ -7,6 +8,8 @@ from IPython.display import Markdown, display
 
 from cmbagent.structured_output import CopilotRoutingDecision
 from cmbagent.functions.copilot_tools import COPILOT_TOOLS, get_copilot_tools_description
+
+logger = logging.getLogger(__name__)
 
 
 def analyze_task_for_routing(
@@ -67,11 +70,13 @@ def analyze_task_for_routing(
     context_variables["copilot_estimated_steps"] = estimated_steps
 
     # Log the decision
-    print(f"\n{'='*60}")
-    print(f"COPILOT ROUTING DECISION")
-    print(f"{'='*60}")
-    print(decision.format())
-    print(f"{'='*60}\n")
+    logger.info("copilot_routing_decision",
+                route_type=route_type,
+                primary_agent=primary_agent,
+                complexity_score=complexity_score,
+                confidence=confidence,
+                estimated_steps=estimated_steps)
+    logger.debug("copilot_routing_detail", decision=decision.format())
 
     # Terminate - the copilot phase will read the decision from context
     # and take appropriate action
@@ -114,8 +119,7 @@ def record_copilot_handoff(
     }
 
     if should_handoff and target_agent:
-        print(f"\n-> Copilot handoff to: {target_agent}")
-        print(f"   Reason: {handoff_reason}")
+        logger.info("copilot_handoff", target_agent=target_agent, reason=handoff_reason)
 
         try:
             next_agent = cmbagent_instance.get_agent_from_name(target_agent)
@@ -125,7 +129,7 @@ def record_copilot_handoff(
                 context_variables=context_variables
             )
         except Exception as e:
-            print(f"   Warning: Could not find agent {target_agent}, terminating")
+            logger.warning("copilot_handoff_agent_not_found", target_agent=target_agent, error=str(e))
 
     # No handoff or agent not found - terminate
     terminator = cmbagent_instance.get_agent_from_name('terminator')
@@ -141,7 +145,7 @@ def setup_copilot_functions(cmbagent_instance, available_agents: List[str] = Non
     try:
         copilot_control = cmbagent_instance.get_agent_from_name('copilot_control')
     except Exception:
-        print("[Copilot] copilot_control agent not found, skipping function registration")
+        logger.debug("copilot_control_agent_not_found", action="skipping_function_registration")
         return
 
     # Create closures to bind cmbagent_instance
@@ -268,10 +272,10 @@ def setup_copilot_tools_mode(cmbagent_instance, available_agents: List[str] = No
             main_agent = cmbagent_instance.get_agent_from_name('engineer')
             agent_name = 'engineer'
 
-        print(f"[Copilot Tools] Registering tools with {agent_name}")
+        logger.info("copilot_tools_registering", agent=agent_name)
 
     except Exception as e:
-        print(f"[Copilot Tools] No suitable agent found for tool registration: {e}")
+        logger.warning("copilot_tools_no_suitable_agent", error=str(e))
         return
 
     # Register all copilot tools
@@ -283,7 +287,7 @@ def setup_copilot_tools_mode(cmbagent_instance, available_agents: List[str] = No
             description=tool_func.__doc__ or f"Tool: {tool_func.__name__}",
         )
 
-    print(f"[Copilot Tools] Registered {len(COPILOT_TOOLS)} tools")
+    logger.info("copilot_tools_registered", tool_count=len(COPILOT_TOOLS))
 
     # Update agent instructions to include tool usage guidelines
     if hasattr(main_agent, 'system_message'):
@@ -292,6 +296,6 @@ def setup_copilot_tools_mode(cmbagent_instance, available_agents: List[str] = No
         current_instructions = main_agent.system_message or ""
         if "You have access to the following tools" not in current_instructions:
             main_agent.system_message = f"{current_instructions}\n\n{tools_guide}"
-            print(f"[Copilot Tools] Updated {agent_name} instructions with tool guidelines")
+            logger.debug("copilot_tools_instructions_updated", agent=agent_name)
 
     return main_agent

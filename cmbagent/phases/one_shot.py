@@ -11,6 +11,9 @@ import os
 import time
 import json
 import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.utils import (
@@ -164,7 +167,7 @@ class OneShotPhase(Phase):
                     resp.raise_for_status()
                     shared_context["camb_context"] = resp.text
                 except Exception as e:
-                    print(f"Warning: Could not fetch CAMB context: {e}")
+                    logger.warning("Could not fetch CAMB context: %s", e)
 
             if self.config.agent == 'classy_context':
                 try:
@@ -172,7 +175,7 @@ class OneShotPhase(Phase):
                     resp.raise_for_status()
                     shared_context["classy_context"] = resp.text
                 except Exception as e:
-                    print(f"Warning: Could not fetch CLASS context: {e}")
+                    logger.warning("Could not fetch CLASS context: %s", e)
 
             # Execute
             exec_start = time.time()
@@ -193,7 +196,7 @@ class OneShotPhase(Phase):
             # Display cost
             cmbagent.display_cost()
 
-            print(f"\nTask took {exec_time:.4f} seconds\n")
+            logger.info("Task took %.4f seconds", exec_time)
 
             # Build output
             context.output_data = {
@@ -224,8 +227,7 @@ class OneShotPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
-            import traceback
-            traceback.print_exc()
+            logger.error("One-shot execution failed: %s", e, exc_info=True)
             return PhaseResult(
                 status=PhaseStatus.FAILED,
                 context=context,

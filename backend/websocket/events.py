@@ -2,11 +2,16 @@
 WebSocket event helpers and utilities.
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
+
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 async def send_ws_event(
@@ -31,7 +36,7 @@ async def send_ws_event(
     # Check connection state before sending
     try:
         if websocket.client_state != WebSocketState.CONNECTED:
-            print(f"[send_ws_event] WebSocket not connected, skipping {event_type}")
+            logger.debug("WebSocket not connected, skipping event", event_type=event_type)
             return False
     except Exception:
         # If we can't check state, try to send anyway
@@ -52,5 +57,5 @@ async def send_ws_event(
         await websocket.send_json(message)
         return True
     except Exception as e:
-        print(f"[send_ws_event] Failed to send {event_type}: {e}")
+        logger.warning("Failed to send WebSocket event %s: %s", event_type, e)
         return False

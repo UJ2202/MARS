@@ -10,22 +10,23 @@ from pathlib import Path
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='[%(name)s] %(message)s')
 
+logger = logging.getLogger(__name__)
 
 
 # Get the path of the current file
 path_to_basedir = os.path.dirname(os.path.abspath(__file__))
 if cmbagent_debug:
-    print('path_to_basedir: ', path_to_basedir)
+    logger.debug("path_resolved", path_to_basedir=path_to_basedir)
 
 # Construct the path to the APIs directory
 path_to_apis = os.path.join(path_to_basedir, "apis")
 if cmbagent_debug:
-    print('path_to_apis: ', path_to_apis)
+    logger.debug("path_resolved", path_to_apis=path_to_apis)
 
 # Construct the path to the assistants directory
 path_to_assistants = os.path.join(path_to_basedir, "agents/rag_agents/")
 if cmbagent_debug:
-    print('path_to_assistants: ', path_to_assistants)
+    logger.debug("path_resolved", path_to_assistants=path_to_assistants)
 path_to_agents = os.path.join(path_to_basedir, "agents/")
 
 # Always use current working directory
@@ -35,7 +36,7 @@ work_dir_default = os.path.join(os.getcwd(), "cmbagent_workdir")
 work_dir_default = os.path.abspath(os.path.expanduser(work_dir_default))
 
 if cmbagent_debug:
-    print('\n\n\n\n\nwork_dir_default: ', work_dir_default)
+    logger.debug("work_dir_default_resolved", work_dir_default=work_dir_default)
 
 
 default_chunking_strategy = {
@@ -51,7 +52,7 @@ default_chunking_strategy = {
 # max_chunk_size_tokens must be between 100 and 4096 inclusive.
 # chunk_overlap_tokens must be non-negative and should not exceed max_chunk_size_tokens / 2.
 
-# By default, the file_search tool outputs up to 20 chunks for gpt-4* models and up to 5 chunks for gpt-3.5-turbo. 
+# By default, the file_search tool outputs up to 20 chunks for gpt-4* models and up to 5 chunks for gpt-3.5-turbo.
 # You can adjust this by setting file_search.max_num_results in the tool when creating the assistant or the run.
 
 default_top_p = 0.05
@@ -62,13 +63,13 @@ default_select_speaker_prompt_template = """
 Read the above conversation. Then select the next role from {agentlist} to play. Only return the role.
 Note that only planner can modify or update the PLAN. planner should not be selected after the PLAN has been approved.
 executor should not be selected unless admin says "execute".
-engineer should be selected to check for conflicts. 
-engineer should be selected to check code. 
-engineer should be selected to provide code to save summary of session. 
-executor should be selected to execute. 
-planner should be the first agent to speak. 
+engineer should be selected to check for conflicts.
+engineer should be selected to check code.
+engineer should be selected to provide code to save summary of session.
+executor should be selected to execute.
+planner should be the first agent to speak.
 """
-### note that we hardcoded the requirement that planner speaks first. 
+### note that we hardcoded the requirement that planner speaks first.
 
 
 default_select_speaker_message_template = """
@@ -79,15 +80,15 @@ You are in a role play game about cosmological data analysis. The following role
 Note that only planner can modify or update the PLAN.
 planner should not be selected after the PLAN has been approved.
 executor should not be selected unless admin says "execute".
-engineer should be selected to check for conflicts. 
-engineer should be selected to check code. 
-executor should be selected to execute. 
+engineer should be selected to check for conflicts.
+engineer should be selected to check code.
+executor should be selected to execute.
 planner should be the first agent to speak.
 """
 
 
 default_groupchat_intro_message = """
-We have assembled a team of LLM agents and a human admin to solve Cosmological data analysis tasks. 
+We have assembled a team of LLM agents and a human admin to solve Cosmological data analysis tasks.
 
 In attendance are:
 """
@@ -200,7 +201,7 @@ def get_model_config(model, api_keys):
         "api_key": None,
         "api_type": None
     }
-    
+
     if 'o3' in model:
         config.update({
             "reasoning_effort": "medium",
@@ -240,7 +241,7 @@ def update_yaml_preserving_format(yaml_file, agent_name, new_id, field = 'vector
     # Load the YAML file while preserving formatting
     with open(yaml_file, 'r') as file:
         yaml_content = yaml.load(file)
-    
+
     # Update the vector_store_id for the specific agent
     if yaml_content['name'] == agent_name:
         if field == 'vector_store_ids':
@@ -248,8 +249,8 @@ def update_yaml_preserving_format(yaml_file, agent_name, new_id, field = 'vector
         elif field == 'assistant_id':
             yaml_content['assistant_config']['assistant_id'] = new_id
     else:
-        print(f"Agent {agent_name} not found.")
-    
+        logger.warning("agent_not_found_in_yaml", agent_name=agent_name)
+
     # Write the changes back to the YAML file while preserving formatting
     with open(yaml_file, 'w') as file:
         yaml.dump(yaml_content, file)
@@ -284,4 +285,4 @@ def clean_llm_config(llm_config):
 
     if llm_config['config_list'][0]['api_type'] == 'google':
         if 'top_p' in llm_config:
-            llm_config.pop('top_p') 
+            llm_config.pop('top_p')

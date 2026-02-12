@@ -6,6 +6,9 @@ from fastapi import APIRouter, HTTPException
 
 from models.schemas import ArxivFilterRequest, ArxivFilterResponse
 
+from core.logging import get_logger
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/api/arxiv", tags=["ArXiv"])
 
 # Import cmbagent at runtime
@@ -39,10 +42,10 @@ async def arxiv_filter_endpoint(request: ArxivFilterRequest):
         ArxivFilterResponse with download results and metadata
     """
     try:
-        print(f"Processing arXiv filter request...")
-        print(f"Input text length: {len(request.input_text)} characters")
+        logger.info("arxiv_filter_request_started")
+        logger.debug("arxiv_input_length", length=len(request.input_text))
         if request.work_dir:
-            print(f"Work directory: {request.work_dir}")
+            logger.debug("arxiv_work_dir", work_dir=request.work_dir)
 
         cmbagent = _get_cmbagent()
 
@@ -65,7 +68,7 @@ async def arxiv_filter_endpoint(request: ArxivFilterRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in arxiv_filter_endpoint: {str(e)}")
+        logger.error("arxiv_filter_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error processing arXiv filter request: {str(e)}"

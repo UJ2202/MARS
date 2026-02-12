@@ -1,7 +1,9 @@
 import os
+import logging
 from cmbagent.base_agent import BaseAgent
 from cmbagent.utils import cmbagent_debug
 
+logger = logging.getLogger(__name__)
 
 
 class ClassyAgent(BaseAgent):
@@ -9,8 +11,7 @@ class ClassyAgent(BaseAgent):
     def __init__(self, llm_config=None, **kwargs):
 
         if cmbagent_debug:
-            print('\n\n in classy.py: __init__: llm_config: ', llm_config)
-            print('\n\n')
+            logger.debug("classy_init", llm_config=str(llm_config))
 
         agent_id = os.path.splitext(os.path.abspath(__file__))[0]
 

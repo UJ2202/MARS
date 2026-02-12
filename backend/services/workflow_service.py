@@ -9,9 +9,14 @@ proper workflow lifecycle management including:
 - DAG integration
 """
 
+import logging
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import uuid
+
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Import cmbagent database components
 try:
@@ -29,7 +34,7 @@ try:
     from cmbagent.database.models import WorkflowRun, WorkflowStep, Session
     DATABASE_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: Database components not available: {e}")
+    logger.warning("Database components not available: %s", e)
     DATABASE_AVAILABLE = False
 
 
@@ -63,9 +68,9 @@ class WorkflowService:
             self._session_manager = SessionManager()
             self._default_session_id = self._session_manager.get_or_create_default_session()
             self._db_initialized = True
-            print(f"[WorkflowService] Database initialized with session: {self._default_session_id}")
+            logger.info("[WorkflowService] Database initialized with session: %s", self._default_session_id)
         except Exception as e:
-            print(f"[WorkflowService] Failed to initialize database: {e}")
+            logger.error("[WorkflowService] Failed to initialize database: %s", e)
             self._db_initialized = False
     
     @property
@@ -133,15 +138,15 @@ class WorkflowService:
                     "status": run.status
                 }
                 self._active_runs[task_id] = run_info
-                
-                print(f"[WorkflowService] Created workflow run: {run.id} for task: {task_id}")
+
+                logger.info("[WorkflowService] Created workflow run: %s for task: %s", run.id, task_id)
                 return run_info
                 
             finally:
                 db.close()
-                
+
         except Exception as e:
-            print(f"[WorkflowService] Error creating workflow run: {e}")
+            logger.error("[WorkflowService] Error creating workflow run: %s", e)
             # Fallback to non-DB mode
             run_info = {
                 "task_id": task_id,
@@ -187,9 +192,9 @@ class WorkflowService:
                 
             finally:
                 db.close()
-                
+
         except Exception as e:
-            print(f"[WorkflowService] Error pausing workflow: {e}")
+            logger.error("[WorkflowService] Error pausing workflow: %s", e)
             # Still update local state
             run_info["status"] = "paused"
             return {"success": True, "message": f"Workflow paused (with warning: {e})", "status": "paused"}
@@ -224,9 +229,9 @@ class WorkflowService:
                 
             finally:
                 db.close()
-                
+
         except Exception as e:
-            print(f"[WorkflowService] Error resuming workflow: {e}")
+            logger.error("[WorkflowService] Error resuming workflow: %s", e)
             # Still update local state
             run_info["status"] = "executing"
             return {"success": True, "message": f"Workflow resumed (with warning: {e})", "status": "executing"}
@@ -261,9 +266,9 @@ class WorkflowService:
                 
             finally:
                 db.close()
-                
+
         except Exception as e:
-            print(f"[WorkflowService] Error cancelling workflow: {e}")
+            logger.error("[WorkflowService] Error cancelling workflow: %s", e)
             # Still update local state
             run_info["status"] = "cancelled"
             return {"success": True, "message": f"Workflow cancelled (with warning: {e})", "status": "cancelled"}
@@ -296,8 +301,8 @@ class WorkflowService:
                 finally:
                     db.close()
             except Exception as e:
-                print(f"[WorkflowService] Error completing workflow in DB: {e}")
-        
+                logger.error("[WorkflowService] Error completing workflow in DB: %s", e)
+
         run_info["status"] = "completed"
         return {"success": True, "message": "Workflow completed", "status": "completed"}
     
@@ -330,8 +335,8 @@ class WorkflowService:
                 finally:
                     db.close()
             except Exception as e:
-                print(f"[WorkflowService] Error failing workflow in DB: {e}")
-        
+                logger.error("[WorkflowService] Error failing workflow in DB: %s", e)
+
         run_info["status"] = "failed"
         return {"success": True, "message": "Workflow failed", "status": "failed"}
     

@@ -10,12 +10,15 @@ Automatically captures all execution events from AG2 agents including:
 - State transitions
 """
 
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from threading import Lock
 import time
 import asyncio
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.database import EventRepository, ExecutionEvent
 from cmbagent.database.models import File, Message
@@ -131,7 +134,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            print(f"Error capturing agent_call event: {e}")
+            logger.error("Error capturing agent_call event: %s", e)
             return None
     
     def capture_agent_response(
@@ -178,7 +181,7 @@ class EventCaptureManager:
                 )
         
         except Exception as e:
-            print(f"Error capturing agent response: {e}")
+            logger.error("Error capturing agent response: %s", e)
     
     def capture_tool_call(
         self,
@@ -224,7 +227,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            print(f"Error capturing tool_call event: {e}")
+            logger.error("Error capturing tool_call event: %s", e)
             return None
     
     def capture_code_execution(
@@ -280,7 +283,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            print(f"Error capturing code_exec event: {e}")
+            logger.error("Error capturing code_exec event: %s", e)
             return None
     
     def capture_file_generation(
@@ -342,7 +345,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            print(f"Error capturing file_gen event: {e}")
+            logger.error("Error capturing file_gen event: %s", e)
             return None
     
     def capture_handoff(
@@ -383,7 +386,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            print(f"Error capturing handoff event: {e}")
+            logger.error("Error capturing handoff event: %s", e)
             return None
     
     def capture_message(
@@ -447,7 +450,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            print(f"Error capturing message event: {e}")
+            logger.error("Error capturing message event: %s", e)
             return None
     
     def capture_error(
@@ -489,7 +492,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            print(f"Error capturing error event: {e}")
+            logger.error("Error capturing error event: %s", e)
             return None
     
     def _create_event(
@@ -553,9 +556,9 @@ class EventCaptureManager:
             backend_path = Path(__file__).parent.parent.parent / "backend"
             if str(backend_path) not in sys.path:
                 sys.path.insert(0, str(backend_path))
-            
+
             from websocket_events import create_event_captured_event
-            from websocket_manager import send_ws_event
+            from websocket.events import send_ws_event
             
             ws_event = create_event_captured_event(
                 run_id=self.run_id,

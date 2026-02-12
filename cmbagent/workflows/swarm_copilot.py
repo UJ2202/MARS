@@ -50,7 +50,10 @@ Usage:
 import os
 import uuid
 import asyncio
+import logging
 from typing import Dict, Any, List, Optional, Callable
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.utils import work_dir_default, get_api_keys_from_env, CORE_AGENTS
 from cmbagent.workflows.utils import clean_work_dir
@@ -62,7 +65,10 @@ from cmbagent.orchestrator import (
 )
 
 
-# Global session storage for continuation support
+# In-memory orchestrator tracking for live session continuation.
+# These are volatile references to running SwarmOrchestrator instances.
+# Durable session state is managed by SessionManager (Stages 10-11).
+# This dict holds live orchestrator references needed by continue_swarm_copilot_sync().
 _active_sessions: Dict[str, SwarmOrchestrator] = {}
 
 
@@ -86,6 +92,12 @@ def swarm_copilot(
     agent_models: Dict[str, str] = None,
     # HITL
     approval_mode: str = "after_step",
+    # Conversational mode (like Claude Code / AG2 human_input_mode="ALWAYS")
+    conversational: bool = False,
+    # Tool approval (like Claude Code's permission system)
+    tool_approval: str = "none",  # "prompt" | "auto_allow_all" | "none"
+    # Intelligent routing mode
+    intelligent_routing: str = "balanced",  # "aggressive" | "balanced" | "minimal"
     # Environment
     work_dir: str = work_dir_default,
     api_keys: Dict[str, str] = None,
@@ -104,6 +116,7 @@ def swarm_copilot(
     2. Registers ALL tools + phase tools
     3. Uses intelligent routing via copilot_control
     4. Manages rounds with continuation support
+    5. Supports conversational mode (human in every turn)
 
     Args:
         task: Task to execute
@@ -119,6 +132,7 @@ def swarm_copilot(
         default_model: Default model for agents
         agent_models: Per-agent model overrides
         approval_mode: HITL approval timing
+        conversational: Enable conversational mode (human in every turn)
         work_dir: Working directory
         api_keys: API keys
         clear_work_dir: Clear work directory before starting
@@ -149,6 +163,9 @@ def swarm_copilot(
         default_model=default_model,
         agent_models=agent_models,
         approval_mode=approval_mode,
+        conversational=conversational,
+        tool_approval=tool_approval,
+        intelligent_routing=intelligent_routing,
         work_dir=work_dir,
         api_keys=api_keys,
         clear_work_dir=clear_work_dir,
@@ -178,6 +195,12 @@ async def swarm_copilot_async(
     agent_models: Dict[str, str] = None,
     # HITL
     approval_mode: str = "after_step",
+    # Conversational mode (like Claude Code / AG2 human_input_mode="ALWAYS")
+    conversational: bool = False,
+    # Tool approval (like Claude Code's permission system)
+    tool_approval: str = "none",  # "prompt" | "auto_allow_all" | "none"
+    # Intelligent routing mode
+    intelligent_routing: str = "balanced",  # "aggressive" | "balanced" | "minimal"
     # Environment
     work_dir: str = work_dir_default,
     api_keys: Dict[str, str] = None,
@@ -242,6 +265,9 @@ async def swarm_copilot_async(
         default_model=default_model,
         agent_models=agent_models or {},
         approval_mode=approval_mode,
+        conversational=conversational or approval_mode == "conversational",
+        tool_approval=tool_approval,
+        intelligent_routing=intelligent_routing,
     )
 
     # Build orchestrator config
@@ -276,11 +302,11 @@ async def swarm_copilot_async(
         # Handle result
         if result.get('status') == 'paused':
             # Keep session alive for continuation
-            print(f"\n{'=' * 60}")
-            print(f"⏸  SWARM PAUSED - Max rounds ({max_rounds}) reached")
-            print(f"   Session ID: {session_id}")
-            print(f"   Call continue_swarm_copilot('{session_id}') to continue")
-            print(f"{'=' * 60}\n")
+            logger.info(
+                "SWARM PAUSED - Max rounds (%s) reached | Session ID: %s | "
+                "Call continue_swarm_copilot('%s') to continue",
+                max_rounds, session_id, session_id,
+            )
         else:
             # Clean up completed session
             await _cleanup_session(session_id)
@@ -296,6 +322,7 @@ async def swarm_copilot_async(
 async def continue_swarm_copilot(
     session_id: str,
     additional_context: str = None,
+    approval_manager=None,
 ) -> Dict[str, Any]:
     """
     Continue a paused swarm copilot session.
@@ -303,6 +330,7 @@ async def continue_swarm_copilot(
     Args:
         session_id: Session ID from paused result
         additional_context: Optional additional instructions
+        approval_manager: Optional approval manager to re-attach for this continuation
 
     Returns:
         Result dictionary (same format as swarm_copilot)
@@ -317,11 +345,16 @@ async def continue_swarm_copilot(
 
     orchestrator = _active_sessions[session_id]
 
-    print(f"\n{'=' * 60}")
-    print(f"▶  CONTINUING SWARM SESSION: {session_id}")
-    print(f"   Previous rounds: {orchestrator.state.total_rounds_across_continuations}")
-    print(f"   Continuation #{orchestrator.state.continuation_count + 1}")
-    print(f"{'=' * 60}\n")
+    # Re-attach approval manager for this continuation
+    if approval_manager and hasattr(orchestrator, '_approval_manager'):
+        orchestrator._approval_manager = approval_manager
+
+    logger.info(
+        "CONTINUING SWARM SESSION: %s | Previous rounds: %s | Continuation #%s",
+        session_id,
+        orchestrator.state.total_rounds_across_continuations,
+        orchestrator.state.continuation_count + 1,
+    )
 
     try:
         result = await orchestrator.continue_execution(additional_context)
@@ -340,9 +373,10 @@ async def continue_swarm_copilot(
 def continue_swarm_copilot_sync(
     session_id: str,
     additional_context: str = None,
+    approval_manager=None,
 ) -> Dict[str, Any]:
     """Synchronous wrapper for continue_swarm_copilot."""
-    return asyncio.run(continue_swarm_copilot(session_id, additional_context))
+    return asyncio.run(continue_swarm_copilot(session_id, additional_context, approval_manager))
 
 
 async def _cleanup_session(session_id: str) -> None:
@@ -368,17 +402,17 @@ def _print_swarm_banner(
     config: SwarmConfig,
     session_id: str,
 ) -> None:
-    """Print the swarm startup banner."""
-    print(f"\n{'=' * 60}")
-    print(f"🐝 SWARM COPILOT")
-    print(f"{'=' * 60}")
-    print(f"Task: {task[:200]}{'...' if len(task) > 200 else ''}")
-    print(f"Session: {session_id}")
-    print(f"Max rounds: {config.max_rounds}")
-    print(f"Agents: {len(config.available_agents)} loaded")
-    print(f"Phase tools: {config.enable_phase_tools}")
-    print(f"Routing: {'LLM-based' if config.use_copilot_control else 'Heuristic'}")
-    print(f"{'=' * 60}\n")
+    """Log the swarm startup banner."""
+    logger.info(
+        "SWARM COPILOT | Task: %s | Session: %s | "
+        "Max rounds: %s | Agents: %s loaded | Phase tools: %s | Routing: %s",
+        task[:200] + ('...' if len(task) > 200 else ''),
+        session_id,
+        config.max_rounds,
+        len(config.available_agents),
+        config.enable_phase_tools,
+        'LLM-based' if config.use_copilot_control else 'Heuristic',
+    )
 
 
 # Convenience functions
@@ -462,7 +496,6 @@ __all__ = [
     'swarm_copilot_async',
     'continue_swarm_copilot',
     'continue_swarm_copilot_sync',
-    'get_active_sessions',
     'quick_swarm',
     'full_swarm',
     'interactive_swarm',

@@ -85,9 +85,16 @@ class PhaseOrchestrator:
         self._work_dir = work_dir
         self._approval_manager = approval_manager
 
+        # Resolve orchestrator directories relative to work_dir
+        self.config.resolve_dirs(work_dir)
+
         # Initialize components based on config
         self._dag_tracker = DAGTracker() if self.config.enable_dag_tracking else None
-        self._logger = OrchestratorLogger(self.config) if self.config.enable_logging else None
+        # Wire log file from config's log_dir
+        _log_file = None
+        if self.config.enable_logging and self.config.log_dir:
+            _log_file = str(self.config.log_dir / f"orchestrator_{uuid.uuid4().hex[:12]}.log")
+        self._logger = OrchestratorLogger(self.config, log_file=_log_file) if self.config.enable_logging else None
         self._metrics = MetricsCollector() if self.config.enable_metrics else None
         self._context_pipeline = ContextPipeline()
 

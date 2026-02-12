@@ -1,14 +1,16 @@
 import os
+import logging
 from cmbagent.base_agent import BaseAgent
 from cmbagent.utils import cmbagent_debug
+
+logger = logging.getLogger(__name__)
 
 class ClassySzAgent(BaseAgent):
 
     def __init__(self, llm_config=None, **kwargs):
 
         if cmbagent_debug:
-            print('\n\n in classy_sz.py: __init__: llm_config: ', llm_config)
-            print('\n\n')
+            logger.debug("classy_sz_init", llm_config=str(llm_config))
 
         agent_id = os.path.splitext(os.path.abspath(__file__))[0]
 

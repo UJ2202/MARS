@@ -11,11 +11,14 @@ Key features:
 - Autogen-agnostic (no dependency on autogen internals)
 """
 
+import logging
 from typing import Callable, Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
 import time
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowPhase(Enum):
@@ -69,9 +72,9 @@ class WorkflowCallbacks:
     
     Usage:
         callbacks = WorkflowCallbacks(
-            on_planning_start=lambda task, config: print(f"Planning: {task}"),
-            on_step_start=lambda step, agent, desc: print(f"Step {step}: {agent}"),
-            on_step_complete=lambda step, result, time: print(f"Step {step} done"),
+            on_planning_start=lambda task, config: logger.info("planning_started task=%s", task),
+            on_step_start=lambda step: logger.info("step_started step=%s", step.step_number),
+            on_step_complete=lambda step: logger.info("step_completed step=%s", step.step_number),
         )
         
         planning_and_control_context_carryover(
@@ -146,7 +149,7 @@ class WorkflowCallbacks:
             try:
                 self.on_phase_change(phase, step_number)
             except Exception as e:
-                print(f"Error in on_phase_change callback: {e}")
+                logger.error("callback_error callback=on_phase_change", exc_info=True)
 
     def invoke_planning_start(self, task: str, config: Dict[str, Any]) -> None:
         """Safely invoke on_planning_start callback"""
@@ -154,7 +157,7 @@ class WorkflowCallbacks:
             try:
                 self.on_planning_start(task, config)
             except Exception as e:
-                print(f"Error in on_planning_start callback: {e}")
+                logger.error("callback_error callback=on_planning_start", exc_info=True)
     
     def invoke_planning_complete(self, plan_info: PlanInfo) -> None:
         """Safely invoke on_planning_complete callback"""
@@ -162,7 +165,7 @@ class WorkflowCallbacks:
             try:
                 self.on_planning_complete(plan_info)
             except Exception as e:
-                print(f"Error in on_planning_complete callback: {e}")
+                logger.error("callback_error callback=on_planning_complete", exc_info=True)
     
     def invoke_step_start(self, step_info: StepInfo) -> None:
         """Safely invoke on_step_start callback"""
@@ -170,7 +173,7 @@ class WorkflowCallbacks:
             try:
                 self.on_step_start(step_info)
             except Exception as e:
-                print(f"Error in on_step_start callback: {e}")
+                logger.error("callback_error callback=on_step_start", exc_info=True)
     
     def invoke_step_complete(self, step_info: StepInfo) -> None:
         """Safely invoke on_step_complete callback"""
@@ -178,7 +181,7 @@ class WorkflowCallbacks:
             try:
                 self.on_step_complete(step_info)
             except Exception as e:
-                print(f"Error in on_step_complete callback: {e}")
+                logger.error("callback_error callback=on_step_complete", exc_info=True)
     
     def invoke_step_failed(self, step_info: StepInfo) -> None:
         """Safely invoke on_step_failed callback"""
@@ -186,7 +189,7 @@ class WorkflowCallbacks:
             try:
                 self.on_step_failed(step_info)
             except Exception as e:
-                print(f"Error in on_step_failed callback: {e}")
+                logger.error("callback_error callback=on_step_failed", exc_info=True)
     
     def invoke_workflow_start(self, task: str, config: Dict[str, Any]) -> None:
         """Safely invoke on_workflow_start callback"""
@@ -194,7 +197,7 @@ class WorkflowCallbacks:
             try:
                 self.on_workflow_start(task, config)
             except Exception as e:
-                print(f"Error in on_workflow_start callback: {e}")
+                logger.error("callback_error callback=on_workflow_start", exc_info=True)
     
     def invoke_workflow_complete(self, final_context: Dict[str, Any], total_time: float) -> None:
         """Safely invoke on_workflow_complete callback"""
@@ -202,7 +205,7 @@ class WorkflowCallbacks:
             try:
                 self.on_workflow_complete(final_context, total_time)
             except Exception as e:
-                print(f"Error in on_workflow_complete callback: {e}")
+                logger.error("callback_error callback=on_workflow_complete", exc_info=True)
     
     def invoke_workflow_failed(self, error: str, step_number: Optional[int] = None) -> None:
         """Safely invoke on_workflow_failed callback"""
@@ -210,7 +213,7 @@ class WorkflowCallbacks:
             try:
                 self.on_workflow_failed(error, step_number)
             except Exception as e:
-                print(f"Error in on_workflow_failed callback: {e}")
+                logger.error("callback_error callback=on_workflow_failed", exc_info=True)
     
     def invoke_progress(self, message: str, data: Dict[str, Any]) -> None:
         """Safely invoke on_progress callback"""
@@ -218,20 +221,24 @@ class WorkflowCallbacks:
             try:
                 self.on_progress(message, data)
             except Exception as e:
-                print(f"Error in on_progress callback: {e}")
+                logger.error("callback_error callback=on_progress", exc_info=True)
     
     def check_should_continue(self) -> bool:
         """
         Check if workflow should continue or pause.
-        
+
         Returns:
             True if should continue, False if should pause/stop
         """
         if self.should_continue:
+            # Defensive check: ensure should_continue is callable
+            if not callable(self.should_continue):
+                logger.warning("should_continue_not_callable type=%s", type(self.should_continue))
+                return bool(self.should_continue)
             try:
                 return self.should_continue()
             except Exception as e:
-                print(f"Error in should_continue callback: {e}")
+                logger.error("callback_error callback=should_continue", exc_info=True)
                 return True  # Default to continue on error
         return True  # Default to continue if no callback set
     
@@ -244,7 +251,7 @@ class WorkflowCallbacks:
             try:
                 self.on_pause_check()
             except Exception as e:
-                print(f"Error in on_pause_check callback: {e}")
+                logger.error("callback_error callback=on_pause_check", exc_info=True)
 
     def invoke_cost_update(self, cost_data: Dict[str, Any]) -> None:
         """
@@ -262,7 +269,7 @@ class WorkflowCallbacks:
             try:
                 self.on_cost_update(cost_data)
             except Exception as e:
-                print(f"Error in on_cost_update callback: {e}")
+                logger.error("callback_error callback=on_cost_update", exc_info=True)
 
     def invoke_agent_message(self, agent: str, role: str, content: str, metadata: Dict[str, Any] = None) -> None:
         """
@@ -278,7 +285,7 @@ class WorkflowCallbacks:
             try:
                 self.on_agent_message(agent, role, content, metadata or {})
             except Exception as e:
-                print(f"Error in on_agent_message callback: {e}")
+                logger.error("callback_error callback=on_agent_message", exc_info=True)
 
     def invoke_code_execution(self, agent: str, code: str, language: str, result: Optional[str] = None) -> None:
         """
@@ -294,7 +301,7 @@ class WorkflowCallbacks:
             try:
                 self.on_code_execution(agent, code, language, result)
             except Exception as e:
-                print(f"Error in on_code_execution callback: {e}")
+                logger.error("callback_error callback=on_code_execution", exc_info=True)
 
     def invoke_tool_call(self, agent: str, tool_name: str, arguments: Dict[str, Any], result: Optional[Any] = None) -> None:
         """
@@ -310,7 +317,7 @@ class WorkflowCallbacks:
             try:
                 self.on_tool_call(agent, tool_name, arguments, result)
             except Exception as e:
-                print(f"Error in on_tool_call callback: {e}")
+                logger.error("callback_error callback=on_tool_call", exc_info=True)
 
 
 def create_null_callbacks() -> WorkflowCallbacks:
@@ -319,16 +326,17 @@ def create_null_callbacks() -> WorkflowCallbacks:
 
 
 def create_print_callbacks() -> WorkflowCallbacks:
-    """Create a callbacks instance that prints all events (for debugging)"""
+    """Create a callbacks instance that logs all events (for debugging)"""
+    _logger = logging.getLogger(__name__ + ".print_callbacks")
     return WorkflowCallbacks(
-        on_planning_start=lambda task, config: print(f"📋 Planning started: {task[:100]}..."),
-        on_planning_complete=lambda plan: print(f"✅ Planning complete: {plan.num_steps} steps"),
-        on_step_start=lambda step: print(f"▶️  Step {step.step_number} started: {step.goal}"),
-        on_step_complete=lambda step: print(f"✅ Step {step.step_number} completed in {step.execution_time:.2f}s" if step.execution_time else f"✅ Step {step.step_number} completed"),
-        on_step_failed=lambda step: print(f"❌ Step {step.step_number} failed: {step.error}"),
-        on_workflow_start=lambda task, config: print(f"🚀 Workflow started"),
-        on_workflow_complete=lambda ctx, time: print(f"🎉 Workflow complete in {time:.2f}s"),
-        on_workflow_failed=lambda err, step: print(f"💥 Workflow failed at step {step}: {err}"),
+        on_planning_start=lambda task, config: _logger.info("planning_started task=%s", task[:100]),
+        on_planning_complete=lambda plan: _logger.info("planning_complete num_steps=%s", plan.num_steps),
+        on_step_start=lambda step: _logger.info("step_started step_number=%s goal=%s", step.step_number, step.goal),
+        on_step_complete=lambda step: _logger.info("step_completed step_number=%s execution_time=%s", step.step_number, step.execution_time),
+        on_step_failed=lambda step: _logger.error("step_failed step_number=%s error=%s", step.step_number, step.error),
+        on_workflow_start=lambda task, config: _logger.info("workflow_started"),
+        on_workflow_complete=lambda ctx, time: _logger.info("workflow_complete total_time=%.2f", time),
+        on_workflow_failed=lambda err, step: _logger.error("workflow_failed step=%s error=%s", step, err),
     )
 
 
@@ -342,9 +350,6 @@ def merge_callbacks(*callbacks_list: WorkflowCallbacks) -> WorkflowCallbacks:
     Returns:
         New WorkflowCallbacks that invokes all provided callbacks
     """
-    import logging
-    logger = logging.getLogger(__name__)
-    
     def make_merged_callback(method_name: str):
         def merged(*args, **kwargs):
             for cb in callbacks_list:
@@ -361,6 +366,12 @@ def merge_callbacks(*callbacks_list: WorkflowCallbacks) -> WorkflowCallbacks:
         def merged():
             for cb in callbacks_list:
                 if cb.should_continue:
+                    # Defensive check: ensure should_continue is callable
+                    if not callable(cb.should_continue):
+                        # Treat non-callable truthy values as True, falsy as False
+                        if not cb.should_continue:
+                            return False
+                        continue
                     try:
                         if not cb.should_continue():
                             return False
@@ -593,7 +604,7 @@ def create_websocket_callbacks(
                 from cmbagent.database.models import WorkflowRun
                 run = db.query(WorkflowRun).filter(WorkflowRun.id == run_id).first()
                 if not run:
-                    print(f"Warning: Could not find run {run_id} for cost recording")
+                    logger.warning("cost_recording_run_not_found run_id=%s", run_id)
                     return
                 
                 cost_repo = CostRepository(db, run.session_id)
@@ -643,7 +654,7 @@ def create_websocket_callbacks(
                 db.close()
                 
         except Exception as e:
-            print(f"Warning: Failed to save cost to database: {e}")
+            logger.warning("cost_database_save_failed error=%s", e)
             # Continue execution - don't fail workflow if DB save fails
 
     def on_agent_message(agent: str, role: str, content: str, metadata: Dict[str, Any]) -> None:
@@ -720,9 +731,6 @@ def create_database_callbacks(
     Returns:
         WorkflowCallbacks configured for database updates
     """
-    import logging
-    logger = logging.getLogger(__name__)
-    
     def on_planning_start(task: str, config: Dict[str, Any]) -> None:
         try:
             from cmbagent.database.models import DAGNode, WorkflowRun

@@ -1,6 +1,7 @@
 """Status tracking functionality."""
 
 import os
+import logging
 from typing import Literal
 from autogen import register_function
 from autogen.agentchat.group import ContextVariables, AgentTarget, ReplyResult
@@ -8,13 +9,15 @@ from IPython.display import Image as IPImage, display as ip_display
 from ..cmbagent_utils import IMG_WIDTH, cmbagent_disable_display, cmbagent_debug
 from .utils import load_docstrings, load_plots
 
+logger = logging.getLogger(__name__)
+
 
 def record_status(
     current_status: Literal["in progress", "failed", "completed"],
     current_plan_step_number: int,
     current_sub_task: str,
     current_instructions: str,
-    agent_for_sub_task: Literal["engineer", "researcher", "idea_maker", "idea_hater", 
+    agent_for_sub_task: Literal["engineer", "researcher", "idea_maker", "idea_hater",
                                 "camb_context", "classy_context", "aas_keyword_finder"],
     context_variables: ContextVariables,
     cmbagent_instance
@@ -38,7 +41,7 @@ def record_status(
     control = cmbagent_instance.get_agent_from_name('control')
     terminator = cmbagent_instance.get_agent_from_name('terminator')
     admin = cmbagent_instance.get_agent_from_name('admin')
-    
+
     if cmbagent_instance.mode == "chat":
         return _record_status_chat_mode(
             current_status, current_plan_step_number, current_sub_task, current_instructions,
@@ -60,9 +63,9 @@ def _record_status_chat_mode(current_status, current_plan_step_number, current_s
         "failed": "❌",
         "in progress": "⏳"
     }
-    
+
     icon = status_icons.get(current_status, "")
-    
+
     context_variables["current_plan_step_number"] = current_plan_step_number
     context_variables["current_sub_task"] = current_sub_task
     context_variables["agent_for_sub_task"] = agent_for_sub_task
@@ -71,7 +74,7 @@ def _record_status_chat_mode(current_status, current_plan_step_number, current_s
 
     codes = os.path.join(cmbagent_instance.work_dir, context_variables['codebase_path'])
     docstrings = load_docstrings(codes)
-    
+
     output_str = ""
     for module, info in docstrings.items():
         output_str += "-----------\n"
@@ -109,7 +112,7 @@ def _record_status_chat_mode(current_status, current_plan_step_number, current_s
         if not cmbagent_disable_display:
             ip_display(IPImage(filename=img_file, width=2 * IMG_WIDTH))
         else:
-            print(f"\n- Saved {img_file}")
+            logger.info("image_saved", path=img_file)
 
     # Update the context to include the newly displayed images.
     context_variables["displayed_images"] = displayed_images + new_images
@@ -136,9 +139,9 @@ def _record_status_chat_mode(current_status, current_plan_step_number, current_s
             agent_to_transfer_to = admin
         else:
             agent_to_transfer_to = admin
-        
+
         context_variables["n_attempts"] = 0
-        
+
     if "failed" in context_variables["current_status"]:
         if context_variables["agent_for_sub_task"] == "engineer":
             agent_to_transfer_to = cmbagent_instance.get_agent_from_name('engineer')
@@ -147,9 +150,9 @@ def _record_status_chat_mode(current_status, current_plan_step_number, current_s
 
     if cmbagent_debug:
         if agent_to_transfer_to is None:
-            print("agent_to_transfer_to is None")
-        else:   
-            print("agent_to_transfer_to: ", agent_to_transfer_to.name)
+            logger.debug("agent_transfer_target", target="None")
+        else:
+            logger.debug("agent_transfer_target", target=agent_to_transfer_to.name)
 
     return _create_reply_result(agent_to_transfer_to, control, context_variables, icon)
 
@@ -163,9 +166,9 @@ def _record_status_default_mode(current_status, current_plan_step_number, curren
         "failed": "❌",
         "in progress": "⏳"
     }
-    
+
     icon = status_icons.get(current_status, "")
-    
+
     context_variables["current_plan_step_number"] = current_plan_step_number
     context_variables["current_sub_task"] = current_sub_task
     context_variables["agent_for_sub_task"] = agent_for_sub_task
@@ -174,7 +177,7 @@ def _record_status_default_mode(current_status, current_plan_step_number, curren
 
     codes = os.path.join(cmbagent_instance.work_dir, context_variables['codebase_path'])
     docstrings = load_docstrings(codes)
-    
+
     output_str = ""
     for module, info in docstrings.items():
         output_str += "-----------\n"
@@ -212,7 +215,7 @@ def _record_status_default_mode(current_status, current_plan_step_number, curren
         if not cmbagent_disable_display:
             ip_display(IPImage(filename=img_file, width=2 * IMG_WIDTH))
         else:
-            print(f"\n- Saved {img_file}")
+            logger.info("image_saved", path=img_file)
 
     # Update the context to include the newly displayed images.
     context_variables["displayed_images"] = displayed_images + new_images
@@ -228,7 +231,7 @@ def _record_status_default_mode(current_status, current_plan_step_number, curren
     context_variables["transfer_to_camb_context"] = False
     context_variables["transfer_to_classy_context"] = False
     context_variables["transfer_to_planck_agent"] = False
-    
+
     agent_to_transfer_to = None
     if "in progress" in context_variables["current_status"]:
         _set_transfer_flags(context_variables, agent_for_sub_task)
@@ -253,9 +256,9 @@ def _record_status_default_mode(current_status, current_plan_step_number, curren
 
     if cmbagent_debug:
         if agent_to_transfer_to is None:
-            print("agent_to_transfer_to is None")
-        else:   
-            print("agent_to_transfer_to: ", agent_to_transfer_to.name)
+            logger.debug("agent_transfer_target", target="None")
+        else:
+            logger.debug("agent_transfer_target", target=agent_to_transfer_to.name)
 
     return _create_reply_result(agent_to_transfer_to, control, context_variables, icon)
 
@@ -275,7 +278,7 @@ def _set_transfer_flags(context_variables, agent_for_sub_task):
         "camb_context": "transfer_to_camb_context",
         "classy_context": "transfer_to_classy_context",
     }
-    
+
     flag = agent_mapping.get(agent_for_sub_task)
     if flag:
         context_variables[flag] = True
@@ -296,25 +299,25 @@ def _get_agent_to_transfer(context_variables, cmbagent_instance):
         ("transfer_to_camb_context", 'camb_context'),
         ("transfer_to_classy_context", 'classy_context'),
     ]
-    
+
     for flag, agent_name in agent_flags:
         if context_variables.get(flag):
             return cmbagent_instance.get_agent_from_name(agent_name)
-    
+
     return None
 
 
 def _create_reply_result(agent_to_transfer_to, control, context_variables, icon):
     """Create the ReplyResult with formatted message."""
     message = f"""
-**Step number:** {context_variables["current_plan_step_number"]} out of {context_variables["number_of_steps_in_plan"]}.\n 
-**Sub-task:** {context_variables["current_sub_task"]}\n 
-**Agent in charge of sub-task:** `{context_variables["agent_for_sub_task"]}`\n 
-**Instructions:**\n 
-{context_variables["current_instructions"]}\n 
+**Step number:** {context_variables["current_plan_step_number"]} out of {context_variables["number_of_steps_in_plan"]}.\n
+**Sub-task:** {context_variables["current_sub_task"]}\n
+**Agent in charge of sub-task:** `{context_variables["agent_for_sub_task"]}`\n
+**Instructions:**\n
+{context_variables["current_instructions"]}\n
 **Status:** {context_variables["current_status"]} {icon}
 """
-    
+
     if agent_to_transfer_to is None:
         return ReplyResult(
             target=AgentTarget(control),
@@ -349,7 +352,7 @@ def record_status_starter(context_variables: ContextVariables, cmbagent_instance
         "failed": "❌",
         "in progress": "⏳"
     }
-    
+
     icon = status_icons.get(current_status, "")
 
     context_variables["transfer_to_engineer"] = False
@@ -372,11 +375,11 @@ def record_status_starter(context_variables: ContextVariables, cmbagent_instance
     return ReplyResult(
         target=AgentTarget(agent_to_transfer_to),
         message=f"""
-**Step number:** {context_variables["current_plan_step_number"]} out of {context_variables["number_of_steps_in_plan"]}.\n 
-**Sub-task:** {context_variables["current_sub_task"]}\n 
-**Agent in charge of sub-task:** `{context_variables["agent_for_sub_task"]}`\n 
-**Instructions:**\n 
-{context_variables["current_instructions"]}\n 
+**Step number:** {context_variables["current_plan_step_number"]} out of {context_variables["number_of_steps_in_plan"]}.\n
+**Sub-task:** {context_variables["current_sub_task"]}\n
+**Agent in charge of sub-task:** `{context_variables["agent_for_sub_task"]}`\n
+**Instructions:**\n
+{context_variables["current_instructions"]}\n
 **Status:** {context_variables["current_status"]} {icon}
 """,
         context_variables=context_variables
@@ -387,23 +390,23 @@ def setup_status_functions(cmbagent_instance):
     """Register status tracking functions with the appropriate agents."""
     control = cmbagent_instance.get_agent_from_name('control')
     control_starter = cmbagent_instance.get_agent_from_name('control_starter')
-    
+
     # Create closures to bind cmbagent_instance
     def record_status_closure(
         current_status: Literal["in progress", "failed", "completed"],
         current_plan_step_number: int,
         current_sub_task: str,
         current_instructions: str,
-        agent_for_sub_task: Literal["engineer", "researcher", "idea_maker", "idea_hater", 
+        agent_for_sub_task: Literal["engineer", "researcher", "idea_maker", "idea_hater",
                                     "camb_context", "classy_context", "aas_keyword_finder"],
         context_variables: ContextVariables
     ) -> ReplyResult:
-        return record_status(current_status, current_plan_step_number, current_sub_task, 
+        return record_status(current_status, current_plan_step_number, current_sub_task,
                            current_instructions, agent_for_sub_task, context_variables, cmbagent_instance)
-    
+
     def record_status_starter_closure(context_variables: ContextVariables) -> ReplyResult:
         return record_status_starter(context_variables, cmbagent_instance)
-    
+
     register_function(
         record_status_closure,
         caller=control,
@@ -425,7 +428,7 @@ def setup_status_functions(cmbagent_instance):
             ReplyResult: Contains a formatted status message and updated context.
         """,
     )
-    
+
     register_function(
         record_status_starter_closure,
         caller=control_starter,

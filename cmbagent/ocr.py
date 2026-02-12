@@ -14,6 +14,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import glob
 
+logger = logging.getLogger(__name__)
+
 # Mistral AI imports
 from mistralai import Mistral, DocumentURLChunk
 from mistralai.extra import response_format_from_pydantic_model
@@ -97,14 +99,14 @@ class MistralOCRProcessor:
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # 1. Create directory tree listing
-        print(f"Scanning directory tree for PDF files...")
+        logger.info("Scanning directory tree for PDF files...")
         dir_tree = self._list_dir_tree(folder_path, max_depth)
         
         # 2. Collect all PDF files
         pdf_files = self._collect_pdf_files(folder_path, max_depth)
         
         if not pdf_files:
-            print(f"No PDF files found in {folder_path}")
+            logger.info("No PDF files found in %s", folder_path)
             return {
                 "processed_files": 0,
                 "failed_files": 0,
@@ -112,7 +114,7 @@ class MistralOCRProcessor:
                 "pdf_files": []
             }
         
-        print(f"Found {len(pdf_files)} PDF files to process")
+        logger.info("Found %d PDF files to process", len(pdf_files))
         
         # 3. Process PDF files in parallel
         results = {
@@ -145,25 +147,25 @@ class MistralOCRProcessor:
                     result = future.result()
                     if result["success"]:
                         results["processed_files"] += 1
-                        print(f"✓ Processed: {Path(pdf_path).name}")
+                        logger.info("Processed: %s", Path(pdf_path).name)
                     else:
                         results["failed_files"] += 1
-                        print(f"✗ Failed: {Path(pdf_path).name} - {result['error']}")
+                        logger.error("Failed: %s - %s", Path(pdf_path).name, result['error'])
                     
                     results["results"].append(result)
                 except Exception as e:
                     results["failed_files"] += 1
-                    print(f"✗ Failed: {Path(pdf_path).name} - {str(e)}")
+                    logger.error("Failed: %s - %s", Path(pdf_path).name, e)
                     results["results"].append({
                         "pdf_path": str(pdf_path),
                         "success": False,
                         "error": str(e)
                     })
         
-        print(f"\nProcessing complete:")
-        print(f"  Successfully processed: {results['processed_files']} files")
-        print(f"  Failed: {results['failed_files']} files")
-        print(f"  Output directory: {results['output_directory']}")
+        logger.info("Processing complete:")
+        logger.info("  Successfully processed: %d files", results['processed_files'])
+        logger.info("  Failed: %d files", results['failed_files'])
+        logger.info("  Output directory: %s", results['output_directory'])
         
         return results
     
@@ -317,14 +319,14 @@ class MistralOCRProcessor:
             #     file_id=uploaded_file.id, 
             #     expiry=60
             # )
-            print(f"Encoding PDF: {pdf_path}")
+            logger.info("Encoding PDF: %s", pdf_path)
             base64_pdf = self._encode_pdf(pdf_path)
             
             # Process PDF with OCR
-            print("Processing PDF with OCR...")
+            logger.info("Processing PDF with OCR...")
             include_image_base64 = True
 
-            print(f"Processing PDF with OCR... include_image_base64: {include_image_base64}")
+            logger.info("Processing PDF with OCR... include_image_base64: %s", include_image_base64)
             ocr_response = self.client.ocr.process(
             document={
                 "type": "document_url",
@@ -368,7 +370,7 @@ class MistralOCRProcessor:
             return structured_content
             
         except Exception as e:
-            print(f"Error processing PDF: {str(e)}")
+            logger.error("Error processing PDF: %s", e)
             raise
         
     def _encode_pdf(self, pdf_path):
@@ -377,10 +379,10 @@ class MistralOCRProcessor:
             with open(pdf_path, "rb") as pdf_file:
                 return base64.b64encode(pdf_file.read()).decode('utf-8')
         except FileNotFoundError:
-            print(f"Error: The file {pdf_path} was not found.")
+            logger.error("The file %s was not found.", pdf_path)
             return None
         except Exception as e:  # Added general exception handling
-            print(f"Error: {e}")
+            logger.error("Error encoding PDF: %s", e)
             return None
 
 
@@ -458,9 +460,9 @@ class MistralOCRProcessor:
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            print(f"Saved JSON output to {output_path}")
+            logger.info("Saved JSON output to %s", output_path)
         except Exception as e:
-            print(f"Error saving JSON output: {str(e)}")
+            logger.error("Error saving JSON output: %s", e)
             raise
 
     def _save_to_markdown(self, data: Dict[str, Any], output_path: str) -> None:
@@ -472,9 +474,9 @@ class MistralOCRProcessor:
                 f.write(f"**Pages:** {data['num_pages']}\n\n")
                 f.write("---\n\n")
                 f.write(data["full_markdown"])
-            print(f"Saved Markdown output to {output_path}")
+            logger.info("Saved Markdown output to %s", output_path)
         except Exception as e:
-            print(f"Error saving Markdown output: {str(e)}")
+            logger.error("Error saving Markdown output: %s", e)
             raise
 
     def _save_to_text(self, data: Dict[str, Any], output_path: str) -> None:
@@ -482,9 +484,9 @@ class MistralOCRProcessor:
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(data["full_text"])
-            print(f"Saved text output to {output_path}")
+            logger.info("Saved text output to %s", output_path)
         except Exception as e:
-            print(f"Error saving text output: {str(e)}")
+            logger.error("Error saving text output: %s", e)
             raise
 
     def _calculate_cost_info(self, usage_info, filename: str) -> Dict[str, Any]:
@@ -534,7 +536,7 @@ class MistralOCRProcessor:
                         # Single entry format
                         existing_costs = [existing_data]
             except Exception as e:
-                print(f"Warning: Could not read existing cost file: {e}")
+                logger.warning("Could not read existing cost file: %s", e)
         
         # Append new cost info
         existing_costs.append(cost_info)
@@ -555,10 +557,10 @@ class MistralOCRProcessor:
         try:
             with open(cost_file_path, 'w', encoding='utf-8') as f:
                 json.dump(cost_summary, f, indent=2, ensure_ascii=False)
-            print(f"Updated cost tracking: {cost_file_path}")
-            print(f"Session total: {total_pages} pages, ${total_cost:.3f}")
+            logger.info("Updated cost tracking: %s", cost_file_path)
+            logger.info("Session total: %d pages, $%.3f", total_pages, total_cost)
         except Exception as e:
-            print(f"Error saving cost information: {str(e)}")
+            logger.error("Error saving cost information: %s", e)
 
 
 # User-facing convenience functions

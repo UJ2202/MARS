@@ -6,6 +6,9 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
+from core.logging import get_logger
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/api/runs", tags=["Runs"])
 
 # Import services at runtime
@@ -47,7 +50,7 @@ async def get_run_history(run_id: str, event_type: Optional[str] = None):
         # Resolve task_id to database run_id
         effective_run_id = _resolve_run_id(run_id)
         if _check_services():
-            print(f"[API] Resolved task_id {run_id} to db_run_id {effective_run_id}")
+            logger.debug("resolved_run_id", task_id=run_id, db_run_id=effective_run_id)
 
         events_data = []
 
@@ -92,12 +95,10 @@ async def get_run_history(run_id: str, event_type: Optional[str] = None):
                 for e in filtered_events
             ]
 
-            print(f"[API] Found {len(events_data)} events for run_id={effective_run_id}")
+            logger.debug("events_found", run_id=effective_run_id, count=len(events_data))
             db.close()
         except Exception as db_err:
-            print(f"Database query failed for run_id={effective_run_id}: {db_err}")
-            import traceback
-            traceback.print_exc()
+            logger.error("db_query_failed", run_id=effective_run_id, error=str(db_err), exc_info=True)
 
         # If no database events found, try the in-memory event queue
         if not events_data:
@@ -105,7 +106,7 @@ async def get_run_history(run_id: str, event_type: Optional[str] = None):
                 from event_queue import event_queue
 
                 ws_events = event_queue.get_all_events(run_id)
-                print(f"Found {len(ws_events)} events in event queue for run {run_id}")
+                logger.debug("event_queue_events_found", run_id=run_id, count=len(ws_events))
 
                 # Convert WebSocket events to history format
                 for idx, ws_event in enumerate(ws_events):
@@ -131,7 +132,7 @@ async def get_run_history(run_id: str, event_type: Optional[str] = None):
                         events_data.append(event_dict)
 
             except Exception as queue_err:
-                print(f"Event queue query failed: {queue_err}")
+                logger.warning("event_queue_query_failed", error=str(queue_err))
 
         return {
             "run_id": run_id,
@@ -141,9 +142,7 @@ async def get_run_history(run_id: str, event_type: Optional[str] = None):
         }
 
     except Exception as e:
-        print(f"Error getting run history: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("run_history_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -220,9 +219,7 @@ async def get_run_files(run_id: str):
         }
 
     except Exception as e:
-        print(f"Error getting run files: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("run_files_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -240,7 +237,7 @@ async def get_run_costs(run_id: str):
         # Resolve task_id to database run_id
         effective_run_id = _resolve_run_id(run_id)
         if _check_services():
-            print(f"[API] Resolved task_id {run_id} to db_run_id {effective_run_id}")
+            logger.debug("resolved_run_id", task_id=run_id, db_run_id=effective_run_id)
 
         from cmbagent.database import get_db_session
         from cmbagent.database.models import CostRecord
@@ -314,7 +311,119 @@ async def get_run_costs(run_id: str):
         }
 
     except Exception as e:
-        print(f"Error getting run costs: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("run_costs_failed", error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{run_id}/console-log")
+async def get_console_log(
+    run_id: str,
+    tail: Optional[int] = None,
+    work_dir: Optional[str] = None,
+):
+    """Get persisted console output log for a workflow run.
+
+    Reads the console_output.log file written in real-time during execution.
+
+    Args:
+        run_id: The workflow run ID (task_id)
+        tail: If set, return only the last N lines
+        work_dir: Optional base work directory override
+    """
+    import os
+
+    base_dir = work_dir or os.path.expanduser("~/Desktop/cmbdir")
+    log_path = os.path.join(base_dir, run_id, "logs", "console_output.log")
+
+    if not os.path.exists(log_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Console log not found for run {run_id}"
+        )
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        all_lines = content.splitlines()
+        lines = all_lines[-tail:] if tail and tail > 0 else all_lines
+
+        return {
+            "run_id": run_id,
+            "log_path": log_path,
+            "total_lines": len(all_lines),
+            "returned_lines": len(lines),
+            "content": "\n".join(lines),
+        }
+    except Exception as e:
+        logger.error("console_log_read_failed", run_id=run_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{run_id}/dag")
+async def get_run_dag(run_id: str):
+    """Get DAG structure (nodes and edges) for a workflow run.
+
+    Returns the persisted DAG graph data that can be rendered
+    by the DAGVisualization component.
+
+    Args:
+        run_id: The workflow run ID (can be task_id, will be resolved to db_run_id)
+    """
+    try:
+        effective_run_id = _resolve_run_id(run_id)
+
+        from cmbagent.database import get_db_session
+        from cmbagent.database.models import DAGNode, DAGEdge
+
+        db = get_db_session()
+        try:
+            nodes = db.query(DAGNode).filter(
+                DAGNode.run_id == effective_run_id
+            ).order_by(DAGNode.order_index).all()
+
+            node_ids = [n.id for n in nodes]
+
+            edges = []
+            if node_ids:
+                edges = db.query(DAGEdge).filter(
+                    DAGEdge.from_node_id.in_(node_ids)
+                ).all()
+
+            nodes_data = [
+                {
+                    "id": n.id,
+                    "label": (n.meta or {}).get("label", n.agent or f"Step {n.order_index + 1}"),
+                    "type": n.node_type,
+                    "status": n.status,
+                    "agent": n.agent,
+                    "stepNumber": n.order_index + 1,
+                    "description": (n.meta or {}).get("description"),
+                    "task": (n.meta or {}).get("task"),
+                    "summary": (n.meta or {}).get("summary"),
+                }
+                for n in nodes
+            ]
+
+            edges_data = [
+                {
+                    "id": f"e{e.from_node_id}-{e.to_node_id}",
+                    "source": e.from_node_id,
+                    "target": e.to_node_id,
+                    "type": e.dependency_type,
+                }
+                for e in edges
+            ]
+
+            return {
+                "run_id": run_id,
+                "resolved_run_id": effective_run_id,
+                "nodes": nodes_data,
+                "edges": edges_data,
+            }
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error("run_dag_failed", run_id=run_id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

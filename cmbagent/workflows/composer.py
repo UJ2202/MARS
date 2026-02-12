@@ -11,6 +11,9 @@ import uuid
 import time
 import asyncio
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.phases.context import WorkflowContext
@@ -163,7 +166,7 @@ class WorkflowExecutor:
 
             # Check if phase should be skipped
             if phase.can_skip(phase_context):
-                print(f"Skipping phase: {phase.display_name}")
+                logger.info("Skipping phase: %s", phase.display_name)
                 continue
 
             # Validate input
@@ -176,9 +179,7 @@ class WorkflowExecutor:
                 phase_context.shared_state['_approval_manager'] = self.approval_manager
 
             # Execute phase
-            print(f"\n{'=' * 60}")
-            print(f"PHASE {i + 1}/{len(self.phases)}: {phase.display_name}")
-            print(f"{'=' * 60}\n")
+            logger.info("PHASE %s/%s: %s", i + 1, len(self.phases), phase.display_name)
 
             if self.callbacks:
                 self.callbacks.invoke_phase_change(phase.phase_type, i)
@@ -191,10 +192,10 @@ class WorkflowExecutor:
             if not result.succeeded:
                 if result.needs_approval:
                     # HITL waiting - workflow paused
-                    print(f"Phase {phase.display_name} waiting for approval")
+                    logger.info("Phase %s waiting for approval", phase.display_name)
                 else:
                     error_msg = f"Phase {phase.phase_type} failed: {result.error}"
-                    print(f"\nERROR: {error_msg}\n")
+                    logger.error("%s", error_msg)
                     raise RuntimeError(error_msg)
 
             # Update master context
@@ -203,10 +204,10 @@ class WorkflowExecutor:
         # Record total time
         self.context.phase_timings['total'] = time.time() - total_start
 
-        print(f"\n{'=' * 60}")
-        print(f"WORKFLOW COMPLETE")
-        print(f"Total time: {self.context.phase_timings['total']:.2f} seconds")
-        print(f"{'=' * 60}\n")
+        logger.info(
+            "WORKFLOW COMPLETE | Total time: %.2f seconds",
+            self.context.phase_timings['total'],
+        )
 
         return self.context
 

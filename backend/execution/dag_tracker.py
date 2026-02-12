@@ -8,6 +8,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class DAGTracker:
@@ -54,7 +57,7 @@ class DAGTracker:
             self.event_repo = EventRepository(self.db_session, self.session_id)
 
             if not self.run_id:
-                print(f"[DAGTracker] No run_id provided, using task_id: {task_id}")
+                logger.debug("no_run_id_provided", task_id=task_id)
                 self.run_id = task_id
 
             # Create WorkflowRun record if it doesn't exist
@@ -62,11 +65,9 @@ class DAGTracker:
 
             self.dag_builder = DAGBuilder(self.db_session, self.session_id)
             self.dag_visualizer = DAGVisualizer(self.db_session)
-            print(f"Database DAG system initialized with run_id: {self.run_id}")
+            logger.info("dag_system_initialized", run_id=self.run_id)
         except Exception as e:
-            print(f"Warning: Could not initialize database DAG system: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.warning("dag_system_init_failed", error=str(e), exc_info=True)
 
     def _ensure_workflow_run_exists(self, mode: str, task_id: str):
         """Ensure a WorkflowRun record exists for this run_id.
@@ -83,7 +84,7 @@ class DAGTracker:
             ).first()
 
             if existing_run:
-                print(f"[DAGTracker] WorkflowRun {self.run_id} already exists")
+                logger.debug("workflow_run_exists", run_id=self.run_id)
                 return
 
             # Create new WorkflowRun record with all required fields
@@ -100,12 +101,10 @@ class DAGTracker:
             )
             self.db_session.add(workflow_run)
             self.db_session.commit()
-            print(f"[DAGTracker] Created WorkflowRun record: {self.run_id}")
+            logger.info("workflow_run_created", run_id=self.run_id)
 
         except Exception as e:
-            print(f"[DAGTracker] Error ensuring WorkflowRun exists: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("workflow_run_ensure_failed", error=str(e), exc_info=True)
             self.db_session.rollback()
 
     def _update_workflow_run_task(self, task: str, config: Dict[str, Any]):
@@ -130,9 +129,9 @@ class DAGTracker:
                         if k not in ["apiKeys", "api_keys"]  # Don't store API keys
                     }
                 self.db_session.commit()
-                print(f"[DAGTracker] Updated WorkflowRun task description")
+                logger.debug("workflow_run_task_updated")
         except Exception as e:
-            print(f"[DAGTracker] Error updating WorkflowRun task: {e}")
+            logger.error("workflow_run_task_update_failed", error=str(e))
             self.db_session.rollback()
 
     def create_dag_for_mode(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -331,13 +330,13 @@ class DAGTracker:
             # SQLAlchemy 2.0+ uses in_transaction(), older versions use is_active
             if hasattr(self.db_session, 'in_transaction'):
                 if self.db_session.in_transaction():
-                    print("[DAGTracker] Skipping persist - transaction already in progress")
+                    logger.debug("dag_persist_skipped", reason="transaction_in_progress")
                     return
             elif hasattr(self.db_session, 'is_active'):
                 # For older SQLAlchemy - check transaction state
                 if self.db_session.is_active and hasattr(self.db_session, 'transaction'):
                     if self.db_session.transaction and self.db_session.transaction.is_active:
-                        print("[DAGTracker] Skipping persist - transaction already active")
+                        logger.debug("dag_persist_skipped", reason="transaction_active")
                         return
 
             from cmbagent.database.models import DAGNode, DAGEdge
@@ -375,17 +374,15 @@ class DAGTracker:
                     self.db_session.add(dag_edge)
 
             self.db_session.commit()
-            print(f"Persisted {len(self.nodes)} nodes and {len(self.edges)} edges to database")
+            logger.debug("dag_persisted", nodes=len(self.nodes), edges=len(self.edges))
 
         except Exception as e:
             # Check if it's a transaction state error - if so, just log and skip
             error_msg = str(e).lower()
             if 'prepared' in error_msg or 'transaction' in error_msg or 'commit' in error_msg:
-                print(f"[DAGTracker] Skipping persist due to concurrent transaction: {e}")
+                logger.debug("dag_persist_skipped_concurrent", error=str(e))
             else:
-                print(f"Error persisting DAG to database: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error("dag_persist_failed", error=str(e), exc_info=True)
             
             # Only rollback if session is not already in a problematic state
             if self.db_session:
@@ -395,7 +392,7 @@ class DAGTracker:
                 except Exception as rollback_error:
                     # If rollback also fails due to state issues, just log it
                     if 'prepared' not in str(rollback_error).lower():
-                        print(f"Could not rollback session: {rollback_error}")
+                        logger.warning("dag_persist_rollback_failed", error=str(rollback_error))
 
     async def add_step_nodes(self, steps: list):
         """Dynamically add step nodes after planning completes."""
@@ -488,7 +485,7 @@ class DAGTracker:
                 run_id=effective_run_id
             )
         except Exception as e:
-            print(f"Error sending DAG updated event: {e}")
+            logger.warning("dag_updated_event_failed", error=str(e))
 
     async def emit_dag_created(self):
         """Emit DAG created event."""
@@ -506,7 +503,7 @@ class DAGTracker:
                 run_id=effective_run_id
             )
         except Exception as e:
-            print(f"Error sending DAG created event: {e}")
+            logger.warning("dag_created_event_failed", error=str(e))
 
     async def update_node_status(self, node_id: str, new_status: str,
                                   error: str = None, work_dir: str = None):
@@ -549,7 +546,7 @@ class DAGTracker:
                 try:
                     self._persist_dag_nodes_to_db()
                 except Exception as persist_error:
-                    print(f"[DAGTracker] Could not persist DAG nodes: {persist_error}")
+                    logger.debug("dag_nodes_persist_attempt_failed", error=str(persist_error))
 
                 agent_name = node_info.get("agent", "unknown")
 
@@ -608,9 +605,7 @@ class DAGTracker:
                         )
 
             except Exception as e:
-                print(f"Error creating ExecutionEvent for node {node_id}: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error("execution_event_creation_failed", node_id=node_id, error=str(e), exc_info=True)
                 if self.db_session:
                     self.db_session.rollback()
 
@@ -642,7 +637,7 @@ class DAGTracker:
                 run_id=effective_run_id
             )
         except Exception as e:
-            print(f"Error sending DAG node status event: {e}")
+            logger.warning("dag_node_status_event_failed", error=str(e))
 
     def get_node_by_step(self, step_number: int) -> Optional[str]:
         """Get node ID by step number."""
@@ -673,7 +668,7 @@ class DAGTracker:
         """
         self.current_phase = phase
         self.current_step_number = step_number
-        print(f"[DAGTracker] Phase set to: {phase}, step: {step_number}")
+        logger.debug("phase_set", phase=phase, step=step_number)
 
     def get_current_phase(self) -> str:
         """Get the current workflow phase."""
@@ -839,7 +834,7 @@ class DAGTracker:
 
             self.db_session.commit()
             if files_tracked > 0:
-                print(f"[DAGTracker] Tracked {files_tracked} new files")
+                logger.debug("files_tracked", count=files_tracked)
 
                 try:
                     effective_run_id = self.run_id or self.task_id
@@ -863,14 +858,12 @@ class DAGTracker:
                         # This is acceptable as file tracking is still saved to database
                         pass
                 except Exception as ws_err:
-                    print(f"[DAGTracker] Error sending files_updated event: {ws_err}")
+                    logger.debug("files_updated_event_failed", error=str(ws_err))
 
             return files_tracked
 
         except Exception as e:
-            print(f"[DAGTracker] Error tracking files: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("file_tracking_failed", error=str(e), exc_info=True)
             if self.db_session:
                 self.db_session.rollback()
             return 0
@@ -878,7 +871,7 @@ class DAGTracker:
     async def build_dag_from_plan(self, plan_output: Dict[str, Any]):
         """Build DAG in database from plan output after planning phase completes."""
         if not self.dag_builder or not self.run_id:
-            print("Database not available, using in-memory DAG")
+            logger.info("using_inmemory_dag")
             return await self._build_inmemory_dag_from_plan(plan_output)
 
         try:
@@ -931,13 +924,11 @@ class DAGTracker:
                 run_id=effective_run_id
             )
 
-            print(f"Built DAG from plan with {len(steps)} steps in database")
+            logger.info("dag_built_from_plan", steps=len(steps))
             return dag_export
 
         except Exception as e:
-            print(f"Error building DAG from plan: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("dag_build_from_plan_failed", error=str(e), exc_info=True)
             return await self._build_inmemory_dag_from_plan(plan_output)
 
     async def _build_inmemory_dag_from_plan(self, plan_output: Dict[str, Any]):

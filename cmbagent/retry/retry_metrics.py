@@ -4,8 +4,11 @@ Retry metrics and reporting.
 Tracks retry statistics and generates reports for workflow runs.
 """
 
+import logging
 from typing import Dict, Any
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 class RetryMetrics:
@@ -75,7 +78,7 @@ class RetryMetrics:
             }
 
         except Exception as e:
-            print(f"Warning: Could not calculate retry stats: {e}")
+            logger.warning("retry_stats_calculation_failed", error=str(e))
             return {
                 "total_steps": 0,
                 "steps_with_retries": 0,

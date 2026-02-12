@@ -22,6 +22,10 @@ import os
 import copy
 import json
 import asyncio
+import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.phases.execution_manager import PhaseExecutionManager
@@ -199,7 +203,7 @@ class CopilotPhase(Phase):
         if self.config.use_dynamic_routing:
             agent_llm_configs['copilot_control'] = get_model_config(self.config.control_model, api_keys)
 
-        print(f"[Copilot] Initializing agent session...")
+        logger.info("Initializing agent session...")
 
         # Create CMBAgent with all required agents
         self._cmbagent_instance = CMBAgent(
@@ -217,14 +221,14 @@ class CopilotPhase(Phase):
         if self.config.use_dynamic_routing:
             self._cmbagent_instance.copilot_available_agents = self.config.available_agents
 
-        print(f"[Copilot] Session initialized with {len(self._cmbagent_instance.agents)} agents")
+        logger.info("Session initialized with %d agents", len(self._cmbagent_instance.agents))
 
         return self._cmbagent_instance
 
     def _cleanup_session(self):
         """Clean up the CMBAgent session when copilot ends."""
         if self._cmbagent_instance is not None:
-            print(f"[Copilot] Cleaning up session...")
+            logger.info("Cleaning up session...")
             # Close any open resources
             if hasattr(self._cmbagent_instance, 'db_session') and self._cmbagent_instance.db_session:
                 try:
@@ -279,13 +283,13 @@ class CopilotPhase(Phase):
                 if not current_task:
                     break
                 if current_task.lower().strip() in ['exit', 'quit', 'done', 'bye']:
-                    print(f"\n-> Copilot session ended by user")
+                    logger.info("Copilot session ended by user")
                     break
 
-                print(f"\n{'='*60}")
-                print(f"COPILOT - Turn {turn}")
-                print(f"{'='*60}")
-                print(f"Task: {current_task[:200]}...")
+                logger.info("=" * 60)
+                logger.info("COPILOT - Turn %d", turn)
+                logger.info("=" * 60)
+                logger.info("Task: %s...", current_task[:200])
 
                 # Analyze task - use dynamic routing or fallback to heuristics
                 if self.config.use_dynamic_routing:
@@ -313,13 +317,13 @@ class CopilotPhase(Phase):
                     primary_agent = self._select_primary_agent(current_task)
                     refined_task = current_task
 
-                print(f"Complexity: {complexity} ({analysis})")
-                print(f"Primary Agent: {primary_agent}")
+                logger.info("Complexity: %s (%s)", complexity, analysis)
+                logger.info("Primary Agent: %s", primary_agent)
 
                 # Route based on complexity
                 if complexity == "simple" or not self.config.enable_planning:
                     # One-shot execution
-                    print(f"-> Routing to one-shot execution")
+                    logger.info("Routing to one-shot execution")
                     result = await self._execute_one_shot(
                         context, refined_task, current_context, manager,
                         primary_agent=primary_agent
@@ -327,7 +331,7 @@ class CopilotPhase(Phase):
                     mode_used = "one_shot"
                 else:
                     # Planning + execution
-                    print(f"-> Routing to planning + execution")
+                    logger.info("Routing to planning + execution")
                     result = await self._execute_with_planning(
                         context, refined_task, current_context,
                         approval_manager, manager
@@ -389,7 +393,7 @@ class CopilotPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
-            import traceback
+            logger.error("Copilot phase failed: %s", e, exc_info=True)
             return manager.fail(str(e), traceback.format_exc())
         finally:
             # Clean up session when copilot ends
@@ -493,16 +497,16 @@ class CopilotPhase(Phase):
             routing_decision = final_context.get('copilot_routing_decision', {})
 
             if routing_decision:
-                print(f"\n-> Dynamic Routing Decision:")
-                print(f"   Route: {routing_decision.get('route_type', 'unknown')}")
-                print(f"   Complexity: {routing_decision.get('complexity_score', 'N/A')}/100")
-                print(f"   Primary Agent: {routing_decision.get('primary_agent', 'engineer')}")
-                print(f"   Confidence: {routing_decision.get('confidence', 0):.0%}")
+                logger.info("Dynamic Routing Decision:")
+                logger.info("  Route: %s", routing_decision.get('route_type', 'unknown'))
+                logger.info("  Complexity: %s/100", routing_decision.get('complexity_score', 'N/A'))
+                logger.info("  Primary Agent: %s", routing_decision.get('primary_agent', 'engineer'))
+                logger.info("  Confidence: %.0f%%", routing_decision.get('confidence', 0) * 100)
                 return routing_decision
 
         except Exception as e:
-            print(f"\n-> Dynamic routing failed: {e}")
-            print(f"   Falling back to heuristic analysis")
+            logger.warning("Dynamic routing failed: %s", e)
+            logger.info("Falling back to heuristic analysis")
 
         # Fallback: return heuristic-based decision
         complexity, reasoning = self._analyze_complexity(task)
@@ -565,7 +569,7 @@ Please provide more details or clarify your request.
             options=["submit", "cancel"],  # Changed from provide_info to submit
         )
 
-        print(f"\nWaiting for user clarification...")
+        logger.info("Waiting for user clarification...")
 
         try:
             resolved = await approval_manager.wait_for_approval_async(
@@ -580,7 +584,7 @@ Please provide more details or clarify your request.
             return resolved.user_feedback if hasattr(resolved, 'user_feedback') else None
 
         except Exception as e:
-            print(f"Clarification request failed: {e}")
+            logger.error("Clarification request failed: %s", e)
             return None
 
     async def _execute_one_shot(
@@ -599,7 +603,7 @@ Please provide more details or clarify your request.
         if primary_agent is None:
             primary_agent = self._select_primary_agent(task)
 
-        print(f"-> Using agent: {primary_agent}")
+        logger.info("Using agent: %s", primary_agent)
 
         # Build instructions with any accumulated feedback
         shared_context = copy.deepcopy(current_context)
@@ -658,7 +662,7 @@ Please provide more details or clarify your request.
         cmbagent = self._get_or_create_cmbagent_session(context)
 
         # ============ PLANNING PHASE ============
-        print(f"\n--- Planning Phase ---")
+        logger.info("--- Planning Phase ---")
 
         # Inject available agents into planner instructions
         available_agents_str = ", ".join(self.config.available_agents)
@@ -694,9 +698,9 @@ Please provide more details or clarify your request.
                 'final_context': planning_context,
             }
 
-        print(f"-> Generated plan with {len(plan)} steps")
+        logger.info("Generated plan with %d steps", len(plan))
         for i, step in enumerate(plan, 1):
-            print(f"   {i}. [{step.get('sub_task_agent')}] {step.get('sub_task', '')[:60]}...")
+            logger.info("  %d. [%s] %s...", i, step.get('sub_task_agent'), step.get('sub_task', '')[:60])
 
         # ============ HITL PLAN APPROVAL ============
         if approval_manager and self.config.approval_mode != "none":
@@ -723,7 +727,7 @@ Please provide more details or clarify your request.
         manager.add_plan_step_nodes(plan, source_node=manager._current_dag_node_id)
 
         # ============ EXECUTION PHASE ============
-        print(f"\n--- Execution Phase ---")
+        logger.info("--- Execution Phase ---")
 
         step_results = []
         step_summaries = []
@@ -735,8 +739,8 @@ Please provide more details or clarify your request.
             step_agent = step.get('sub_task_agent', 'engineer')
             step_task = step.get('sub_task', '')
 
-            print(f"\n-> Step {step_num}/{len(plan)}: {step_task[:60]}...")
-            print(f"   Agent: {step_agent}")
+            logger.info("Step %d/%d: %s...", step_num, len(plan), step_task[:60])
+            logger.info("  Agent: %s", step_agent)
 
             # Before-step approval
             if self.config.approval_mode in ["before_step", "both"]:
@@ -745,7 +749,7 @@ Please provide more details or clarify your request.
                         step, step_num, approval_manager, context, manager
                     )
                     if not proceed:
-                        print(f"   Skipped by user")
+                        logger.info("  Skipped by user")
                         continue
 
             # Execute step using shared CMBAgent session
@@ -784,7 +788,7 @@ Please provide more details or clarify your request.
             except Exception as e:
                 success = False
                 step_result = {'error': str(e)}
-                print(f"   Error: {e}")
+                logger.error("  Error: %s", e)
 
             step_results.append({
                 'step': step_num,
@@ -803,7 +807,7 @@ Please provide more details or clarify your request.
                     if feedback:
                         self._accumulated_feedback += f"\n\nStep {step_num} feedback: {feedback}"
 
-            print(f"   {'Completed' if success else 'Failed'}")
+            logger.info("  %s", 'Completed' if success else 'Failed')
 
         # Build final summary
         final_summary = "\n\n".join(step_summaries) if step_summaries else "No results"
@@ -919,7 +923,7 @@ Please provide more details or clarify your request.
             options=["approve", "reject", "modify"],
         )
 
-        print(f"\nWaiting for plan approval...")
+        logger.info("Waiting for plan approval...")
 
         resolved = await approval_manager.wait_for_approval_async(
             str(request.id),
@@ -1013,7 +1017,7 @@ Provide feedback or continue to next step.
         """Get next task from user in continuous mode."""
         if not approval_manager:
             # Console fallback
-            print(f"\n{'='*60}")
+            logger.info("=" * 60)
             response = input("Next task (or 'exit' to quit): ").strip()
             return response if response else None
 

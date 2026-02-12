@@ -270,6 +270,48 @@ def chain_phases(
     })
 
 
+def ask_user(
+    question: Annotated[str, "The question to ask the user"],
+    options: Annotated[Optional[List[str]], "Optional predefined choices for the user"] = None,
+    context: Annotated[Optional[str], "Additional context to show the user"] = None,
+    request_type: Annotated[str, "Type of request: 'clarification', 'approval', 'preference', 'feedback'"] = "clarification"
+) -> str:
+    """
+    Ask the user a question and wait for their response.
+
+    This is the PRIMARY way to interact with users dynamically.
+    Use this tool whenever you need:
+    - Clarification about requirements
+    - User preference between approaches
+    - Approval before risky operations
+    - Feedback on your work
+    - Any kind of human input
+
+    Unlike invoke_hitl_checkpoint_phase which pauses the whole workflow,
+    ask_user is a natural conversational tool that agents should use freely.
+
+    Examples:
+        ask_user("What should this script do?")
+        ask_user("Which approach do you prefer?", options=["Option A", "Option B"])
+        ask_user("Should I proceed with deleting these files?", request_type="approval")
+
+    Returns:
+        JSON indicating user input is needed - the orchestrator will handle
+        waiting for the user's response and return it to you.
+    """
+    request = {
+        "action": "ask_user",
+        "question": question,
+        "request_type": request_type,
+        "status": "user_input_requested"
+    }
+    if options:
+        request["options"] = options
+    if context:
+        request["context"] = context
+    return json.dumps(request)
+
+
 # All phase tools - matches PhaseRegistry
 PHASE_TOOLS = [
     invoke_planning_phase,
@@ -281,6 +323,7 @@ PHASE_TOOLS = [
     invoke_hitl_checkpoint_phase,
     invoke_copilot_phase,
     chain_phases,
+    ask_user,  # Primary HITL tool for dynamic user interaction
 ]
 
 

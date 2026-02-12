@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Integer, BigInteger, Text, Boolean,
-    ForeignKey, Index, TIMESTAMP, Numeric, CheckConstraint,
+    ForeignKey, Index, TIMESTAMP, Numeric, CheckConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.dialects.sqlite import JSON
@@ -35,16 +35,85 @@ class Session(Base):
     resource_limits = Column(JSON, nullable=True)
 
     # Relationships
+    session_states = relationship("SessionState", back_populates="session", cascade="all, delete-orphan")
     projects = relationship("Project", back_populates="session", cascade="all, delete-orphan")
     workflow_runs = relationship("WorkflowRun", back_populates="session", cascade="all, delete-orphan")
     workflow_steps = relationship("WorkflowStep", back_populates="session", cascade="all, delete-orphan")
     dag_nodes = relationship("DAGNode", back_populates="session", cascade="all, delete-orphan")
     cost_records = relationship("CostRecord", back_populates="session", cascade="all, delete-orphan")
     execution_events = relationship("ExecutionEvent", back_populates="session", cascade="all, delete-orphan")
+    approval_requests = relationship("ApprovalRequest", back_populates="session")
 
     __table_args__ = (
         Index("idx_sessions_user_status", "user_id", "status"),
     )
+
+
+class SessionState(Base):
+    """Persistent session state for resumable workflows"""
+    __tablename__ = "session_states"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    mode = Column(String(50), nullable=False)  # copilot, planning-control, hitl-interactive
+
+    # Serialized state (JSON)
+    conversation_history = Column(JSON, nullable=True)  # List of message dicts
+    context_variables = Column(JSON, nullable=True)     # Key-value context
+    plan_data = Column(JSON, nullable=True)             # Plan structure if applicable
+
+    # Progress tracking
+    current_phase = Column(String(50), nullable=True)   # planning, execution, review
+    current_step = Column(Integer, nullable=True)       # Current step number
+
+    # Lifecycle
+    status = Column(String(20), default="active", index=True)  # active, suspended, completed, expired
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now())
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Optimistic locking
+    version = Column(Integer, default=1)
+
+    # Relationships
+    session = relationship("Session", back_populates="session_states")
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_session_states_session_status", "session_id", "status"),
+        Index("idx_session_states_mode", "mode"),
+        Index("idx_session_states_updated", "updated_at"),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses"""
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "mode": self.mode,
+            "conversation_history": self.conversation_history or [],
+            "context_variables": self.context_variables or {},
+            "plan_data": self.plan_data,
+            "current_phase": self.current_phase,
+            "current_step": self.current_step,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "version": self.version,
+        }
+
+    @classmethod
+    def create_for_session(cls, session_id: str, mode: str, **kwargs):
+        """Factory method to create new session state"""
+        return cls(
+            session_id=session_id,
+            mode=mode,
+            conversation_history=kwargs.get("conversation_history", []),
+            context_variables=kwargs.get("context_variables", {}),
+            plan_data=kwargs.get("plan_data"),
+            current_phase=kwargs.get("current_phase", "init"),
+            status="active",
+        )
 
 
 class Project(Base):
@@ -283,28 +352,110 @@ class CostRecord(Base):
 
 
 class ApprovalRequest(Base):
-    """Human-in-the-loop approval requests."""
+    """Persistent approval request for HITL workflows"""
     __tablename__ = "approval_requests"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
-    step_id = Column(String(36), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=False, index=True)
-    status = Column(String(50), nullable=False, default="pending", index=True)
-    # Status: pending, approved, rejected, modified
-    requested_at = Column(TIMESTAMP, nullable=False, default=lambda: datetime.now(timezone.utc))
-    resolved_at = Column(TIMESTAMP, nullable=True)
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True, index=True)
+    step_id = Column(String(36), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=True, index=True)
+
+    # Request details
+    approval_type = Column(String(50), nullable=False)  # plan_approval, step_approval, error_recovery, tool_call
+    context = Column(JSON, nullable=False)              # What's being approved (serialized)
+
+    # Resolution
+    status = Column(String(20), default="pending", index=True)  # pending, resolved, expired, cancelled
+    resolution = Column(String(20), nullable=True)              # approved, rejected, modified
+    result = Column(JSON, nullable=True)                        # Resolution details
+
+    # Timing
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    resolved_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    # Legacy fields for backwards compatibility
+    requested_at = Column(TIMESTAMP, nullable=True)
     context_snapshot = Column(JSON, nullable=True)
     user_feedback = Column(Text, nullable=True)
-    resolution = Column(String(50), nullable=True)
 
     # Relationships
     run = relationship("WorkflowRun", back_populates="approval_requests")
     step = relationship("WorkflowStep", back_populates="approval_requests")
+    session = relationship("Session", back_populates="approval_requests")
 
+    # Indexes for efficient timeout queries
     __table_args__ = (
-        Index("idx_approval_requests_status", "status"),
-        Index("idx_approval_requests_run_requested", "run_id", "requested_at"),
+        Index("idx_approval_run_status", "run_id", "status"),
+        Index("idx_approval_expires", "expires_at"),
+        Index("idx_approval_session", "session_id"),
+        Index("idx_approval_status", "status"),
     )
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for API responses"""
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "session_id": self.session_id,
+            "step_id": self.step_id,
+            "approval_type": self.approval_type,
+            "context": self.context,
+            "status": self.status,
+            "resolution": self.resolution,
+            "result": self.result,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+        }
+
+    @classmethod
+    def create_pending(cls, run_id: str, approval_type: str, context: dict,
+                       timeout_seconds: int = 300, session_id: str = None, step_id: str = None):
+        """Factory method to create a pending approval request"""
+        from datetime import datetime, timezone, timedelta
+        return cls(
+            run_id=run_id,
+            session_id=session_id,
+            step_id=step_id,
+            approval_type=approval_type,
+            context=context,
+            status="pending",
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds),
+        )
+
+
+class ActiveConnection(Base):
+    """Track active WebSocket connections for multi-instance deployment"""
+    __tablename__ = "active_connections"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    task_id = Column(String(100), nullable=False, unique=True, index=True)
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True)
+
+    # Server instance tracking (for routing in multi-instance setup)
+    server_instance = Column(String(100), nullable=True)  # hostname or instance ID
+
+    # Timing
+    connected_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_heartbeat = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    # Indexes
+    __table_args__ = (
+        Index("idx_connection_task_id", "task_id"),
+        Index("idx_connection_heartbeat", "last_heartbeat"),
+        Index("idx_connection_session", "session_id"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "session_id": self.session_id,
+            "server_instance": self.server_instance,
+            "connected_at": self.connected_at.isoformat() if self.connected_at else None,
+            "last_heartbeat": self.last_heartbeat.isoformat() if self.last_heartbeat else None,
+        }
 
 
 class Branch(Base):

@@ -44,7 +44,8 @@ class EventEmitter:
                 listener(**kwargs)
             except Exception as e:
                 # Log error but don't fail state transition
-                print(f"Event listener error for '{event_name}': {e}")
+                import logging
+                logging.getLogger(__name__).warning("Event listener error for '%s': %s", event_name, e)
 
     def remove_listener(self, event_name: str, callback: Callable):
         """Remove a specific listener for an event."""
@@ -370,24 +371,28 @@ class StateMachine:
             # Try to send immediately via WebSocket if available
             try:
                 import asyncio
-                from backend.websocket_manager import ws_manager
+                from services.connection_manager import connection_manager
 
                 # Try to get the event loop
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # Schedule coroutine on the running loop
-                        asyncio.create_task(ws_manager.broadcast_event(event))
+                        asyncio.create_task(connection_manager.send_event(run_id, event))
                 except RuntimeError:
                     # No event loop running (sync context), event is queued for later
                     pass
             except ImportError:
-                # WebSocket manager not available, event is queued
+                # Connection manager not available, event is queued
                 pass
 
         except Exception as e:
             # Don't fail the state transition if WebSocket emission fails
-            print(f"Warning: Failed to emit WebSocket event for {self.entity_type} {entity_id}: {e}")
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to emit WebSocket event for %s %s: %s",
+                self.entity_type, entity_id, e
+            )
 
     def _get_workflow_event_type(self, state: str) -> str:
         """Map workflow state to WebSocket event type."""

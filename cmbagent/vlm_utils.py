@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import autogen
 from typing import Literal
 from openai import OpenAI
@@ -12,6 +13,8 @@ from .vlm_injections import scientific_context, get_injection_by_name
 from .cmbagent_utils import cmbagent_debug
 _last_executed_code = None
 
+logger = logging.getLogger(__name__)
+
 # VLM model configuration
 # TODO: when refactoring, make a one_shot dictionary argument for all of this
 vlm_model: Literal["gpt-4o", "o3-2025-04-16", "gemini-2.5-flash", "gemini-2.5-pro"] = "gemini-2.5-pro"
@@ -22,37 +25,37 @@ show_code_to_plot_judge: bool = False
 
 def create_vlm_analysis_schema(context_variables: ContextVariables = None, has_code_context: bool = False):
     """
-    Construct structured output schema. 
+    Construct structured output schema.
     Scientific accuracy field can be supplemented with domain-specific scientific criteria.
     When code context is available, adds a code_analysis field.
     """
     domain_criteria = ""
     llm_completion = None
-    
+
     if vlm_criteria_mode == "llm_generated" and context_variables:
         # Generate criteria using LLM based on task context
         task = context_variables.get("improved_main_task", "scientific plot")
         plot_context = f"Task context: {task}. Focus on the plotting/visualization aspects of this task."
         llm_completion = generate_llm_scientific_criteria(plot_context)
         domain_criteria = llm_completion.choices[0].message.content
-        
+
     elif vlm_criteria_mode == "cmb_power_spectra":
         # Use pre-defined CMB power spectra criteria
         domain_criteria = scientific_context["cmb_power_spectra"]
-    
+
     # Build scientific accuracy description
     base_description = (
         "Assessment of scientific accuracy: Are the data points, calculations, and scientific principles accurate? "
         "Are the units, scales, and relationships correct? Are there any mathematical or scientific errors?"
     )
-    
+
     if domain_criteria:
         scientific_accuracy_desc = f"{base_description}\n\nADDITIONAL DOMAIN-SPECIFIC CRITERIA:\n{domain_criteria}"
     else:
         scientific_accuracy_desc = base_description
-        
-    print(f"VLM scientific accuracy description:\n{scientific_accuracy_desc}")
-    
+
+    logger.debug("VLM scientific accuracy description:\n%s", scientific_accuracy_desc)
+
     # Define base fields that are always present
     base_fields = {
         "scientific_accuracy": (str, Field(
@@ -83,7 +86,7 @@ def create_vlm_analysis_schema(context_variables: ContextVariables = None, has_c
             )
         )),
     }
-    
+
     # Add code analysis field if code context is available
     if has_code_context:
         base_fields["code_analysis"] = (str, Field(
@@ -94,7 +97,7 @@ def create_vlm_analysis_schema(context_variables: ContextVariables = None, has_c
                 "When confident about an issue's cause, refer to specific lines or parts of the code to pinpoint errors."
             )
         ))
-    
+
     # Add final fields
     base_fields.update({
         "problems": (list[str], Field(
@@ -116,7 +119,7 @@ def create_vlm_analysis_schema(context_variables: ContextVariables = None, has_c
             )
         ))
     })
-            
+
     # Create the VLMAnalysis class dynamically
     VLMAnalysis = type(
         "VLMAnalysis",
@@ -127,11 +130,11 @@ def create_vlm_analysis_schema(context_variables: ContextVariables = None, has_c
             "__doc__": "Structured output schema for VLM plot analysis."
         }
     )
-    
+
     # Store LLM completion for cost tracking
     if context_variables and llm_completion:
         context_variables["llm_completion"] = llm_completion
-    
+
     return VLMAnalysis
 
 
@@ -162,7 +165,7 @@ def generate_wrong_plot_injection(plot_type: str = "wrong_scalar_amplitude"):
     Returns the wrong code as string and base64 encoded plot.
     """
     wrong_code, base64_image = get_injection_by_name(plot_type, executed_code_context)
-    
+
     return wrong_code, base64_image
 
 
@@ -172,37 +175,37 @@ def send_image_to_vlm(base_64_img: str, vlm_prompt: str, inject_wrong_plot: bool
     Returns (completion, injected_code) where injected_code is None if no injection occurred.
     """
     injected_code = None
-    
+
     # Check if this is the first plot evaluation (n_plot_evals == 0) for injection
     n_plot_evals = context_variables.get("n_plot_evals", 0) if context_variables else 0
-    
+
     # Inject wrong plot on first evaluation if requested
     if inject_wrong_plot and n_plot_evals == 0:
-        print("Replacing plot with our own wrong plot")
-        
+        logger.info("Replacing plot with our own wrong plot")
+
         # Determine plot type from inject_wrong_plot parameter or global config
         if isinstance(inject_wrong_plot, str):
             plot_type = inject_wrong_plot
         else:
             from .vlm_injections import vlm_injection_plot_type
             plot_type = vlm_injection_plot_type  # Use global default
-        
+
         # Generate wrong plot
         wrong_code, wrong_plot_base64 = generate_wrong_plot_injection(plot_type)
         base_64_img = wrong_plot_base64
         injected_code = wrong_code
-        
+
         # Store the injected code in context variables for engineer feedback
         if context_variables:
             context_variables["latest_executed_code"] = wrong_code
     else:
         if cmbagent_debug:
-            print(f"Using real plot (inject_wrong_plot={inject_wrong_plot}, n_plot_evals={n_plot_evals})")
-    
+            logger.debug("Using real plot (inject_wrong_plot=%s, n_plot_evals=%s)", inject_wrong_plot, n_plot_evals)
+
     # Check if we have code context
     executed_code = context_variables.get("latest_executed_code") if context_variables else None
     has_code_context = show_code_to_plot_judge and executed_code is not None
-    
+
     VLMAnalysis = create_vlm_analysis_schema(context_variables, has_code_context=has_code_context)
     api_keys = get_api_keys_from_env()
 
@@ -211,8 +214,8 @@ def send_image_to_vlm(base_64_img: str, vlm_prompt: str, inject_wrong_plot: bool
         reasoning_effort = "medium"
 
         if cmbagent_debug:
-            print(f"Using OpenAI VLM call with {reasoning_effort} reasoning effort")
-            
+            logger.debug("Using OpenAI VLM call with %s reasoning effort", reasoning_effort)
+
         # External OpenAI API call with structured output
         try:
             completion = client.chat.completions.create(
@@ -245,27 +248,27 @@ def send_image_to_vlm(base_64_img: str, vlm_prompt: str, inject_wrong_plot: bool
                     }
                 }
             )
-            
+
             if cmbagent_debug:
-                print(f"VLM prompt:\n{vlm_prompt}")
-                
+                logger.debug("VLM prompt:\n%s", vlm_prompt)
+
             return completion, injected_code
-            
+
         except Exception as e:
-            print(f"ERROR: VLM API call failed: {e}")
+            logger.error("VLM API call failed: %s", e)
             # Return a graceful fallback completion
             fallback_response = _create_fallback_response(has_code_context)
             return fallback_response, injected_code
 
     elif vlm_model in ["gemini-2.5-flash", "gemini-2.5-pro"]:
         if cmbagent_debug:
-            print(f"VLM model: {vlm_model}")
+            logger.debug("VLM model: %s", vlm_model)
         client = genai.Client(api_key=api_keys["GEMINI"])
-        
+
         try:
             # Convert base64 image to bytes
             image_bytes = base64.b64decode(base_64_img)
-            
+
             # External Gemini API call with structured output
             response = client.models.generate_content(
                 model=vlm_model,
@@ -281,23 +284,23 @@ def send_image_to_vlm(base_64_img: str, vlm_prompt: str, inject_wrong_plot: bool
                     "response_schema": VLMAnalysis.model_json_schema()
                 }
             )
-            
+
             if cmbagent_debug:
-                print(f"VLM prompt:\n{vlm_prompt}")
-                print(f"VLM response:\n{response.text}")
-            
+                logger.debug("VLM prompt:\n%s", vlm_prompt)
+                logger.debug("VLM response:\n%s", response.text)
+
             # UsageMetadata JSON representation at https://ai.google.dev/api/generate-content
             prompt_tokens = response.usage_metadata.prompt_token_count
             total_tokens = response.usage_metadata.total_token_count
             completion_tokens = total_tokens - prompt_tokens  # candidates_token_count doesn't include all outputs
-            
-            return OpenAICompletion(response.text, 
-                                  prompt_tokens, 
+
+            return OpenAICompletion(response.text,
+                                  prompt_tokens,
                                   completion_tokens,
                                   total_tokens), injected_code
-                                  
+
         except Exception as e:
-            print(f"ERROR: VLM API call failed: {e}")
+            logger.error("VLM API call failed: %s", e)
             # Return a graceful fallback completion
             fallback_response = _create_fallback_response(has_code_context)
             return fallback_response, injected_code
@@ -318,12 +321,12 @@ def account_for_external_api_calls(agent, completion, call_type="VLM"):
             "Completion Tokens": [],
             "Total Tokens": []
         }
-    
+
     # Extract token counts from completion object (works for both real and custom OpenAI completions)
     prompt_tokens = completion.usage.prompt_tokens if completion.usage else 0
     completion_tokens = completion.usage.completion_tokens if completion.usage else 0
     total_tokens = completion.usage.total_tokens if completion.usage else 0
-    
+
     # For VLM calls, calculate cost using the pricing table
     if call_type == "VLM":
         model = vlm_model
@@ -335,7 +338,7 @@ def account_for_external_api_calls(agent, completion, call_type="VLM"):
             "gemini-2.5-flash": {"input": 0.00, "output":  0.00},  # Free tier
             "gemini-2.5-pro":   {"input": 0.00, "output":  0.00},  # Free tier
         }
-        
+
         input_cost = (prompt_tokens / 1_000_000) * pricing[model]["input"]
         output_cost = (completion_tokens / 1_000_000) * pricing[model]["output"]
         total_cost = input_cost + output_cost
@@ -343,11 +346,11 @@ def account_for_external_api_calls(agent, completion, call_type="VLM"):
         # For LLM calls, cost is already calculated and stored in the completion object
         total_cost = getattr(completion, 'total_cost', 0.0)
         model = getattr(completion, 'model', 'gpt-4o')
-    
+
     # Skip if no cost to track
     if total_cost == 0:
         return
-    
+
     # Add to agent's cost tracking
     agent_name = getattr(agent, 'name', 'plot_judge')
     agent.cost_dict["Agent"].append(agent_name)
@@ -355,10 +358,10 @@ def account_for_external_api_calls(agent, completion, call_type="VLM"):
     agent.cost_dict["Prompt Tokens"].append(prompt_tokens)
     agent.cost_dict["Completion Tokens"].append(completion_tokens)
     agent.cost_dict["Total Tokens"].append(total_tokens)
-    
-    print(f"{call_type} tokens added to {agent_name}: {prompt_tokens} prompt, {completion_tokens} completion, {total_tokens} total")
-    print(f"{call_type} cost ({model}): ${total_cost:.8f}")
-    
+
+    logger.info("%s tokens added to %s: %s prompt, %s completion, %s total", call_type, agent_name, prompt_tokens, completion_tokens, total_tokens)
+    logger.info("%s cost (%s): $%.8f", call_type, model, total_cost)
+
 
 def _create_base_vlm_prompt(improved_main_task: str) -> str:
     """Create the base VLM prompt without code context."""
@@ -369,11 +372,11 @@ Context about the goal of the plot: {improved_main_task}
 
 IMPORTANT: We do not use LaTeX rendering at all in plots, so do not ask for it or comment on unrendered TeX code.
 
-Request plot elements that are scientifically beneficial for understanding the plot. 
-Don't request them just for rubric completeness if the plot is clear without them. 
+Request plot elements that are scientifically beneficial for understanding the plot.
+Don't request them just for rubric completeness if the plot is clear without them.
 Don't request additional annotations.
 
-Be thorough and critical - the plot will only be accepted if ALL criteria are met. 
+Be thorough and critical - the plot will only be accepted if ALL criteria are met.
 If any criterion is not satisfied, list the specific problems found in the problems field.
 
 Your verdict must be either "continue" (plot fully meets all criteria) or "retry" (plot needs improvements)."""
@@ -392,17 +395,17 @@ def create_vlm_prompt(context_variables: ContextVariables, executed_code: str = 
     """Create the complete VLM prompt including optional code context."""
     # Fetch relevant task context
     improved_main_task = context_variables.get("improved_main_task", "No improved main task provided.")
-    
+
     # Create base prompt
     base_prompt = _create_base_vlm_prompt(improved_main_task)
-    
+
     # Add code context if visibility is enabled and code is provided
     if show_code_to_plot_judge and executed_code:
         code_section = _create_code_context_section(executed_code)
         vlm_prompt = base_prompt + code_section
     else:
         vlm_prompt = base_prompt
- 
+
 
     return vlm_prompt
 
@@ -419,12 +422,12 @@ def _create_fallback_response(has_code_context: bool = False):
     }
     if has_code_context:
         fallback_dict["code_analysis"] = "VLM analysis failed - code could not be analyzed"
-    
+
     return OpenAICompletion(
         json.dumps(fallback_dict),
         0, 0, 0
     )
-    
+
 
 def generate_llm_scientific_criteria(plot_description: str, plot_type: str = "scientific plot"):
     """
@@ -434,7 +437,7 @@ def generate_llm_scientific_criteria(plot_description: str, plot_type: str = "sc
     try:
         api_keys = get_api_keys_from_env()
         client = OpenAI(api_key=api_keys["OPENAI"])
-        
+
         prompt = f"""You are a scientific expert analyzing plots. Generate domain-specific scientific accuracy criteria for evaluating a {plot_type}.
 
 Context: {plot_description}
@@ -446,7 +449,7 @@ First, identify key features that should have specific expected coordinates/valu
 2. What deviations indicate and why they're scientifically invalid
 3. What physical processes cause these features
 
-IMPORTANT: Only include features you're confident about. Skip any where the expected values can vary significantly or you're uncertain. 
+IMPORTANT: Only include features you're confident about. Skip any where the expected values can vary significantly or you're uncertain.
 It's better to have fewer, more reliable criteria than many uncertain ones.
 
 Example format:
@@ -484,17 +487,17 @@ Check the following features:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=800,
         )
-        
+
         # Extract cost information
         prompt_tokens = response.usage.prompt_tokens if response.usage else 0
         completion_tokens = response.usage.completion_tokens if response.usage else 0
         total_tokens = response.usage.total_tokens if response.usage else 0
-        
+
         # Calculate cost (OpenAI GPT-4o pricing: $2.50 input, $10.00 output per 1M tokens)
         input_cost = (prompt_tokens / 1_000_000) * 2.50
         output_cost = (completion_tokens / 1_000_000) * 10.00
         total_cost = input_cost + output_cost
-        
+
         # Return OpenAICompletion object with cost information
         return OpenAICompletion(
             text_response=response.choices[0].message.content.strip(),
@@ -504,9 +507,9 @@ Check the following features:
             total_cost=total_cost,
             model="gpt-4o"
         )
-        
+
     except Exception as e:
-        print(f"ERROR: Failed to generate LLM scientific criteria: {e}")
+        logger.error("Failed to generate LLM scientific criteria: %s", e)
         return OpenAICompletion("", 0, 0, 0, 0.0, "gpt-4o")
 
 
@@ -521,27 +524,27 @@ class PlotDebuggerResponse(BaseModel):
 def call_external_plot_debugger(task_context: str, vlm_analysis: str, problems: list[str], executed_code: str) -> list[str]:
     """
     Call external Gemini 2.5 Pro to analyze problems and generate targeted fixes.
-    
+
     Args:
         task_context: The main task context
         vlm_analysis: Full VLM analysis JSON
         problems: List of problems identified by VLM
         executed_code: The code that generated the plot
-    
+
     Returns:
         List of targeted fixes, or empty list on failure
     """
     try:
         from google import genai
         from google.genai import types
-        
+
         api_keys = get_api_keys_from_env()
         if not api_keys.get("GEMINI"):
-            print("WARNING: No Gemini API key found, returning empty fixes")
+            logger.warning("No Gemini API key found, returning empty fixes")
             return []
-            
+
         client = genai.Client(api_key=api_keys["GEMINI"])
-        
+
         prompt = f"""You are a plot debugging expert. The VLM has identified problems with a plot, and you need to provide targeted code fixes.
 
 TASK CONTEXT:
@@ -560,12 +563,12 @@ YOUR JOB:
 Analyze the code and provide targeted fixes for each problem. Multiple problems can often be caused by a single underlying issue in the code, so focus on root causes rather than symptoms.
 
 For each fix:
-- If you can identify specific code lines/sections: Reference them directly (e.g., "Line 15: change plt.xlim() to...")  
+- If you can identify specific code lines/sections: Reference them directly (e.g., "Line 15: change plt.xlim() to...")
 - If the issue is broader: Provide helpful considerations for the engineer
 - Be concrete and actionable, focusing on code changes needed to address the visual/scientific issues
 - Group related problems into single fixes when appropriate"""
 
-        
+
         response = client.models.generate_content(
             model="gemini-2.5-pro",
             contents=prompt,
@@ -575,13 +578,13 @@ For each fix:
                 "temperature": 0.1,
             }
         )
-        
+
         # Parse structured response
         debugger_response = response.candidates[0].content.parts[0].text
         parsed_response = PlotDebuggerResponse.model_validate_json(debugger_response)
-        
+
         return parsed_response.fixes
-            
+
     except Exception as e:
-        print(f"ERROR: External Gemini debugger failed: {e}")
+        logger.error("External Gemini debugger failed: %s", e)
         return []

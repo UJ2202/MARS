@@ -47,6 +47,8 @@ from autogen.agentchat import initiate_group_chat
 from cmbagent.context import shared_context as shared_context_default
 import shutil
 
+logger = logging.getLogger(__name__)
+
 class CMBAgent:
 
     logging.disable(logging.CRITICAL)
@@ -69,14 +71,14 @@ class CMBAgent:
                         "executor":
                         """
                         You execute python code provided to you by the engineer or save content provided by the researcher.
-                        """,      
+                        """,
                     },
                  agent_descriptions = None,
                  agent_temperature = None,
                  agent_top_p = None,
                 #  vector_store_ids = None,
                  chunking_strategy = {
-                    'camb_agent': 
+                    'camb_agent':
                     {
                     "type": "static",
                     "static": {
@@ -126,7 +128,7 @@ class CMBAgent:
             chunking_strategy (dict, optional): Chunking strategy for vector stores. Defaults to None.
             make_new_rag_agents (list of strings, optional): List of names for new rag agents to be created. Defaults to False.
             enable_ag2_free_tools (bool, optional): Enable AG2 free tools from LangChain and CrewAI. Defaults to True.
-            
+
             **kwargs: Additional keyword arguments.
 
         Attributes:
@@ -146,7 +148,7 @@ class CMBAgent:
             default_llm_config_list = [get_model_config(default_llm_model, api_keys)]
 
         self.kwargs = kwargs
-        
+
         self.enable_ag2_free_tools = enable_ag2_free_tools
         self.enable_mcp_client = enable_mcp_client
 
@@ -223,14 +225,13 @@ class CMBAgent:
         self.dag_executor: Optional[Any] = None
         self.dag_visualizer: Optional[Any] = None
         self.workflow_sm: Optional[Any] = None
-        self.approval_manager: Optional[Any] = None
         self.retry_manager: Optional[Any] = None
         self.retry_metrics: Optional[Any] = None
 
         # Skip DB initialization if in managed mode
         if managed_mode:
             if cmbagent_debug:
-                print(f"[CMBAgent] Running in managed_mode, skipping DB initialization")
+                self.logger.debug("managed_mode_init: skipping DB initialization")
 
             # Use parent's session/DB if provided
             self.session_id = parent_session_id
@@ -250,7 +251,6 @@ class CMBAgent:
                 from cmbagent.database.dag_executor import DAGExecutor
                 from cmbagent.database.dag_visualizer import DAGVisualizer
                 from cmbagent.database.state_machine import StateMachine
-                from cmbagent.database.approval_manager import ApprovalManager
 
                 # Initialize database
                 init_database()
@@ -278,9 +278,6 @@ class CMBAgent:
                 self.dag_visualizer = DAGVisualizer(self.db_session)
                 self.workflow_sm = StateMachine(self.db_session, "workflow_run")
 
-                # Create approval manager
-                self.approval_manager = ApprovalManager(self.db_session, self.session_id)
-
                 # Create retry context manager and metrics
                 from cmbagent.retry.retry_context_manager import RetryContextManager
                 from cmbagent.retry.retry_metrics import RetryMetrics
@@ -288,9 +285,9 @@ class CMBAgent:
                 self.retry_metrics = RetryMetrics(self.db_session)
 
                 if cmbagent_debug:
-                    print(f"Database initialized with session_id: {self.session_id}")
+                    self.logger.debug("database_initialized, session_id=%s", self.session_id)
             except Exception as e:
-                self.logger.warning(f"Failed to initialize database: {e}. Continuing without database.")
+                self.logger.warning("Failed to initialize database: %s. Continuing without database.", e)
                 self.use_database = False
                 self.db_session = None
                 self.session_id = None
@@ -300,7 +297,6 @@ class CMBAgent:
                 self.dag_executor = None
                 self.dag_visualizer = None
                 self.workflow_sm = None
-                self.approval_manager = None
                 self.retry_manager = None
                 self.retry_metrics = None
 
@@ -311,27 +307,27 @@ class CMBAgent:
             try:
                 from cmbagent.mcp import MCPClientManager, MCPToolIntegration
                 import asyncio
-                
+
                 self.mcp_client_manager = MCPClientManager()
                 # Connect to all enabled MCP servers asynchronously
                 asyncio.run(self.mcp_client_manager.connect_all())
-                
+
                 # Create tool integration helper
                 self.mcp_tool_integration = MCPToolIntegration(self.mcp_client_manager)
-                
+
                 connected_servers = len(self.mcp_client_manager.sessions)
                 if cmbagent_debug or self.verbose:
-                    print(f"MCP client initialized. Connected to {connected_servers} servers.")
-                    
+                    self.logger.debug("mcp_client_initialized, connected_servers=%s", connected_servers)
+
             except Exception as e:
-                self.logger.warning(f"Failed to initialize MCP client: {e}. Continuing without MCP.")
+                self.logger.warning("Failed to initialize MCP client: %s. Continuing without MCP.", e)
                 self.enable_mcp_client = False
                 self.mcp_client_manager = None
                 self.mcp_tool_integration = None
 
         self.path_to_assistants = path_to_assistants
 
-        self.logger.info(f"Autogen version: {autogen.__version__}")
+        self.logger.info("autogen_version=%s", autogen.__version__)
 
         llm_config_list = default_llm_config_list.copy()
 
@@ -344,7 +340,7 @@ class CMBAgent:
         self.llm_api_key = llm_config_list[0]['api_key']
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
 
-        self.logger.info(f"Path to APIs: {path_to_apis}")
+        self.logger.info("path_to_apis=%s", path_to_apis)
 
         self.cache_seed = cache_seed
 
@@ -356,9 +352,9 @@ class CMBAgent:
                         "timeout": timeout,
                         "check_every_ms": None,
                     }
-        
+
         if cmbagent_debug:
-            print('\n\n\n\nin cmbagent.py self.llm_config: ',self.llm_config)
+            self.logger.debug("llm_config=%s", self.llm_config)
 
         # self.llm_config =  {"model": "gpt-4o-mini", "cache_seed": None}
 
@@ -366,7 +362,7 @@ class CMBAgent:
 
         for key, value in self.llm_config.items():
 
-            self.logger.info(f"{key}: {value}")
+            self.logger.info("llm_config %s=%s", key, value)
 
         self.agent_type = agent_type
 
@@ -376,8 +372,8 @@ class CMBAgent:
         if api_keys is not None:
 
             self.llm_config["config_list"][0] = get_model_config(self.llm_config["config_list"][0]["model"], api_keys)
-            
-            for agent in self.agent_llm_configs.keys():                
+
+            for agent in self.agent_llm_configs.keys():
                 self.agent_llm_configs[agent] = get_model_config(self.agent_llm_configs[agent]["model"], api_keys)
 
 
@@ -386,10 +382,10 @@ class CMBAgent:
         self.init_agents(agent_llm_configs=self.agent_llm_configs, default_formatter_model=default_formatter_model) # initialize agents
 
         if cmbagent_debug:
-            print("\n\n All agents instantiated!!!\n\n")
+            self.logger.debug("all_agents_instantiated")
 
-        if cmbagent_debug:  
-            print("\n\n Checking assistants...\n\n")
+        if cmbagent_debug:
+            self.logger.debug("checking_assistants")
 
         if not self.skip_rag_agents:
             setup_cmbagent_data()
@@ -397,26 +393,26 @@ class CMBAgent:
             self.check_assistants(reset_assistant=reset_assistant) # check if assistants exist
 
             if cmbagent_debug:
-                print("\n\n Assistants checked!!!\n\n")
+                self.logger.debug("assistants_checked")
 
             if cmbagent_debug:
-                print('\npushing vector stores...')
+                self.logger.debug("pushing_vector_stores")
             push_vector_stores(self, make_vector_stores, chunking_strategy, verbose = verbose) # push vector stores
 
         if cmbagent_debug:
-            print('\nsetting planner instructions currently not doing anything...')
-            print('\nmodify if you want to tune the instruction prompt...')
+            self.logger.debug("setting planner instructions (currently no-op)")
+            self.logger.debug("modify if you want to tune the instruction prompt")
         self.set_planner_instructions() # set planner instructions
 
         if self.verbose or cmbagent_debug:
-            print("\nSetting up agents:----------------------------------")
+            self.logger.debug("setting_up_agents")
 
         # then we set the agents, note that self.agents is set in init_agents
         for agent in self.agents:
 
             agent.agent_type = self.agent_type
             if cmbagent_debug:
-                print(f"\t- {agent.name}")
+                self.logger.debug("setting_up_agent: %s", agent.name)
 
             instructions = agent_instructions[agent.name] if agent_instructions and agent.name in agent_instructions else None
             description = agent_descriptions[agent.name] if agent_descriptions and agent.name in agent_descriptions else None
@@ -427,9 +423,9 @@ class CMBAgent:
 
             if description is not None:
                 agent_kwargs['description'] = description
-           
 
-            if agent.name not in self.non_rag_agent_names: ## loop over all rag agents 
+
+            if agent.name not in self.non_rag_agent_names: ## loop over all rag agents
                 if self.skip_rag_agents:
                     continue
                 vector_ids = self.vector_store_ids[agent.name] if self.vector_store_ids and agent.name in self.vector_store_ids else None
@@ -456,21 +452,21 @@ class CMBAgent:
                 if setagent == 1:
 
                     if cmbagent_debug:
-                        print(f"setting make_vector_stores=['{agent.name.removesuffix('_agent')}'],")
-                    
+                        self.logger.debug("setting make_vector_stores for agent: %s", agent.name.removesuffix('_agent'))
+
                     push_vector_stores(self, [agent.name.removesuffix('_agent')], chunking_strategy, verbose = verbose)
 
-                    agent_kwargs['vector_store_ids'] = self.vector_store_ids[agent.name] 
+                    agent_kwargs['vector_store_ids'] = self.vector_store_ids[agent.name]
 
-                    
-                    agent.set_agent(**agent_kwargs) 
+
+                    agent.set_agent(**agent_kwargs)
 
                 # else:
-                # see above for trick on how to make vector store if it is not found. 
+                # see above for trick on how to make vector store if it is not found.
                 # agent.set_agent(**agent_kwargs)
 
             else: ## set all non-rag agents
-                
+
                 agent.set_agent(**agent_kwargs)
 
             ## debug print to help debug
@@ -478,49 +474,45 @@ class CMBAgent:
             #print('in cmbagent.py self.agents description: ',description)
 
         if self.verbose or cmbagent_debug:
-            print("Planner instructions:")
-            print("\nAll agents:")
+            self.logger.debug("planner_instructions")
+            self.logger.debug("all_agents")
             for agent in self.agents:
-                print("\n\n----------------------------------")
-                print(f"- {agent.name}")
-                print(dir(agent))
-                print("\n\n----------------------------------")
-            print()
+                self.logger.debug("agent_details: name=%s, dir=%s", agent.name, dir(agent))
             planner = self.get_agent_object_from_name('planner')
-            print(planner.info['instructions'])
+            self.logger.debug("planner_instructions: %s", planner.info['instructions'])
 
         if cmbagent_debug:
-            print('\nregistering all hand_offs...')
+            self.logger.debug("registering_all_hand_offs")
 
         register_all_hand_offs(self)
 
         if cmbagent_debug:
-            print('\nall hand_offs registered...')
+            self.logger.debug("all_hand_offs_registered")
 
 
         if cmbagent_debug:
-            print('\nadding functions to agents...')
+            self.logger.debug("adding_functions_to_agents")
 
         register_functions_to_agents(self)
 
         if cmbagent_debug:
-            print('\nfunctions added to agents...')
+            self.logger.debug("functions_added_to_agents")
 
         self.shared_context = shared_context_default
         if shared_context is not None:
             self.shared_context.update(shared_context)
 
         if cmbagent_debug:
-            print('\nshared_context: ', self.shared_context)
+            self.logger.debug("shared_context: %s", self.shared_context)
 
     def display_cost(self, name_append = None):
-        """Display a full cost report as a right‑aligned Markdown table with $ and a
+        """Display a full cost report as a right-aligned Markdown table with $ and a
         rule above the total row. Also saves the cost data as JSON in the workdir."""
         import json
 
         cost_dict = defaultdict(list)
 
-        # --- collect per‑agent costs ------------------------------------------------
+        # --- collect per-agent costs ------------------------------------------------
         all_agents = [a.agent for a in self.agents]
         if hasattr(self, "groupchat"):
             all_agents += self.groupchat.new_conversable_agents
@@ -540,7 +532,7 @@ class CMBAgent:
                 summed_total  = int(sum(agent.cost_dict["Total Tokens"]))
 
                 model_name = agent.cost_dict["Model"][0]
-                
+
 
                 if name in cost_dict["Agent"]:
                     i = cost_dict["Agent"].index(name)
@@ -598,7 +590,7 @@ class CMBAgent:
                                     cost_dict["Total Tokens"].append(total_tokens)
                                     cost_dict["Model"].append(model_name)
                 except Exception as e:
-                    print(f"Warning: Could not extract AG2 usage for agent {getattr(agent, 'name', 'unknown')}: {e}")
+                    self.logger.warning("Could not extract AG2 usage for agent %s: %s", getattr(agent, 'name', 'unknown'), e)
 
         # --- build DataFrame & totals ----------------------------------------------
         df = pd.DataFrame(cost_dict)
@@ -611,8 +603,7 @@ class CMBAgent:
 
         # --- string formatting for display ------------------------------------------------------
         if df.empty:
-            print("\nDisplaying cost…\n")
-            print("No cost data available (no API calls were made)")
+            self.logger.info("display_cost: no cost data available (no API calls were made)")
         else:
             df_str = df.copy()
             df_str["Cost ($)"] = df_str["Cost ($)"].map(lambda x: f"${x:.8f}")
@@ -656,19 +647,18 @@ class CMBAgent:
                         cell.append(f" {s.rjust(widths[i])} ")
                 lines.append("|" + "|".join(cell) + "|")
 
-            print("\nDisplaying cost…\n")
-            print("\n".join(lines))
+            self.logger.info("display_cost:\n%s", "\n".join(lines))
 
         self.final_context['cost_dataframe'] = df
 
         # --- Save cost data as JSON ------------------------------------------------
         # Convert DataFrame to dict for JSON serialization
         cost_data = df.to_dict(orient='records')
-        
+
         # Add timestamp
         # Use module-level datetime import (already imported at top)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
         # Save to JSON file in workdir
         if name_append is not None:
             json_path = os.path.join(self.work_dir, f"cost/cost_report_{name_append}_{timestamp}.json")
@@ -676,14 +666,14 @@ class CMBAgent:
             json_path = os.path.join(self.work_dir, f"cost/cost_report_{timestamp}.json")
         with open(json_path, 'w') as f:
             json.dump(cost_data, f, indent=2)
-            
-        print(f"\nCost report data saved to: {json_path}\n")
+
+        self.logger.info("cost_report_saved, path=%s", json_path)
 
         self.final_context['cost_report_path'] = json_path
-        
+
         return df
 
-        
+
 
     def clear_work_dir(self):
         # Clear everything inside work_dir if it exists
@@ -781,15 +771,15 @@ class CMBAgent:
             return self.retry_metrics.generate_retry_report(run_id)
         return None
 
-    def solve(self, task, 
-              initial_agent='task_improver', 
+    def solve(self, task,
+              initial_agent='task_improver',
               shared_context=None,
               mode = "default", # can be "one_shot" or "default" (default is planning and control)
               step = None,
               max_rounds=10):
-        self.step = step ## record the step for the context carryover workflow 
+        self.step = step ## record the step for the context carryover workflow
         this_shared_context = copy.deepcopy(self.shared_context)
-        
+
         if mode == "one_shot" or mode == "chat":
             one_shot_shared_context = {'final_plan': "Step 1: solve the main task.",
                                         'current_status': "In progress",
@@ -806,22 +796,17 @@ class CMBAgent:
                                         'idea_maker_append_instructions': '',
                                         'idea_hater_append_instructions': '',
                                         }
-            
+
             if initial_agent == 'perplexity':
                 one_shot_shared_context['perplexity_query'] = self.get_agent_object_from_name('perplexity').info['instructions'].format(main_task=task)
-                # print('one_shot_shared_context: ', one_shot_shared_context)
 
             this_shared_context.update(one_shot_shared_context)
             this_shared_context.update(shared_context or {})
 
-            # print('one_shot_shared_context: ', one_shot_shared_context)
-            # print('shared_context: ', this_shared_context)
-            # sys.exit()
-            
         else:
             if shared_context is not None:
                 this_shared_context.update(shared_context)
-        
+
         try:
             self.clear_cache() ## obsolete
             # import pdb; pdb.set_trace()
@@ -840,7 +825,7 @@ class CMBAgent:
         chat_full_path = os.path.join(self.work_dir, "chats")
         time_full_path = os.path.join(self.work_dir, "time")
         cost_full_path = os.path.join(self.work_dir, "cost")
-        
+
         # Create directories if they don't exist
         os.makedirs(database_full_path, exist_ok=True)
         os.makedirs(codebase_full_path, exist_ok=True)
@@ -859,8 +844,6 @@ class CMBAgent:
         this_shared_context['improved_main_task'] = task # initialize improved main task
 
         this_shared_context['work_dir'] = self.work_dir
-        # print('this_shared_context: ', this_shared_context)
-        # sys.exit()
 
         context_variables = ContextVariables(data=this_shared_context)
 
@@ -869,7 +852,7 @@ class CMBAgent:
                 agents=[agent.agent for agent in self.agents],
                 initial_agent=self.get_agent_from_name(initial_agent),
                 context_variables=context_variables,
-                group_manager_args = {"llm_config": self.llm_config, 
+                group_manager_args = {"llm_config": self.llm_config,
                                       "name": "main_cmbagent_chat"},
             )
 
@@ -890,14 +873,14 @@ class CMBAgent:
         for agent in self.agents:
             if agent.info['name'] == name:
                 return agent
-        print(f"get_agent_object_from_name: agent {name} not found")
+        self.logger.error("get_agent_object_from_name: agent %s not found", name)
         sys.exit()
 
     def get_agent_from_name(self,name):
         for agent in self.agents:
             if agent.info['name'] == name:
                 return agent.agent
-        print(f"get_agent_from_name: agent {name} not found")
+        self.logger.error("get_agent_from_name: agent %s not found", name)
         sys.exit()
 
     def init_agents(self,agent_llm_configs=None, default_formatter_model=default_formatter_model_default):
@@ -905,11 +888,6 @@ class CMBAgent:
         # this automatically loads all the agents from the assistants folder
         imported_rag_agents = import_rag_agents()
         imported_non_rag_agents = import_non_rag_agents()
-        # print('imported_rag_agents: ', imported_rag_agents)
-        # print("making new rag agents: ", self.make_new_rag_agents)
-        # make_rag_agents(self.make_new_rag_agents)
-        # imported_rag_agents = import_rag_agents()
-        # print('imported_rag_agents: ', imported_rag_agents)
 
         ## this will store classes for each agents
         self.agent_classes = {}
@@ -925,16 +903,14 @@ class CMBAgent:
             self.non_rag_agent_names.append(imported_non_rag_agents[k]['agent_name'])
 
         if cmbagent_debug:
-            print('self.agent_classes: ', self.agent_classes)
-            print('self.rag_agent_names: ', self.rag_agent_names)
-            print('self.non_rag_agent_names: ', self.non_rag_agent_names)
+            self.logger.debug("agent_classes=%s", self.agent_classes)
+            self.logger.debug("rag_agent_names=%s", self.rag_agent_names)
+            self.logger.debug("non_rag_agent_names=%s", self.non_rag_agent_names)
 
         if cmbagent_debug:
-            print('self.agent_classes after update: ')
-            print()
+            self.logger.debug("agent_classes after update:")
             for agent_class, value in self.agent_classes.items():
-                print(f'{agent_class}: {value}')
-                print()
+                self.logger.debug("  %s: %s", agent_class, value)
 
         # all agents
         self.agents = []
@@ -946,17 +922,15 @@ class CMBAgent:
         self.agent_classes = {k: v for k, v in self.agent_classes.items() if k in self.agent_list or k in self.non_rag_agent_names}
 
         if cmbagent_debug:
-            print('self.agent_classes after list update: ')
-            print()
+            self.logger.debug("agent_classes after list update:")
             for agent_class, value in self.agent_classes.items():
-                print(f'{agent_class}: {value}')
-                print()
+                self.logger.debug("  %s: %s", agent_class, value)
 
         # remove agents that are not set to be skipped
         if self.skip_memory:
             # self.agent_classes.pop('memory')
             self.agent_classes.pop('session_summarizer')
-        
+
         if self.skip_executor:
             self.agent_classes.pop('executor')
 
@@ -964,41 +938,39 @@ class CMBAgent:
             self.agent_classes.pop('rag_software_formatter')
 
         if cmbagent_debug:
-            print('self.agent_classes after skipping agents: ')
-            print()
+            self.logger.debug("agent_classes after skipping agents:")
             for agent_class, value in self.agent_classes.items():
-                print(f'{agent_class}: {value}')
-                print()
+                self.logger.debug("  %s: %s", agent_class, value)
 
         # instantiate the agents and llm_configs
         if cmbagent_debug:
-            print('self.llm_config: ', self.llm_config)
+            self.logger.debug("llm_config=%s", self.llm_config)
 
 
         for agent_name  in self.agent_classes:
             agent_class = self.agent_classes[agent_name]
 
             if cmbagent_debug:
-                print('instantiating agent: ', agent_name)
+                self.logger.debug("instantiating_agent: %s", agent_name)
 
             if agent_name in agent_llm_configs:
                 llm_config = copy.deepcopy(self.llm_config)
                 llm_config['config_list'][0].update(agent_llm_configs[agent_name])
                 clean_llm_config(llm_config)
-                
+
                 if cmbagent_debug:
-                    print('in cmbagent.py: found agent_llm_configs for: ', agent_name)
-                    print('in cmbagent.py: llm_config updated to: ', llm_config)
+                    self.logger.debug("found agent_llm_configs for: %s", agent_name)
+                    self.logger.debug("llm_config updated to: %s", llm_config)
             else:
                 llm_config = copy.deepcopy(self.llm_config)
 
             if cmbagent_debug:
-                print('in cmbagent.py BEFORE agent_instance: llm_config: ', llm_config)
+                self.logger.debug("before agent_instance, llm_config=%s", llm_config)
 
             agent_instance = agent_class(llm_config=llm_config,agent_type=self.agent_type, work_dir=self.work_dir)
 
             if cmbagent_debug:
-                print('agent_type: ', agent_instance.agent_type)
+                self.logger.debug("agent_type=%s", agent_instance.agent_type)
 
             # setattr(self, agent_name, agent_instance)
 
@@ -1007,51 +979,35 @@ class CMBAgent:
         if self.skip_rag_agents:
             self.agents = [agent for agent in self.agents if agent.name.replace('_agent', '') not in self.rag_agent_names]
 
-        # print('rag_agent_names: ', self.rag_agent_names)
         self.agent_names =  [agent.name for agent in self.agents]
-        # print('skip_rag_agents: ', self.skip_rag_agents)
-        # print('self.agents: ', self.agent_names)
-        # import sys 
-        # sys.exit()
 
         if cmbagent_debug:
             for agent in self.agents:
-                print('\n\nagent.name: ', agent.name)
-                print('agent.llm_config: ', agent.llm_config)
-                print('\n\n')
+                self.logger.debug("agent_config: name=%s, llm_config=%s", agent.name, agent.llm_config)
 
         for agent in self.agents:
 
             if "formatter" in agent.name:
 
-                # print("="*10)
-                # print('\n\nagent.name BEFORE: ', agent.name)
-                # print('agent.llm_config: ', agent.llm_config)
-                # print('\n\n')
-
                 agent.llm_config['config_list'][0].update(get_model_config(default_formatter_model, self.api_keys))
-                
-                # print('\n\nagent.name AFTER: ', agent.name)
-                # print('agent.llm_config: ', agent.llm_config)
-                # print('\n\n')
+
             # make sure the llm config doesnt have inconsistent parameters
             clean_llm_config(agent.llm_config)
 
 
         if self.verbose or cmbagent_debug:
 
-            print("Using following agents: ", self.agent_names)
-            print("Using following llm for agents: ")
+            self.logger.debug("using_agents=%s", self.agent_names)
+            self.logger.debug("using_llm_for_agents:")
             for agent in self.agents:
-                print(f"{agent.name}: {agent.llm_config['config_list'][0]['model']}")
-            print()
+                self.logger.debug("  %s: %s", agent.name, agent.llm_config['config_list'][0]['model'])
 
     def create_assistant(self, client, agent):
 
         if cmbagent_debug:
-            print(f"-->Creating assistant {agent.name}")
-            print(f"--> llm_config: {self.llm_config}")
-            print(f"--> agent.llm_config: {agent.llm_config}")
+            self.logger.debug("creating_assistant: %s", agent.name)
+            self.logger.debug("llm_config=%s", self.llm_config)
+            self.logger.debug("agent_llm_config=%s", agent.llm_config)
 
         new_assistant = client.beta.assistants.create(
             name=agent.name,
@@ -1064,12 +1020,7 @@ class CMBAgent:
         )
 
         if cmbagent_debug:
-            print("New assistant created.")
-            print(f"--> New assistant id: {new_assistant.id}")
-            print(f"--> New assistant model: {new_assistant.model}")
-            # print(f"--> New assistant response format: {new_assistant.response_format}")
-            # print(f"--> New assistant tool choice: {new_assistant.tool_choice}")
-            print("\n")
+            self.logger.debug("new_assistant_created: id=%s, model=%s", new_assistant.id, new_assistant.model)
 
         return new_assistant
 
@@ -1091,38 +1042,37 @@ class CMBAgent:
         for agent in self.agents:
 
             if cmbagent_debug:
-                print('in cmbagent.py check_assistants: agent: ', agent.name)
-                print('non_rag_agent_names: ', self.non_rag_agent_names)
+                self.logger.debug("check_assistants: agent=%s, non_rag_agent_names=%s", agent.name, self.non_rag_agent_names)
 
             if agent.name not in self.non_rag_agent_names:
                 if cmbagent_debug:
-                    print(f"Checking agent: {agent.name}")
+                    self.logger.debug("checking_agent: %s", agent.name)
 
                 # Check if agent name exists in the available assistants
                 if agent.name in assistant_names:
                     if cmbagent_debug:
-                        print(f"in cmbagent.py check_assistants: Agent {agent.name} exists in available assistants with id: {assistant_ids[assistant_names.index(agent.name)]}")
+                        self.logger.debug("agent %s exists in available assistants with id: %s", agent.name, assistant_ids[assistant_names.index(agent.name)])
 
                     if cmbagent_debug:
-                        print('in cmbagent.py check_assistants: this assistant model from openai: ',assistant_models[assistant_names.index(agent.name)])
-                        print('in cmbagent.py check_assistants: this assistant model from llm_config: ', agent.llm_config['config_list'][0]['model'])
+                        self.logger.debug("assistant model from openai: %s", assistant_models[assistant_names.index(agent.name)])
+                        self.logger.debug("assistant model from llm_config: %s", agent.llm_config['config_list'][0]['model'])
                     if assistant_models[assistant_names.index(agent.name)] != agent.llm_config['config_list'][0]['model']:
                         if cmbagent_debug:
-                            print("in cmbagent.py check_assistants: Assistant model from openai does not match the requested model. Updating the assistant model.")
+                            self.logger.debug("assistant model mismatch, updating assistant model")
                         client.beta.assistants.update(
                             assistant_id=assistant_ids[assistant_names.index(agent.name)],
                             model=agent.llm_config['config_list'][0]['model']
                         )
 
                     if reset_assistant and agent.name.replace('_agent', '') in reset_assistant:
-                        
-                        print("This agent is in the reset_assistant list. Resetting the assistant.")
-                        print("Deleting the assistant...")
+
+                        self.logger.info("reset_assistant: agent is in the reset list, resetting")
+                        self.logger.info("reset_assistant: deleting assistant")
                         client.beta.assistants.delete(assistant_ids[assistant_names.index(agent.name)])
-                        print("Assistant deleted. Creating a new one...")
+                        self.logger.info("reset_assistant: assistant deleted, creating new one")
                         new_assistant = self.create_assistant(client, agent)
                         agent.info['assistant_config']['assistant_id'] = new_assistant.id
-                        
+
 
                     else:
 
@@ -1130,17 +1080,14 @@ class CMBAgent:
 
                         if assistant_id != assistant_ids[assistant_names.index(agent.name)]:
                             if cmbagent_debug:
-                                print("--> Assistant ID between yaml and openai do not match.")
-                                print(f"--> Assistant ID from your yaml: {assistant_id}")
-                                print(f"--> Assistant ID in openai: {assistant_ids[assistant_names.index(agent.name)]}")
-                                print("--> We will use the assistant id from openai")
-                            
+                                self.logger.debug("assistant_id_mismatch: yaml_id=%s, openai_id=%s, using openai id", assistant_id, assistant_ids[assistant_names.index(agent.name)])
+
 
                             agent.info['assistant_config']['assistant_id'] = assistant_ids[assistant_names.index(agent.name)]
                             if cmbagent_debug:
-                                print(f"--> Updating yaml file with new assistant id: {assistant_ids[assistant_names.index(agent.name)]}")
+                                self.logger.debug("updating_yaml_assistant_id: %s", assistant_ids[assistant_names.index(agent.name)])
                             update_yaml_preserving_format(f"{path_to_assistants}/{agent.name.replace('_agent', '') }.yaml", agent.name, assistant_ids[assistant_names.index(agent.name)], field = 'assistant_id')
-                    
+
                 else:
 
                     new_assistant = self.create_assistant(client, agent)
@@ -1154,15 +1101,7 @@ class CMBAgent:
 
 
     def clear_cache(self):
-        # print('clearing cache...')
-        cache_dir = autogen.oai.client.LEGACY_CACHE_DIR ## "./cache" 
-        # print("cache_dir: ", cache_dir)
-        # if os.path.exists(cache_dir):
-        #     # print("found cache_dir: ", cache_dir)
-        #     shutil.rmtree(cache_dir)
-            # print("cache_dir removed")
-        # else:
-            # print("no cache_dir found...")
+        cache_dir = autogen.oai.client.LEGACY_CACHE_DIR ## "./cache"
         return None
         #  autogen.Completion.clear_cache(self.cache_seed) ## obsolete AttributeError: module 'autogen' has no attribute 'Completion'
 
@@ -1183,7 +1122,7 @@ class CMBAgent:
 
         # available agents and their roles:
         # available_agents = "\n\n#### Available agents and their roles\n\n"
-        
+
         # for agent in self.agents:
 
         #     if agent.name in ['planner', 'engineer', 'executor', 'admin']:

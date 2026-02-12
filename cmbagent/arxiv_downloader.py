@@ -1,4 +1,5 @@
 # filename: arxiv_downloader.py
+import logging
 import re
 import os
 import requests
@@ -6,6 +7,8 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from .utils import work_dir_default
+
+logger = logging.getLogger(__name__)
 
 
 class ArxivDownloader:
@@ -32,9 +35,9 @@ class ArxivDownloader:
         """
         try:
             os.makedirs(self.output_dir, exist_ok=True)
-            print("Output directory '" + self.output_dir + "' created or already exists.")
+            logger.info("Output directory '%s' created or already exists.", self.output_dir)
         except OSError as e:
-            print("Error creating directory '" + self.output_dir + "': " + str(e))
+            logger.error("Error creating directory '%s': %s", self.output_dir, e)
             raise
 
     def _extract_urls(self, text):
@@ -87,10 +90,10 @@ class ArxivDownloader:
         }
 
         if not arxiv_urls:
-            print("No arXiv URLs found in the provided text.")
+            logger.info("No arXiv URLs found in the provided text.")
             return result
 
-        print(f"Found {len(arxiv_urls)} unique arXiv URLs.")
+        logger.info("Found %d unique arXiv URLs.", len(arxiv_urls))
 
         id_pattern = r'([0-9]+\.[0-9]+(?:v[0-9]+)?)'
 
@@ -101,7 +104,7 @@ class ArxivDownloader:
                 match = re.search(id_pattern, url)
                 if not match:
                     error_msg = f"Could not extract article ID from URL: {url}"
-                    print(error_msg)
+                    logger.error("%s", error_msg)
                     result['downloads_failed'] += 1
                     result['failed_downloads'].append({'url': url, 'error': error_msg})
                     continue
@@ -112,12 +115,12 @@ class ArxivDownloader:
                 filepath = os.path.join(self.output_dir, filename)
 
                 if os.path.exists(filepath):
-                    print(f"File '{filename}' already exists. Skipping download.")
+                    logger.info("File '%s' already exists. Skipping download.", filename)
                     result['downloads_skipped'] += 1
                     result['arxiv_ids'].append(article_id)  # Track ID even if skipped
                     continue
 
-                print(f"Downloading '{filename}' from '{pdf_url}'...")
+                logger.info("Downloading '%s' from '%s'...", filename, pdf_url)
 
                 response = requests.get(pdf_url, stream=True, timeout=30)
                 response.raise_for_status()
@@ -125,29 +128,29 @@ class ArxivDownloader:
                 with open(filepath, 'wb') as f:
                     f.write(response.content)
 
-                print(f"Successfully downloaded and saved to '{filepath}'.")
+                logger.info("Successfully downloaded and saved to '%s'.", filepath)
                 result['downloads_successful'] += 1
                 result['downloaded_files'].append(filepath)
                 result['arxiv_ids'].append(article_id)
 
             except requests.exceptions.HTTPError as e:
                 error_msg = f"HTTP Error: {str(e)}"
-                print(f"Failed to download from '{url}'. {error_msg}")
+                logger.error("Failed to download from '%s'. %s", url, error_msg)
                 result['downloads_failed'] += 1
                 result['failed_downloads'].append({'url': url, 'error': error_msg})
             except requests.exceptions.RequestException as e:
                 error_msg = f"Request Error: {str(e)}"
-                print(f"Failed to download from '{url}'. {error_msg}")
+                logger.error("Failed to download from '%s'. %s", url, error_msg)
                 result['downloads_failed'] += 1
                 result['failed_downloads'].append({'url': url, 'error': error_msg})
             except IOError as e:
                 error_msg = f"File I/O Error: {str(e)}"
-                print(f"Failed to save file for '{url}'. {error_msg}")
+                logger.error("Failed to save file for '%s'. %s", url, error_msg)
                 result['downloads_failed'] += 1
                 result['failed_downloads'].append({'url': url, 'error': error_msg})
             except Exception as e:
                 error_msg = f"Unexpected error: {str(e)}"
-                print(f"An unexpected error occurred for URL '{url}': {error_msg}")
+                logger.error("An unexpected error occurred for URL '%s': %s", url, error_msg)
                 result['downloads_failed'] += 1
                 result['failed_downloads'].append({'url': url, 'error': error_msg})
 
@@ -163,18 +166,18 @@ class ArxivDownloader:
                 with open(metadata_file, 'w', encoding='utf-8') as f:
                     import json
                     json.dump(result, f, indent=2, ensure_ascii=False)
-                print(f"Metadata saved to: {metadata_file}")
+                logger.info("Metadata saved to: %s", metadata_file)
             except Exception as e:
-                print(f"Warning: Could not save metadata to {metadata_file}: {str(e)}")
+                logger.warning("Could not save metadata to %s: %s", metadata_file, e)
 
-        # Print summary
-        print(f"\n=== Download Summary ===")
-        print(f"URLs found: {len(result['urls_found'])}")
-        print(f"Downloads attempted: {result['downloads_attempted']}")
-        print(f"Downloads successful: {result['downloads_successful']}")
-        print(f"Downloads failed: {result['downloads_failed']}")
-        print(f"Downloads skipped (already exist): {result['downloads_skipped']}")
-        print(f"Output directory: {result['output_directory']}")
+        # Log summary
+        logger.info("=== Download Summary ===")
+        logger.info("URLs found: %d", len(result['urls_found']))
+        logger.info("Downloads attempted: %d", result['downloads_attempted'])
+        logger.info("Downloads successful: %d", result['downloads_successful'])
+        logger.info("Downloads failed: %d", result['downloads_failed'])
+        logger.info("Downloads skipped (already exist): %d", result['downloads_skipped'])
+        logger.info("Output directory: %s", result['output_directory'])
 
         return result
 
@@ -211,4 +214,4 @@ if __name__ == '__main__':
     """
     
     result = arxiv_filter(input_text, work_dir='test_downloads')
-    print(f"\nTest completed! Downloaded {result['downloads_successful']} papers.")
+    logger.info("Test completed! Downloaded %d papers.", result['downloads_successful'])

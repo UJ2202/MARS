@@ -5,9 +5,12 @@ Analyzes errors to categorize them, extract patterns, and provide
 fix suggestions based on common error types.
 """
 
+import logging
 import re
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 
 class ErrorAnalyzer:
@@ -236,7 +239,7 @@ class ErrorAnalyzer:
 
         except Exception as e:
             # If query fails, return empty list
-            print(f"Warning: Could not query similar errors: {e}")
+            logger.warning("similar_errors_query_failed", error=str(e))
             return []
 
     def estimate_success_probability(

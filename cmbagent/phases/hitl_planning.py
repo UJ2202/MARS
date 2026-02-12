@@ -20,6 +20,7 @@ from typing import List, Dict, Any, Optional
 import os
 import time
 import json
+import traceback
 
 import logging
 
@@ -155,8 +156,8 @@ class HITLPlanningPhase(Phase):
 
             # Get approval manager for HITL
             approval_manager = context.shared_state.get('_approval_manager')
-            print(f"[HITLPlanning] Retrieved approval_manager: {approval_manager}")
-            print(f"[HITLPlanning] shared_state keys: {list(context.shared_state.keys())}")
+            logger.debug("Retrieved approval_manager: %s", approval_manager)
+            logger.debug("shared_state keys: %s", list(context.shared_state.keys()))
 
             # Initialize agent with proper config
             api_keys = context.api_keys or {}
@@ -198,7 +199,7 @@ class HITLPlanningPhase(Phase):
 
                 # Register handoffs with HITL config
                 register_all_hand_offs(cmbagent, hitl_config=hitl_config)
-                print(f"→ AG2 HITL handoffs enabled for planning: {hitl_config}")
+                logger.info("AG2 HITL handoffs enabled for planning: %s", hitl_config)
 
 
             # Check for previous feedback from other phases
@@ -248,9 +249,9 @@ class HITLPlanningPhase(Phase):
                 )
 
                 # Run planning
-                print(f"\n{'='*60}")
-                print(f"HITL PLANNING - Iteration {iteration}/{self.config.max_human_iterations}")
-                print(f"{'='*60}\n")
+                logger.info("=" * 60)
+                logger.info("HITL PLANNING - Iteration %d/%d", iteration, self.config.max_human_iterations)
+                logger.info("=" * 60)
 
                 cmbagent.solve(
                     task=task_with_feedback,
@@ -272,29 +273,29 @@ class HITLPlanningPhase(Phase):
 
                 # Extract planning context from final_context
                 planning_context = cmbagent.final_context
-                print(f"[HITLPlanning] Iteration {iteration}: planning_context keys: {list(planning_context.keys()) if hasattr(planning_context, 'keys') else 'not a dict'}")
+                logger.debug("Iteration %d: planning_context keys: %s", iteration, list(planning_context.keys()) if hasattr(planning_context, 'keys') else 'not a dict')
 
                 # Save plan using standard save_final_plan (handles string/Pydantic/dict formats)
                 try:
                     plan_file = save_final_plan(planning_context, planning_dir)
-                    print(f"[HITLPlanning] Iteration {iteration}: plan_file = {plan_file}")
+                    logger.debug("Iteration %d: plan_file = %s", iteration, plan_file)
                     manager.track_file(plan_file)
                 except (KeyError, TypeError) as e:
                     raise RuntimeError(f"Failed to generate plan: {e}")
 
                 # Extract plan steps (matches standard PlanningPhase logic)
                 plan = self._extract_plan(planning_context, plan_file)
-                print(f"[HITLPlanning] Iteration {iteration}: extracted {len(plan)} steps")
+                logger.debug("Iteration %d: extracted %d steps", iteration, len(plan))
                 if plan:
-                    print(f"[HITLPlanning] Iteration {iteration}: first step = {plan[0].get('sub_task', plan[0])[:100] if isinstance(plan[0], dict) else str(plan[0])[:100]}")
+                    logger.debug("Iteration %d: first step = %s", iteration, plan[0].get('sub_task', plan[0])[:100] if isinstance(plan[0], dict) else str(plan[0])[:100])
 
                 if not plan:
                     raise RuntimeError("Failed to generate plan")
 
                 # Present plan to human for approval
-                print(f"[HITLPlanning] approval_manager={approval_manager}, require_explicit_approval={self.config.require_explicit_approval}")
+                logger.debug("approval_manager=%s, require_explicit_approval=%s", approval_manager, self.config.require_explicit_approval)
                 if approval_manager and self.config.require_explicit_approval:
-                    print(f"[HITLPlanning] Creating approval request for iteration {iteration}...")
+                    logger.debug("Creating approval request for iteration %d...", iteration)
                     approval_message = self._build_approval_message(plan, iteration)
 
                     approval_request = approval_manager.create_approval_request(
@@ -310,27 +311,27 @@ class HITLPlanningPhase(Phase):
                         options=["approve", "reject", "revise", "modify"],
                     )
 
-                    print(f"\n{'='*60}")
-                    print(f"PLAN REVIEW - Iteration {iteration}")
-                    print(f"{'='*60}")
-                    print(approval_message)
-                    print("\nWaiting for human review...")
-                    print(f"{'='*60}\n")
+                    logger.info("=" * 60)
+                    logger.info("PLAN REVIEW - Iteration %d", iteration)
+                    logger.info("=" * 60)
+                    logger.info("%s", approval_message)
+                    logger.info("Waiting for human review...")
+                    logger.info("=" * 60)
 
                     # Wait for approval
-                    print(f"[HITLPlanning] Calling wait_for_approval_async for {approval_request.id}...")
+                    logger.debug("Calling wait_for_approval_async for %s...", approval_request.id)
                     resolved = await approval_manager.wait_for_approval_async(
                         str(approval_request.id),
                         timeout_seconds=3600,
                     )
-                    print(f"[HITLPlanning] wait_for_approval_async returned! resolution={resolved.resolution}")
+                    logger.debug("wait_for_approval_async returned, resolution=%s", resolved.resolution)
 
                     # Handle resolution (accept both "approved" and "approve")
                     if resolved.resolution in ["approved", "approve"]:
                         approved = True
                         final_plan = plan
                         final_context = planning_context
-                        print("\n✓ Plan approved by human\n")
+                        logger.info("Plan approved by human")
 
                         # Capture approval-time feedback for the control phase
                         if hasattr(resolved, 'user_feedback') and resolved.user_feedback:
@@ -340,7 +341,7 @@ class HITLPlanningPhase(Phase):
                                 'feedback': resolved.user_feedback,
                                 'type': 'approval_note',
                             })
-                            print(f"-> Approval note: {resolved.user_feedback}")
+                            logger.info("Approval note: %s", resolved.user_feedback)
                             manager.log_event("plan_approved_with_feedback", {
                                 "iteration": iteration,
                                 "feedback": resolved.user_feedback
@@ -360,7 +361,7 @@ class HITLPlanningPhase(Phase):
                         final_plan = resolved.modifications.get('plan', plan)
                         approved = True
                         final_context = planning_context
-                        print("\n✓ Plan modified and approved by human\n")
+                        logger.info("Plan modified and approved by human")
                         manager.log_event("plan_modified", {
                             "iteration": iteration,
                             "modifications": resolved.modifications
@@ -374,7 +375,7 @@ class HITLPlanningPhase(Phase):
                             'plan': plan,
                             'feedback': feedback,
                         })
-                        print(f"\n→ Human requested revision: {feedback}\n")
+                        logger.info("Human requested revision: %s", feedback)
                         manager.log_event("plan_revision_requested", {
                             "iteration": iteration,
                             "feedback": feedback
@@ -382,20 +383,20 @@ class HITLPlanningPhase(Phase):
 
                 else:
                     # No approval manager or auto-approve mode
-                    print(f"[HITLPlanning] ELSE BRANCH: approval_manager={approval_manager}, require_explicit_approval={self.config.require_explicit_approval}")
+                    logger.debug("ELSE BRANCH: approval_manager=%s, require_explicit_approval=%s", approval_manager, self.config.require_explicit_approval)
                     if iteration >= self.config.auto_approve_after_iterations:
                         approved = True
                         final_plan = plan
                         final_context = planning_context
-                        print(f"\n✓ Plan auto-approved after {iteration} iterations\n")
+                        logger.info("Plan auto-approved after %d iterations", iteration)
                     else:
                         # Console-based approval
-                        print(f"[HITLPlanning] Console-based approval requested (iteration {iteration})")
-                        print(f"\n{'='*60}")
-                        print(f"PLAN REVIEW - Iteration {iteration}")
-                        print(f"{'='*60}")
-                        print(self._format_plan(plan))
-                        print(f"{'='*60}")
+                        logger.debug("Console-based approval requested (iteration %d)", iteration)
+                        logger.info("=" * 60)
+                        logger.info("PLAN REVIEW - Iteration %d", iteration)
+                        logger.info("=" * 60)
+                        logger.info("%s", self._format_plan(plan))
+                        logger.info("=" * 60)
                         response = input("\nApprove plan? (y/n/feedback): ").strip().lower()
 
                         if response == 'y' or response == 'yes':
@@ -497,7 +498,7 @@ class HITLPlanningPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
-            import traceback
+            logger.error("HITL planning phase failed: %s", e, exc_info=True)
             return manager.fail(str(e), traceback.format_exc())
 
     def validate_input(self, context: PhaseContext) -> List[str]:

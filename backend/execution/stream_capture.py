@@ -11,6 +11,9 @@ from io import StringIO
 from typing import Any, Dict, Optional
 
 from fastapi import WebSocket
+from core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class AG2IOStreamCapture:
@@ -36,7 +39,7 @@ class AG2IOStreamCapture:
                     self.loop
                 )
             except Exception as e:
-                self._original_print(f"Error in AG2IOStreamCapture.print: {e}")
+                logger.warning("ag2_iostream_print_error", error=str(e))
         self._original_print(*objects, sep=sep, end=end, flush=flush)
 
     def send(self, message) -> None:
@@ -55,13 +58,13 @@ class AG2IOStreamCapture:
         except AttributeError as e:
             # Silently ignore fileno-related errors - AG2 checking for terminal capabilities
             if 'fileno' not in str(e):
-                self._original_print(f"Error in AG2IOStreamCapture.send: {e}")
+                logger.warning("ag2_iostream_send_error", error=str(e))
             try:
                 message.print(self._original_print)
             except:
                 pass
         except Exception as e:
-            self._original_print(f"Error in AG2IOStreamCapture.send: {e}")
+            logger.warning("ag2_iostream_send_error", error=str(e))
             try:
                 message.print(self._original_print)
             except:
@@ -127,7 +130,7 @@ class AG2IOStreamCapture:
                 run_id=self.task_id
             )
         except Exception as e:
-            print(f"Error sending output to WebSocket: {e}")
+            logger.warning("ws_output_send_failed", error=str(e))
 
     async def _send_structured_event(self, event_data: Dict[str, Any]):
         """Send structured AG2 event to WebSocket"""
@@ -176,7 +179,7 @@ class AG2IOStreamCapture:
                 run_id=self.task_id
             )
         except Exception as e:
-            print(f"Error sending structured event to WebSocket: {e}")
+            logger.warning("ws_structured_event_failed", error=str(e))
 
     def input(self, prompt: str = "", *, password: bool = False) -> str:
         """Handle input requests - not typically used in autonomous mode"""
@@ -196,7 +199,7 @@ class StreamCapture:
         self.loop = loop
         self.work_dir = work_dir
         self.mode = mode  # Track workflow mode (e.g., "hitl-interactive")
-        print(f"[StreamCapture] Initialized with mode={mode}")
+        logger.debug("stream_capture_initialized", mode=mode)
         self.current_step = 0
         self.planning_complete = False
         self.plan_buffer = []
@@ -204,6 +207,18 @@ class StreamCapture:
         self.steps_added = False
         self.total_cost = 0.0
         self.last_cost_report_time = 0
+
+        # File-based console log persistence
+        self._log_file = None
+        if work_dir:
+            try:
+                log_dir = os.path.join(work_dir, "logs")
+                os.makedirs(log_dir, exist_ok=True)
+                log_path = os.path.join(log_dir, "console_output.log")
+                self._log_file = open(log_path, "a", encoding="utf-8")
+                logger.debug("console_log_file_opened", path=log_path)
+            except Exception as e:
+                logger.warning("console_log_file_open_failed", error=str(e))
 
     async def write(self, text: str):
         """Write text to buffer and send to WebSocket"""
@@ -223,9 +238,18 @@ class StreamCapture:
                 await self._detect_agent_activity(text)
 
             except Exception as e:
-                print(f"Error sending to WebSocket: {e}")
+                logger.warning("ws_stream_send_failed", error=str(e))
 
         self.buffer.write(text)
+
+        # Append to log file in real-time
+        if self._log_file:
+            try:
+                self._log_file.write(text)
+                self._log_file.flush()
+            except Exception:
+                pass
+
         return len(text)
 
     async def _detect_cost_updates(self, text: str):
@@ -242,13 +266,13 @@ class StreamCapture:
         match = re.search(r'cost report data saved to: (.+\.json)', text, re.IGNORECASE)
         if match:
             cost_file = match.group(1).strip()
-            print(f"📄 Parsing cost report file: {cost_file}")
+            logger.debug("parsing_cost_report", file=cost_file)
             if os.path.exists(cost_file):
                 try:
                     with open(cost_file, 'r') as f:
                         cost_data = json.load(f)
 
-                    print(f"📊 Cost report has {len(cost_data)} entries")
+                    logger.debug("cost_report_entries", count=len(cost_data))
                     
                     # Reset total cost to recalculate from report (avoid accumulation issues)
                     report_total_cost = 0.0
@@ -268,7 +292,7 @@ class StreamCapture:
                             
                             report_total_cost += cost_value
                             
-                            print(f"  🔸 Agent: {agent_name}, Model: {model_name}, Cost: ${cost_value:.6f}, Tokens: {total_tokens}")
+                            logger.debug("cost_entry", agent=agent_name, model=model_name, cost=cost_value, tokens=total_tokens)
                             
                             # Send cost update for this agent/model
                             await self.send_event(
@@ -310,16 +334,14 @@ class StreamCapture:
                                     finally:
                                         db.close()
                             except Exception as db_err:
-                                print(f"  ⚠️  Failed to save cost to database: {db_err}")
+                                logger.warning("cost_db_save_failed", error=str(db_err))
                     
-                    print(f"✅ Total cost from report: ${report_total_cost:.6f}")
+                    logger.info("cost_report_total", total_cost=report_total_cost)
                     # Update our tracked total to match the report
                     self.total_cost = report_total_cost
 
                 except Exception as e:
-                    print(f"❌ Error parsing cost report: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error("cost_report_parse_failed", error=str(e), exc_info=True)
 
     async def _detect_agent_activity(self, text: str):
         """Detect agent messages, code blocks, and tool calls"""
@@ -468,7 +490,7 @@ class StreamCapture:
                             # For HITL modes, DON'T auto-complete planning from stream detection
                             # The callback system handles plan completion after human approval
                             if self.mode and "hitl" in self.mode.lower():
-                                print(f"[StreamCapture] Skipping auto-complete for HITL mode: {self.mode}")
+                                logger.debug("hitl_skip_auto_complete", mode=self.mode)
                             else:
                                 if "planning" in self.dag_tracker.node_statuses:
                                     for node in self.dag_tracker.nodes:
@@ -496,7 +518,7 @@ class StreamCapture:
                                     await self.dag_tracker.update_node_status(first_exec, "running")
                                     self.current_step = 1
                     except Exception as e:
-                        print(f"Error reading plan file: {e}")
+                        logger.error("plan_file_read_failed", error=str(e))
 
         # Detect start of plan output
         if any(phrase in text_lower for phrase in [
@@ -623,3 +645,12 @@ class StreamCapture:
     def getvalue(self):
         """Get the complete output"""
         return self.buffer.getvalue()
+
+    def close(self):
+        """Close the log file handle."""
+        if self._log_file:
+            try:
+                self._log_file.close()
+            except Exception:
+                pass
+            self._log_file = None

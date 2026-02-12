@@ -1,5 +1,10 @@
 """
 CMBAgent task execution logic.
+
+Session management (Stages 10-11):
+- session_id is passed via config from websocket handler
+- Session state is saved on phase changes and completion for ALL modes
+- Supports pause/resume/continuation via SessionManager
 """
 
 import asyncio
@@ -7,18 +12,29 @@ import concurrent.futures
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import WebSocket
 
+from core.logging import get_logger
 from websocket.events import send_ws_event
 from execution.stream_capture import StreamCapture, AG2IOStreamCapture
 from execution.dag_tracker import DAGTracker
+from execution.isolated_executor import get_isolated_executor
+
+logger = get_logger(__name__)
+
+# Feature flag for gradual rollout (Stage 6)
+# Set to True to use process-based isolation for non-HITL modes
+USE_ISOLATED_EXECUTION = True
 
 # Services will be loaded at runtime
 _services_available = None
 _workflow_service = None
 _execution_service = None
+_session_manager_loaded = False
+_session_manager = None
 
 
 def _check_services():
@@ -35,6 +51,19 @@ def _check_services():
     return _services_available
 
 
+def _get_session_manager():
+    """Get session manager instance (lazy load)."""
+    global _session_manager_loaded, _session_manager
+    if not _session_manager_loaded:
+        try:
+            from services.session_manager import get_session_manager
+            _session_manager = get_session_manager()
+        except ImportError:
+            _session_manager = None
+        _session_manager_loaded = True
+    return _session_manager
+
+
 async def execute_cmbagent_task(
     websocket: WebSocket,
     task_id: str,
@@ -43,12 +72,55 @@ async def execute_cmbagent_task(
 ):
     """Execute CMBAgent task with real-time output streaming.
 
+    Uses isolated subprocess execution for non-HITL modes (Stage 6)
+    to prevent global state pollution between concurrent tasks.
+
+    HITL modes (copilot, hitl-interactive) fall back to legacy in-process
+    execution since they require bidirectional communication.
+
+    Session management (Stages 10-11):
+    - session_id is extracted from config (created by websocket handler)
+    - Session state is saved on phase changes and at completion
+    - Sessions are completed or suspended based on outcome
+
     Integrates with:
     - Stage 3: State Machine (pause/resume/cancel via workflow_service)
     - Stage 5: WebSocket Protocol (standardized events)
-    - Stage 7: Retry Mechanism (via execution_service)
+    - Stage 6: Process-based isolation
+    - Stage 7: Output channel routing
+    - Stages 10-11: Session management for all modes
     """
+    mode = config.get("mode", "one-shot")
+
+    # HITL modes require bidirectional communication (approval queues)
+    # so they use legacy in-process execution for now
+    hitl_modes = {"copilot", "hitl-interactive"}
+
+    if USE_ISOLATED_EXECUTION and mode not in hitl_modes:
+        logger.info("Task %s using isolated execution (mode=%s)", task_id, mode)
+        await _execute_isolated(websocket, task_id, task, config)
+        return
+
+    if mode in hitl_modes:
+        logger.info("Task %s using legacy execution for HITL mode=%s", task_id, mode)
+    else:
+        logger.info("Task %s using legacy execution (isolated disabled)", task_id)
+
+    # Fall through to legacy execution
     services_available = _check_services()
+
+    # Session tracking for ALL modes (Stages 10-11)
+    session_id = config.get("session_id")
+    session_manager = _get_session_manager()
+    conversation_buffer = []  # Track messages for session state
+
+    # Save user task as first conversation entry
+    if session_id and task:
+        conversation_buffer.append({
+            "role": "user",
+            "content": task[:2000],
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
 
     # Get work directory from config or use default
     work_dir = config.get("workDir", "~/Desktop/cmbdir")
@@ -66,12 +138,8 @@ async def execute_cmbagent_task(
     dag_tracker = None
 
     try:
-        # Debug logging
-        print(f"[DEBUG] execute_cmbagent_task called")
-        print(f"[DEBUG] Task ID: {task_id}")
-        print(f"[DEBUG] Mode: {config.get('mode', 'NOT SET')}")
-        print(f"[DEBUG] Config keys: {list(config.keys())}")
-        
+        logger.debug("Legacy execute_cmbagent_task: task_id=%s, mode=%s", task_id, mode)
+
         await send_ws_event(
             websocket, "status",
             {"message": "Initializing CMBAgent..."},
@@ -84,10 +152,7 @@ async def execute_cmbagent_task(
 
         api_keys = get_api_keys_from_env()
 
-        # Map frontend config to CMBAgent parameters
-        mode = config.get("mode", "one-shot")
-        print(f"[DEBUG] Detected mode: {mode}")
-        
+        # Map frontend config to CMBAgent parameters (mode already set above)
         engineer_model = config.get("model", "gpt-4o")
         max_rounds = config.get("maxRounds", 25)
         max_attempts = config.get("maxAttempts", 6)
@@ -132,7 +197,7 @@ async def execute_cmbagent_task(
         planner_model = config.get("plannerModel", "gpt-4.1-2025-04-14")
         plan_reviewer_model = config.get("planReviewerModel", "o3-mini-2025-01-31")
         researcher_model = config.get("researcherModel", "gpt-4.1-2025-04-14")
-        max_plan_steps = config.get("maxPlanSteps", 10 if mode == "idea-generation" else 10)  # Dynamic: allow up to 10 steps
+        max_plan_steps = config.get("maxPlanSteps", 10)
         n_plan_reviews = config.get("nPlanReviews", 1)
         plan_instructions = config.get("planInstructions", "")
 
@@ -167,25 +232,31 @@ async def execute_cmbagent_task(
         if mode == "planning-control":
             await send_ws_event(
                 websocket, "output",
-                {"message": f"⚙️ Configuration: Planner={planner_model}, Engineer={engineer_model}"},
+                {"message": f"Configuration: Planner={planner_model}, Engineer={engineer_model}"},
                 run_id=task_id
             )
         elif mode == "idea-generation":
             await send_ws_event(
                 websocket, "output",
-                {"message": f"⚙️ Configuration: Idea Maker={idea_maker_model}, Idea Hater={idea_hater_model}"},
+                {"message": f"Configuration: Idea Maker={idea_maker_model}, Idea Hater={idea_hater_model}"},
                 run_id=task_id
             )
         elif mode == "ocr":
             await send_ws_event(
                 websocket, "output",
-                {"message": f"⚙️ Configuration: Save Markdown={save_markdown}, Max Workers={max_workers}"},
+                {"message": f"Configuration: Save Markdown={save_markdown}, Max Workers={max_workers}"},
                 run_id=task_id
             )
         elif mode == "copilot":
             await send_ws_event(
                 websocket, "output",
-                {"message": f"⚙️ Configuration: Agents={config.get('availableAgents', ['engineer', 'researcher'])}, Planning={config.get('enablePlanning', True)}"},
+                {"message": f"Configuration: Agents={config.get('availableAgents', ['engineer', 'researcher'])}, Planning={config.get('enablePlanning', True)}"},
+                run_id=task_id
+            )
+        elif mode == "hitl-interactive":
+            await send_ws_event(
+                websocket, "output",
+                {"message": f"Configuration: Variant={config.get('hitlVariant', 'full_interactive')}, Engineer={engineer_model}"},
                 run_id=task_id
             )
 
@@ -206,34 +277,22 @@ async def execute_cmbagent_task(
         )
 
         def ws_send_event(event_type: str, data: Dict[str, Any]):
-            """Send WebSocket event from sync context"""
-            print(f"[ws_send_event] Attempting to send event: {event_type}")
-            print(f"[ws_send_event] Event data keys: {list(data.keys())}")
-            print(f"[ws_send_event] WebSocket: {websocket}")
-            print(f"[ws_send_event] Loop: {loop}")
-
+            """Send WebSocket event from sync context."""
             try:
                 future = asyncio.run_coroutine_threadsafe(
                     send_ws_event(websocket, event_type, data, run_id=task_id),
                     loop
                 )
-                # Wait for send to complete (increased timeout for stability)
                 try:
                     result = future.result(timeout=10.0)
-                    if result:
-                        print(f"[ws_send_event] ✓ Event {event_type} sent successfully")
-                    else:
-                        print(f"[ws_send_event] ⚠ Event {event_type} send returned False (connection may be closed)")
+                    if not result:
+                        logger.warning("ws_send_event: %s send returned False (connection may be closed)", event_type)
                 except TimeoutError:
-                    print(f"[ws_send_event] ⚠ Event {event_type} queued but not confirmed within 10s")
+                    logger.warning("ws_send_event: %s not confirmed within 10s", event_type)
                 except Exception as e:
-                    print(f"[ws_send_event] ✗ Event {event_type} failed: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    logger.error("ws_send_event: %s failed: %s", event_type, e)
             except Exception as e:
-                print(f"[ws_send_event] ✗ Failed to queue event {event_type}: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error("ws_send_event: failed to queue %s: %s", event_type, e)
 
         def sync_pause_check():
             """Synchronous pause check - blocks while paused."""
@@ -293,13 +352,25 @@ async def execute_cmbagent_task(
                         **kwargs
                     )
                 except Exception as e:
-                    print(f"Error creating {event_type} event: {e}")
+                    logger.error("Error creating %s event: %s", event_type, e)
                     if dag_tracker.db_session:
                         dag_tracker.db_session.rollback()
 
         def on_agent_msg(agent, role, content, metadata):
             import re
             try:
+                # Track message in conversation buffer for session state (Stages 10-11)
+                if session_id and content:
+                    conversation_buffer.append({
+                        "role": role or "assistant",
+                        "agent": agent,
+                        "content": content[:2000] if content else "",
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                    # Cap buffer to prevent unbounded growth (Stage 11B Issue 6)
+                    if len(conversation_buffer) > 200:
+                        conversation_buffer[:] = conversation_buffer[-100:]
+
                 code_blocks = re.findall(r'```(\w*)\n([\s\S]*?)```', content) if content else []
                 create_execution_event(
                     event_type="agent_call",
@@ -311,7 +382,7 @@ async def execute_cmbagent_task(
                     meta={"has_code": len(code_blocks) > 0, **(metadata or {})}
                 )
             except Exception as e:
-                print(f"Error in on_agent_msg callback: {e}")
+                logger.error("Error in on_agent_msg callback: %s", e)
 
         def on_code_exec(agent, code, language, result):
             try:
@@ -325,7 +396,7 @@ async def execute_cmbagent_task(
                     meta={"language": language}
                 )
             except Exception as e:
-                print(f"Error in on_code_exec callback: {e}")
+                logger.error("Error in on_code_exec callback: %s", e)
 
         def on_tool(agent, tool_name, arguments, result):
             try:
@@ -341,13 +412,25 @@ async def execute_cmbagent_task(
                     meta={"tool_name": tool_name}
                 )
             except Exception as e:
-                print(f"Error in on_tool callback: {e}")
+                logger.error("Error in on_tool callback: %s", e)
 
         def on_phase_change(phase: str, step_number: int = None):
             """Handle phase change events from the workflow"""
             if dag_tracker:
                 dag_tracker.set_phase(phase, step_number)
-                print(f"[TaskExecutor] Phase changed to: {phase}, step: {step_number}")
+                logger.debug("Phase changed to: %s, step: %s", phase, step_number)
+
+            # Save session state on phase change for ALL modes (Stages 10-11)
+            if session_manager and session_id:
+                try:
+                    session_manager.save_session_state(
+                        session_id=session_id,
+                        conversation_history=conversation_buffer[-100:],
+                        current_phase=phase,
+                        current_step=step_number,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to save session state on phase change: %s", e)
 
         def on_planning_complete_tracking(plan_info):
             """Track files and sync DAGTracker after planning phase completes"""
@@ -365,7 +448,7 @@ async def execute_cmbagent_task(
                     # Note: Human review is tracked as events within the planning phase, not a separate node
                 # Track files created during planning
                 dag_tracker.track_files_in_work_dir(task_work_dir, "planning")
-                print(f"[TaskExecutor] Tracked planning files and synced DAG")
+                logger.debug("Tracked planning files and synced DAG")
 
         def on_step_start_tracking(step_info):
             """Update DAGTracker when step starts"""
@@ -383,7 +466,7 @@ async def execute_cmbagent_task(
                     dag_tracker.update_node_status(step_node_id, "completed", work_dir=task_work_dir), loop
                 ).result(timeout=5.0)
                 dag_tracker.track_files_in_work_dir(task_work_dir, step_node_id)
-                print(f"[TaskExecutor] Tracked files for step {step_info.step_number}")
+                logger.debug("Tracked files for step %s", step_info.step_number)
 
         def on_step_failed_tracking(step_info):
             """Update DAGTracker when step fails"""
@@ -419,14 +502,19 @@ async def execute_cmbagent_task(
             original_stdout = sys.stdout
             original_stderr = sys.stderr
 
+            # For HITL/copilot modes, suppress stdout to prevent logs
+            # from leaking to the main terminal - route only to WebSocket
+            suppress_stdout = mode in {"copilot", "hitl-interactive"}
+
             class StreamWrapper:
-                def __init__(self, original, capture, loop):
+                def __init__(self, original, capture, loop, suppress=False):
                     self.original = original
                     self.capture = capture
                     self.loop = loop
+                    self.suppress = suppress
 
                 def write(self, text):
-                    if self.original:
+                    if self.original and not self.suppress:
                         self.original.write(text)
                     if text.strip():
                         asyncio.run_coroutine_threadsafe(
@@ -435,7 +523,7 @@ async def execute_cmbagent_task(
                     return len(text)
 
                 def flush(self):
-                    if self.original:
+                    if self.original and not self.suppress:
                         self.original.flush()
 
                 def fileno(self):
@@ -448,8 +536,8 @@ async def execute_cmbagent_task(
                     return False
 
             try:
-                sys.stdout = StreamWrapper(original_stdout, stream_capture, loop)
-                sys.stderr = StreamWrapper(original_stderr, stream_capture, loop)
+                sys.stdout = StreamWrapper(original_stdout, stream_capture, loop, suppress=suppress_stdout)
+                sys.stderr = StreamWrapper(original_stderr, stream_capture, loop, suppress=suppress_stdout)
 
                 import builtins
                 original_print = builtins.print
@@ -459,7 +547,7 @@ async def execute_cmbagent_task(
                     asyncio.run_coroutine_threadsafe(
                         stream_capture.write(output + "\n"), loop
                     )
-                    if original_stdout:
+                    if original_stdout and not suppress_stdout:
                         original_stdout.write(output + "\n")
                         original_stdout.flush()
 
@@ -471,31 +559,30 @@ async def execute_cmbagent_task(
                     ag2_iostream = AG2IOStreamCapture(websocket, task_id, send_ws_event, loop)
                     IOStream.set_global_default(ag2_iostream)
                 except Exception as e:
-                    print(f"Could not set AG2 IOStream: {e}")
+                    logger.warning("Could not set AG2 IOStream: %s", e)
+
+                # Resolve db_factory for approval manager persistence (Stage 11C)
+                try:
+                    from cmbagent.database.base import get_db_session
+                    _approval_db_factory = get_db_session
+                except ImportError:
+                    _approval_db_factory = None
 
                 # Execute based on mode
                 if mode == "planning-control":
-                    # Set up approval configuration for HITL
-                    approval_config = None
+                    # Set up approval manager for HITL (Stage 11C: unified approval path)
                     approval_mode = config.get("approvalMode", "none")
-                    
+                    pc_approval_manager = None
+
                     if approval_mode != "none":
-                        from cmbagent.database.approval_types import ApprovalMode, ApprovalConfig
-                        
-                        if approval_mode == "after_planning":
-                            approval_config = ApprovalConfig(mode=ApprovalMode.AFTER_PLANNING)
-                        elif approval_mode == "before_each_step":
-                            approval_config = ApprovalConfig(mode=ApprovalMode.BEFORE_EACH_STEP)
-                        elif approval_mode == "on_error":
-                            approval_config = ApprovalConfig(mode=ApprovalMode.ON_ERROR)
-                        elif approval_mode == "manual":
-                            approval_config = ApprovalConfig(mode=ApprovalMode.MANUAL)
-                        
-                        print(f"[TaskExecutor] HITL enabled with mode: {approval_mode}")
-                    
-                    # Always using phase-based workflow
-                    print(f"[TaskExecutor] Using phase-based workflow for planning-control")
-                    
+                        from cmbagent.database.websocket_approval_manager import WebSocketApprovalManager
+                        pc_approval_manager = WebSocketApprovalManager(
+                            ws_send_event, task_id, db_factory=_approval_db_factory
+                        )
+                        logger.info("Planning-control HITL enabled with mode: %s", approval_mode)
+
+                    logger.info("Using phase-based workflow for planning-control")
+
                     results = cmbagent.planning_and_control_context_carryover(
                         task=task,
                         max_rounds_control=max_rounds,
@@ -513,7 +600,8 @@ async def execute_cmbagent_task(
                         default_formatter_model=default_formatter_model,
                         default_llm_model=default_llm_model,
                         callbacks=workflow_callbacks,
-                        approval_config=approval_config
+                        approval_manager=pc_approval_manager,
+                        hitl_after_planning=(approval_mode in ("after_planning", "both")),
                     )
                 elif mode == "hitl-interactive":
                     # HITL Interactive mode - full human-in-the-loop workflow
@@ -530,10 +618,8 @@ async def execute_cmbagent_task(
                     show_step_context = config.get("showStepContext", True)
 
                     # Create WebSocket-based approval manager for UI interaction
-                    hitl_approval_manager = WebSocketApprovalManager(ws_send_event, task_id)
-                    print(f"[TaskExecutor] Created WebSocket approval manager for HITL")
-
-                    print(f"[TaskExecutor] Using HITL workflow variant: {hitl_variant}")
+                    hitl_approval_manager = WebSocketApprovalManager(ws_send_event, task_id, db_factory=_approval_db_factory)
+                    logger.info("HITL workflow variant: %s", hitl_variant)
 
                     # Select workflow based on variant
                     if hitl_variant == "planning_only":
@@ -612,16 +698,17 @@ async def execute_cmbagent_task(
                     
                     if existing_session_id:
                         # Continue existing session
-                        print(f"[TaskExecutor] Continuing copilot session: {existing_session_id}")
-                        copilot_approval_manager = WebSocketApprovalManager(ws_send_event, task_id)
+                        logger.info("Continuing copilot session: %s", existing_session_id)
+                        copilot_approval_manager = WebSocketApprovalManager(ws_send_event, task_id, db_factory=_approval_db_factory)
                         
                         try:
                             results = continue_copilot_sync(
                                 session_id=existing_session_id,
                                 additional_context=task,
+                                approval_manager=copilot_approval_manager,
                             )
                         except Exception as e:
-                            print(f"[TaskExecutor] Session continuation failed: {e}, starting new session")
+                            logger.warning("Session continuation failed: %s, starting new session", e)
                             existing_session_id = None  # Fall through to new session
 
                     if not existing_session_id:
@@ -638,9 +725,9 @@ async def execute_cmbagent_task(
                         intelligent_routing = config.get("intelligentRouting", "balanced")  # "aggressive" | "balanced" | "minimal"
 
                         # Create WebSocket-based approval manager for HITL interactions
-                        copilot_approval_manager = WebSocketApprovalManager(ws_send_event, task_id)
-                        print(f"[TaskExecutor] Created WebSocket approval manager for Copilot")
-                        print(f"[TaskExecutor] Copilot config: agents={available_agents}, planning={enable_planning}, dynamic_routing={use_dynamic_routing}, continuous={continuous_mode}, tool_approval={tool_approval}")
+                        copilot_approval_manager = WebSocketApprovalManager(ws_send_event, task_id, db_factory=_approval_db_factory)
+                        logger.info("Copilot config: agents=%s, planning=%s, dynamic_routing=%s, continuous=%s, tool_approval=%s",
+                                    available_agents, enable_planning, use_dynamic_routing, continuous_mode, tool_approval)
 
                         # Run copilot workflow (synchronous - runs in ThreadPoolExecutor)
                         results = copilot(
@@ -674,7 +761,7 @@ async def execute_cmbagent_task(
                         )
                 elif mode == "idea-generation":
                     # Always using phase-based workflow
-                    print(f"[TaskExecutor] Using phase-based workflow for idea-generation")
+                    logger.info("Using phase-based workflow for idea-generation")
                     
                     results = cmbagent.planning_and_control_context_carryover(
                         task=task,
@@ -731,7 +818,6 @@ async def execute_cmbagent_task(
                         work_dir=task_work_dir
                     )
                 elif mode == "enhance-input":
-                    max_depth = config.get("maxDepth", 10)
                     results = cmbagent.preprocess_task(
                         text=task,
                         work_dir=task_work_dir,
@@ -769,7 +855,7 @@ async def execute_cmbagent_task(
 
                 # Check if cancelled
                 if services_available and _execution_service.is_cancelled(task_id):
-                    print(f"Task {task_id} cancelled")
+                    logger.info("Task %s cancelled", task_id)
                     future.cancel()
                     await send_ws_event(
                         websocket, "workflow_cancelled",
@@ -792,6 +878,10 @@ async def execute_cmbagent_task(
 
         execution_time = time.time() - start_time
 
+        # Close stream capture log file
+        if stream_capture and hasattr(stream_capture, 'close'):
+            stream_capture.close()
+
         # Update DAG nodes to completed status
         if dag_tracker and dag_tracker.node_statuses:
             for node_id in dag_tracker.node_statuses:
@@ -805,6 +895,19 @@ async def execute_cmbagent_task(
         if services_available:
             _workflow_service.complete_workflow(task_id)
 
+        # Complete session for ALL modes (Stages 10-11)
+        if session_manager and session_id:
+            try:
+                session_manager.save_session_state(
+                    session_id=session_id,
+                    conversation_history=conversation_buffer,
+                    current_phase="completed",
+                )
+                session_manager.complete_session(session_id)
+                logger.info("Session %s completed for task %s", session_id, task_id)
+            except Exception as e:
+                logger.warning("Failed to complete session: %s", e)
+
         await send_ws_event(
             websocket, "output",
             {"message": f"✅ Task completed in {execution_time:.2f} seconds"},
@@ -817,12 +920,13 @@ async def execute_cmbagent_task(
                 "execution_time": execution_time,
                 "chat_history": getattr(results, 'chat_history', []) if hasattr(results, 'chat_history') else [],
                 "final_context": getattr(results, 'final_context', {}) if hasattr(results, 'final_context') else {},
-                "session_id": results.get('session_id') if isinstance(results, dict) else None,
+                "session_id": session_id or (results.get('session_id') if isinstance(results, dict) else None),
                 "work_dir": task_work_dir,
                 "base_work_dir": work_dir,
                 "mode": mode
             },
-            run_id=task_id
+            run_id=task_id,
+            session_id=session_id
         )
 
         await send_ws_event(
@@ -833,7 +937,11 @@ async def execute_cmbagent_task(
 
     except Exception as e:
         error_msg = f"Error executing CMBAgent task: {str(e)}"
-        print(error_msg)
+        logger.error(error_msg)
+
+        # Close stream capture log file on error
+        if stream_capture and hasattr(stream_capture, 'close'):
+            stream_capture.close()
 
         if dag_tracker and dag_tracker.node_statuses:
             for node_id in dag_tracker.node_statuses:
@@ -842,8 +950,184 @@ async def execute_cmbagent_task(
         if services_available:
             _workflow_service.fail_workflow(task_id, error_msg)
 
+        # Suspend session on failure for ALL modes (Stages 10-11)
+        if session_manager and session_id:
+            try:
+                session_manager.save_session_state(
+                    session_id=session_id,
+                    conversation_history=conversation_buffer,
+                    current_phase="failed",
+                )
+                session_manager.suspend_session(session_id)
+                logger.info("Session %s suspended after failure for task %s", session_id, task_id)
+            except Exception as se:
+                logger.warning("Failed to suspend session: %s", se)
+
         await send_ws_event(
             websocket, "error",
             {"message": error_msg},
             run_id=task_id
         )
+
+
+# ---------------------------------------------------------------------------
+# Stage 6: Isolated subprocess execution
+# ---------------------------------------------------------------------------
+
+async def _execute_isolated(
+    websocket: WebSocket,
+    task_id: str,
+    task: str,
+    config: Dict[str, Any]
+):
+    """Execute task in isolated subprocess (Stage 6).
+
+    Provides true process isolation so concurrent tasks don't pollute
+    each other's globals (builtins.print, sys.stdout, IOStream).
+
+    Stage 7 enhancements:
+    - Structured event routing (DAG, cost, phase events)
+    - Session state tracking via conversation buffer
+    - Periodic state saves on phase changes
+    """
+    services_available = _check_services()
+    executor = get_isolated_executor()
+
+    # Session tracking (Stage 7)
+    session_id = config.get("session_id")
+    session_manager = None
+    if session_id:
+        try:
+            from services.session_manager import get_session_manager
+            session_manager = get_session_manager()
+        except Exception:
+            pass
+
+    conversation_buffer = []
+
+    # Save user task as first conversation entry
+    if session_id and task:
+        conversation_buffer.append({
+            "role": "user",
+            "content": task[:2000],
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+
+    work_dir = config.get("workDir", "~/Desktop/cmbdir")
+    if work_dir.startswith("~"):
+        work_dir = os.path.expanduser(work_dir)
+
+    async def output_callback(event_type: str, data: Dict[str, Any]):
+        """Forward subprocess output to WebSocket and track state (Stage 7)."""
+        await send_ws_event(websocket, event_type, data, run_id=task_id)
+
+        # Track conversation for session save (Stage 7)
+        if session_id and event_type in ("output", "agent_message", "error", "cost_update"):
+            if event_type == "agent_message":
+                conversation_buffer.append({
+                    "role": data.get("role", "assistant"),
+                    "agent": data.get("agent", ""),
+                    "content": (data.get("content") or data.get("message") or "")[:2000],
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            elif event_type == "error":
+                conversation_buffer.append({
+                    "role": "system",
+                    "agent": "system",
+                    "content": f"Error: {data.get('message', 'Unknown error')}",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            elif event_type == "cost_update":
+                conversation_buffer.append({
+                    "role": "system",
+                    "agent": "cost_tracker",
+                    "content": f"Cost: ${data.get('cost', 0):.4f} (model: {data.get('model', 'unknown')})",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            else:  # output
+                conversation_buffer.append({
+                    "role": "system",
+                    "content": data.get("message", ""),
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            # Cap buffer to prevent unbounded growth (Stage 11B Issue 6)
+            if len(conversation_buffer) > 200:
+                conversation_buffer[:] = conversation_buffer[-100:]
+
+        # Save session state on phase changes (Stage 7)
+        if event_type == "phase_change" and session_manager and session_id:
+            try:
+                session_manager.save_session_state(
+                    session_id=session_id,
+                    conversation_history=conversation_buffer[-100:],
+                    context_variables=data.get("context", {}),
+                    current_phase=data.get("phase"),
+                    current_step=data.get("step"),
+                )
+            except Exception as e:
+                logger.warning("Failed to save session state: %s", e)
+
+    try:
+        result = await executor.execute(
+            task_id=task_id,
+            task=task,
+            config=config,
+            output_callback=output_callback,
+            work_dir=work_dir
+        )
+
+        # Final session state save (Stage 7)
+        if session_manager and session_id:
+            try:
+                session_manager.save_session_state(
+                    session_id=session_id,
+                    conversation_history=conversation_buffer,
+                    context_variables=result.get("final_context", {}),
+                    current_phase="completed",
+                )
+                session_manager.complete_session(session_id)
+            except Exception as e:
+                logger.warning("Failed to save final session state: %s", e)
+
+        # Mark workflow as completed
+        if services_available:
+            _workflow_service.complete_workflow(task_id)
+
+        # Send result and completion events
+        await send_ws_event(websocket, "result", {
+            "execution_time": result.get("execution_time", 0),
+            "chat_history": result.get("chat_history", []),
+            "final_context": result.get("final_context", {}),
+            "session_id": result.get("session_id"),
+            "work_dir": result.get("work_dir", ""),
+            "base_work_dir": work_dir,
+            "mode": result.get("mode", config.get("mode", "one-shot"))
+        }, run_id=task_id)
+
+        await send_ws_event(websocket, "complete", {
+            "message": "Task execution completed successfully"
+        }, run_id=task_id)
+
+    except Exception as e:
+        error_msg = f"Error executing CMBAgent task: {str(e)}"
+        logger.error("Isolated execution failed for task %s: %s", task_id, e)
+
+        # Save conversation and suspend session on failure (Stage 7)
+        if session_manager and session_id:
+            try:
+                session_manager.save_session_state(
+                    session_id=session_id,
+                    conversation_history=conversation_buffer,
+                    current_phase="failed",
+                )
+                session_manager.suspend_session(session_id)
+            except Exception as se:
+                logger.warning("Failed to save/suspend session on failure: %s", se)
+
+        if services_available:
+            _workflow_service.fail_workflow(task_id, error_msg)
+
+        await send_ws_event(websocket, "error", {
+            "message": error_msg,
+            "error_type": type(e).__name__
+        }, run_id=task_id)

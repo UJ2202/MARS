@@ -8,11 +8,14 @@ This module provides the preprocess_task function that:
 4. Appends contextual information to the original text
 """
 
+import logging
 import os
 from typing import Optional
 
 from cmbagent.utils import work_dir_default, default_agents_llm_model
 from cmbagent.workflows.utils import clean_work_dir
+
+logger = logging.getLogger(__name__)
 
 
 def preprocess_task(
@@ -54,8 +57,7 @@ def preprocess_task(
     from cmbagent.ocr import process_folder
     from cmbagent.processing.document_summarizer import summarize_documents
 
-    print(f"🔄 Starting task preprocessing...")
-    print(f"📁 Work directory: {work_dir}")
+    logger.info("task_preprocessing_started", work_dir=work_dir)
 
     if clear_work_dir_flag:
         clean_work_dir(work_dir)
@@ -63,29 +65,28 @@ def preprocess_task(
     # Step 1: Extract arXiv URLs and download PDFs
     arxiv_results = None
     if not skip_arxiv_download:
-        print(f"📥 Step 1: Downloading arXiv papers...")
+        logger.info("step_1_downloading_arxiv_papers")
         try:
             arxiv_results = arxiv_filter(text, work_dir=work_dir)
-            print(f"✅ Downloaded {arxiv_results['downloads_successful']} papers")
-            print(f"📋 Total papers available: {arxiv_results['downloads_successful'] + arxiv_results['downloads_skipped']} (including previously downloaded)")
+            logger.info("arxiv_download_complete", downloads_successful=arxiv_results['downloads_successful'], total_available=arxiv_results['downloads_successful'] + arxiv_results['downloads_skipped'])
 
             if arxiv_results['downloads_successful'] + arxiv_results['downloads_skipped'] == 0:
-                print("ℹ️ No arXiv papers found or available, skipping processing steps")
+                logger.info("no_arxiv_papers_found", action="skipping processing steps")
                 return text
         except Exception as e:
-            print(f"❌ Error downloading arXiv papers: {e}")
+            logger.error("arxiv_download_failed", error=str(e))
             return text
 
     # Get the docs folder path where PDFs were downloaded
     docs_folder = os.path.join(work_dir, "docs")
     if not os.path.exists(docs_folder):
-        print("ℹ️ No docs folder found, returning original text")
+        logger.info("no_docs_folder_found", action="returning original text")
         return text
 
     # Step 2: OCR PDFs to markdown
     ocr_results = None
     if not skip_ocr:
-        print(f"🔍 Step 2: Converting PDFs to markdown...")
+        logger.info("step_2_converting_pdfs_to_markdown")
         try:
             ocr_results = process_folder(
                 folder_path=docs_folder,
@@ -96,24 +97,24 @@ def preprocess_task(
                 max_workers=max_workers,
                 work_dir=work_dir
             )
-            print(f"✅ OCR processed {ocr_results.get('processed_files', 0)} files")
+            logger.info("ocr_complete", processed_files=ocr_results.get('processed_files', 0))
             if ocr_results.get('processed_files', 0) == 0:
-                print("ℹ️ No PDF files found for OCR, returning original text")
+                logger.info("no_pdf_files_for_ocr", action="returning original text")
                 return text
         except Exception as e:
-            print(f"❌ Error during OCR processing: {e}")
+            logger.error("ocr_processing_failed", error=str(e))
             return text
 
     # Find the markdown output directory from OCR
     docs_processed_folder = docs_folder + "_processed"
     if not os.path.exists(docs_processed_folder):
-        print(f"ℹ️ No processed markdown folder found at {docs_processed_folder}, returning original text")
+        logger.info("no_processed_markdown_folder", path=docs_processed_folder, action="returning original text")
         return text
 
     # Step 3: Summarize the markdown documents
     summary_results = None
     if not skip_summarization:
-        print(f"📝 Step 3: Summarizing papers...")
+        logger.info("step_3_summarizing_papers")
         try:
             # Create summaries directory in the main work directory
             summaries_dir = os.path.join(work_dir, "summaries")
@@ -126,14 +127,14 @@ def preprocess_task(
                 summarizer_model=summarizer_model,
                 summarizer_response_formatter_model=summarizer_response_formatter_model
             )
-            print(f"✅ Summarized {summary_results.get('processed_files', 0)} documents")
+            logger.info("summarization_complete", processed_files=summary_results.get('processed_files', 0))
 
             if summary_results.get('processed_files', 0) == 0:
-                print("ℹ️ No documents were summarized, returning original text")
+                logger.info("no_documents_summarized", action="returning original text")
                 return text
 
             # Step 4: Collect all summaries and format the contextual information
-            print(f"📋 Step 4: Formatting contextual information...")
+            logger.info("step_4_formatting_contextual_information")
             contextual_info = []
 
             for result in summary_results.get('results', []):
@@ -164,7 +165,7 @@ def preprocess_task(
                     if key_findings:
                         paper_info += "\n- Key Findings:"
                         for finding in key_findings:
-                            paper_info += f"\n  • {finding}"
+                            paper_info += f"\n  - {finding}"
 
                     contextual_info.append(paper_info)
 
@@ -180,18 +181,17 @@ def preprocess_task(
                 try:
                     with open(enhanced_input_path, 'w', encoding='utf-8') as f:
                         f.write(enhanced_text)
-                    print(f"💾 Enhanced input saved to: {enhanced_input_path}")
+                    logger.info("enhanced_input_saved", path=enhanced_input_path)
                 except Exception as e:
-                    print(f"⚠️ Warning: Could not save enhanced input: {e}")
+                    logger.warning("enhanced_input_save_failed", error=str(e))
 
-                print(f"✅ Task preprocessing completed successfully!")
-                print(f"📄 Added contextual information from {len(contextual_info)} papers")
+                logger.info("task_preprocessing_completed", papers_count=len(contextual_info))
                 return enhanced_text
             else:
-                print("ℹ️ No valid summaries found, returning original text")
+                logger.info("no_valid_summaries_found", action="returning original text")
                 return text
         except Exception as e:
-            print(f"❌ Error during summarization: {e}")
+            logger.error("summarization_failed", error=str(e))
             return text
 
     return text

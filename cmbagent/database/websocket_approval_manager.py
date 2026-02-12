@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 import logging
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Callable
 
@@ -61,7 +62,7 @@ class WebSocketApprovalManager:
     _pending: Dict[str, SimpleApprovalRequest] = {}
     _lock = threading.Lock()
 
-    def __init__(self, ws_send_event: Callable, run_id: str):
+    def __init__(self, ws_send_event: Callable, run_id: str, db_factory: Callable = None):
         """
         Initialize the approval manager.
 
@@ -69,26 +70,31 @@ class WebSocketApprovalManager:
             ws_send_event: Function to send WebSocket events.
                            Signature: (event_type: str, data: dict) -> None
             run_id: The workflow run/task ID
+            db_factory: Optional callable that returns a SQLAlchemy session.
+                        When provided, approvals are persisted to the database
+                        for resilience across disconnects/restarts.
         """
         self.ws_send_event = ws_send_event
         self.run_id = run_id
+        self._db_factory = db_factory
 
     def __getstate__(self):
         """
-        Custom pickle state - exclude ws_send_event which is a closure.
-        
+        Custom pickle state - exclude ws_send_event and _db_factory which are closures.
+
         This allows the approval manager to be pickled as part of context
         without failing on the non-picklable ws_send_event function.
         """
         state = self.__dict__.copy()
-        # Remove the non-picklable closure
+        # Remove the non-picklable closures
         state['ws_send_event'] = None
+        state['_db_factory'] = None
         return state
 
     def __setstate__(self, state):
         """
         Restore state from pickle.
-        
+
         Note: ws_send_event will be None after unpickling.
         It must be re-attached if the manager needs to send events.
         """
@@ -131,27 +137,60 @@ class WebSocketApprovalManager:
         with self._lock:
             WebSocketApprovalManager._pending[request.id] = request
 
-        logger.info(
-            f"Created approval request {request.id} "
-            f"(type: {checkpoint_type}, run: {run_id})"
-        )
+        # Best-effort DB persist
+        if self._db_factory:
+            try:
+                from cmbagent.database.models import ApprovalRequest as ApprovalRequestModel
+                db = self._db_factory()
+                try:
+                    db_approval = ApprovalRequestModel(
+                        id=request.id,
+                        run_id=request.run_id or self.run_id,
+                        approval_type=request.checkpoint_type,
+                        context={
+                            "checkpoint_type": request.checkpoint_type,
+                            "message": request.message,
+                            "options": request.options,
+                            "context": request.context_snapshot,
+                        },
+                        status="pending",
+                        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                    )
+                    db.add(db_approval)
+                    db.commit()
+                    logger.debug("Persisted approval %s to database", request.id)
+                except Exception as e:
+                    db.rollback()
+                    logger.warning("Failed to persist approval to DB (non-fatal): %s", e)
+                finally:
+                    db.close()
+            except ImportError:
+                pass
+
+        logger.info("approval_request_created",
+                     approval_id=request.id,
+                     checkpoint_type=checkpoint_type,
+                     run_id=run_id)
 
         # Send WebSocket event to UI
         try:
-            print(f"[WebSocketApprovalManager] Sending approval_requested event:")
-            print(f"  - approval_id: {request.id}")
-            print(f"  - step_id: {step_id}")
-            print(f"  - checkpoint_type: {checkpoint_type}")
-            print(f"  - message preview: {message[:200]}...")
-            print(f"  - options: {request.options}")
+            logger.debug("sending_approval_requested_event",
+                         approval_id=request.id,
+                         step_id=step_id,
+                         checkpoint_type=checkpoint_type,
+                         message_preview=message[:200],
+                         options=request.options)
 
             # Debug: Print plan from context_snapshot
             if 'plan' in context_snapshot:
                 plan_data = context_snapshot['plan']
-                print(f"  - context_snapshot plan: {len(plan_data) if isinstance(plan_data, list) else 'not a list'} steps")
+                plan_info = len(plan_data) if isinstance(plan_data, list) else 'not a list'
+                logger.debug("approval_context_plan",
+                             plan_steps=plan_info)
                 if isinstance(plan_data, list) and len(plan_data) > 0:
                     first_step = plan_data[0]
-                    print(f"  - first step preview: {first_step.get('sub_task', str(first_step))[:150] if isinstance(first_step, dict) else str(first_step)[:150]}")
+                    preview = first_step.get('sub_task', str(first_step))[:150] if isinstance(first_step, dict) else str(first_step)[:150]
+                    logger.debug("approval_plan_first_step", preview=preview)
 
             # Sanitize context to make it JSON serializable
             def make_json_serializable(obj):
@@ -173,7 +212,7 @@ class WebSocketApprovalManager:
                     return str(obj)
 
             safe_context = make_json_serializable(context_snapshot)
-            print(f"[WebSocketApprovalManager] Context sanitized for JSON")
+            logger.debug("approval_context_sanitized")
 
             self.ws_send_event("approval_requested", {
                 "approval_id": request.id,
@@ -186,15 +225,14 @@ class WebSocketApprovalManager:
                 "context": safe_context,
             })
 
-            print(f"[WebSocketApprovalManager] ✓ Approval request {request.id} sent to UI via WebSocket")
-            logger.info(f"✓ Approval request {request.id} sent to UI via WebSocket")
+            logger.info("approval_request_sent_to_ui",
+                         approval_id=request.id)
         except Exception as e:
-            print(f"[WebSocketApprovalManager] ✗ Failed to send approval_requested event: {e}")
-            logger.error(f"✗ Failed to send approval_requested event: {e}")
-            logger.error(f"   WebSocket function: {self.ws_send_event}")
-            logger.error(f"   This will cause workflow to hang!")
-            import traceback
-            traceback.print_exc()
+            logger.error("approval_request_send_failed",
+                         approval_id=request.id,
+                         error=str(e),
+                         ws_function=str(self.ws_send_event),
+                         exc_info=True)
 
             # Clean up the pending request
             with self._lock:
@@ -265,22 +303,25 @@ class WebSocketApprovalManager:
             ValueError: If approval not found
             TimeoutError: If timeout exceeded
         """
-        print(f"[WebSocketApprovalManager] wait_for_approval_async called for {approval_id}")
+        logger.debug("wait_for_approval_async_called", approval_id=approval_id)
 
         with self._lock:
             request = WebSocketApprovalManager._pending.get(approval_id)
             pending_count = len(WebSocketApprovalManager._pending)
             pending_ids = list(WebSocketApprovalManager._pending.keys())
 
-        print(f"[WebSocketApprovalManager] Pending approvals count: {pending_count}")
-        print(f"[WebSocketApprovalManager] Pending IDs: {pending_ids}")
+        logger.debug("pending_approvals_state",
+                      count=pending_count,
+                      ids=pending_ids)
 
         if not request:
-            print(f"[WebSocketApprovalManager] ERROR: Approval {approval_id} not found in pending!")
+            logger.error("approval_not_found_in_pending", approval_id=approval_id)
             raise ValueError(f"Approval {approval_id} not found")
 
-        print(f"[WebSocketApprovalManager] Found request, starting wait loop...")
-        print(f"[WebSocketApprovalManager] Request status: {request.status}, event.is_set(): {request._event.is_set()}")
+        logger.debug("approval_wait_loop_starting",
+                      approval_id=approval_id,
+                      status=request.status,
+                      event_is_set=request._event.is_set())
 
         start = time.time()
         poll_count = 0
@@ -288,16 +329,23 @@ class WebSocketApprovalManager:
             poll_count += 1
             elapsed = time.time() - start
             if poll_count % 10 == 0:  # Log every 10 seconds
-                print(f"[WebSocketApprovalManager] Still waiting... elapsed={elapsed:.1f}s, polls={poll_count}")
+                logger.debug("approval_still_waiting",
+                              elapsed_seconds=round(elapsed, 1),
+                              poll_count=poll_count)
             if elapsed > timeout_seconds:
-                print(f"[WebSocketApprovalManager] TIMEOUT after {timeout_seconds}s")
+                logger.warning("approval_wait_timeout",
+                                approval_id=approval_id,
+                                timeout_seconds=timeout_seconds)
                 raise TimeoutError(
                     f"Approval timeout after {timeout_seconds}s for {approval_id}"
                 )
             await asyncio.sleep(1.0)
 
         elapsed = time.time() - start
-        print(f"[WebSocketApprovalManager] Wait completed! elapsed={elapsed:.1f}s, resolution={request.resolution}")
+        logger.info("approval_wait_completed",
+                      approval_id=approval_id,
+                      elapsed_seconds=round(elapsed, 1),
+                      resolution=request.resolution)
         return request
 
     @classmethod
@@ -322,19 +370,21 @@ class WebSocketApprovalManager:
         Returns:
             True if resolved, False if approval not found
         """
-        print(f"[WebSocketApprovalManager] resolve() called: id={approval_id}, resolution={resolution}")
+        logger.info("approval_resolve_called",
+                      approval_id=approval_id,
+                      resolution=resolution)
 
         with cls._lock:
             request = cls._pending.get(approval_id)
             pending_count = len(cls._pending)
 
-        print(f"[WebSocketApprovalManager] resolve() pending count: {pending_count}")
+        logger.debug("approval_resolve_pending_count", count=pending_count)
 
         if not request:
-            print(f"[WebSocketApprovalManager] resolve() ERROR: approval {approval_id} not found!")
+            logger.error("approval_resolve_not_found", approval_id=approval_id)
             return False
 
-        print(f"[WebSocketApprovalManager] resolve() found request, setting resolution...")
+        logger.debug("approval_resolve_setting_resolution", approval_id=approval_id)
 
         request.status = resolution
         request.resolution = resolution
@@ -343,14 +393,46 @@ class WebSocketApprovalManager:
 
         # Signal the waiting thread
         request._event.set()
-        print(f"[WebSocketApprovalManager] resolve() event.set() called, event.is_set()={request._event.is_set()}")
+        logger.debug("approval_resolve_event_set",
+                      approval_id=approval_id,
+                      event_is_set=request._event.is_set())
 
-        logger.info(f"Resolved approval {approval_id} as {resolution}")
+        logger.info("approval_resolved",
+                      approval_id=approval_id,
+                      resolution=resolution)
 
         # Clean up immediately since the waiter already read the result
         # (the waiter exits the loop once event is set, before we get here)
         with cls._lock:
             cls._pending.pop(approval_id, None)
+
+        # Best-effort DB update
+        try:
+            from cmbagent.database.base import get_db_session
+            from cmbagent.database.models import ApprovalRequest as ApprovalRequestModel
+            db = get_db_session()
+            try:
+                db.query(ApprovalRequestModel).filter(
+                    ApprovalRequestModel.id == approval_id,
+                    ApprovalRequestModel.status == "pending"
+                ).update({
+                    "status": "resolved",
+                    "resolution": resolution,
+                    "resolved_at": datetime.now(timezone.utc),
+                    "result": {
+                        "resolution": resolution,
+                        "feedback": user_feedback,
+                        "modifications": modifications or {},
+                    }
+                })
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.warning("Failed to update approval in DB (non-fatal): %s", e)
+            finally:
+                db.close()
+        except ImportError:
+            pass
 
         return True
 
@@ -365,3 +447,47 @@ class WebSocketApprovalManager:
         """Get all pending approval requests."""
         with cls._lock:
             return [r for r in cls._pending.values() if r.status == "pending"]
+
+    @classmethod
+    def resolve_from_db(cls, approval_id: str, resolution: str,
+                        user_feedback: str = None, modifications: dict = None) -> bool:
+        """
+        Single entry point for resolution. Tries in-memory first, falls back to DB.
+        Used by WebSocket handler -- replaces the 3-layer fallback chain.
+        """
+        # Fast path: in-memory (normal case, same server instance)
+        if cls.has_pending(approval_id):
+            return cls.resolve(approval_id, resolution, user_feedback, modifications)
+
+        # Slow path: DB only (server restarted, different instance)
+        try:
+            from cmbagent.database.base import get_db_session
+            from cmbagent.database.models import ApprovalRequest as ApprovalRequestModel
+            db = get_db_session()
+            try:
+                rows = db.query(ApprovalRequestModel).filter(
+                    ApprovalRequestModel.id == approval_id,
+                    ApprovalRequestModel.status == "pending"
+                ).update({
+                    "status": "resolved",
+                    "resolution": resolution,
+                    "resolved_at": datetime.now(timezone.utc),
+                    "result": {
+                        "resolution": resolution,
+                        "feedback": user_feedback,
+                        "modifications": modifications or {},
+                    }
+                })
+                db.commit()
+                if rows > 0:
+                    logger.info("Resolved approval %s via DB fallback", approval_id)
+                    return True
+                return False
+            except Exception as e:
+                db.rollback()
+                logger.error("DB fallback resolution failed for %s: %s", approval_id, e)
+                return False
+            finally:
+                db.close()
+        except ImportError:
+            return False

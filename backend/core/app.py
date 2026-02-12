@@ -2,10 +2,13 @@
 FastAPI application factory and configuration.
 """
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
+from core.logging import configure_logging
 
 # Global app instance
 _app: FastAPI = None
@@ -14,6 +17,13 @@ _app: FastAPI = None
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     global _app
+
+    # Configure structured logging based on environment
+    configure_logging(
+        log_level=os.getenv("LOG_LEVEL", "INFO"),
+        json_output=os.getenv("LOG_JSON", "false").lower() == "true",
+        log_file=os.getenv("LOG_FILE")
+    )
 
     app = FastAPI(
         title=settings.app_title,

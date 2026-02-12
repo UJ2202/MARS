@@ -4,12 +4,15 @@ Cost tracking and reporting for CMBAgent.
 This module provides cost collection, aggregation, and reporting functionality.
 """
 
+import logging
 import os
 import json
 import datetime
 import pandas as pd
 from collections import defaultdict
 from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class CostManager:
@@ -133,7 +136,7 @@ class CostManager:
                                 cost_dict["Total Tokens"].append(total_tokens)
                                 cost_dict["Model"].append(model_name)
             except Exception as e:
-                print(f"Warning: Could not extract AG2 usage for agent {getattr(agent, 'name', 'unknown')}: {e}")
+                logger.warning("ag2_usage_extraction_failed", agent=getattr(agent, 'name', 'unknown'), error=str(e))
 
     def _calculate_cost(self, model_name: str, prompt_tokens: int, completion_tokens: int) -> float:
         """
@@ -190,8 +193,7 @@ class CostManager:
 
         # String formatting for display
         if df.empty:
-            print("\nDisplaying cost...\n")
-            print("No cost data available (no API calls were made)")
+            logger.info("display_cost", status="no_data")
         else:
             self._print_cost_table(df)
 
@@ -252,8 +254,7 @@ class CostManager:
                     cell.append(f" {s.rjust(widths[i])} ")
             lines.append("|" + "|".join(cell) + "|")
 
-        print("\nDisplaying cost...\n")
-        print("\n".join(lines))
+        logger.info("display_cost", table="\n".join(lines))
 
     def save_cost_report(
         self,
@@ -288,6 +289,6 @@ class CostManager:
         with open(json_path, 'w') as f:
             json.dump(cost_data, f, indent=2)
 
-        print(f"\nCost report data saved to: {json_path}\n")
+        logger.info("cost_report_saved", path=json_path)
 
         return json_path

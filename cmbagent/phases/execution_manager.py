@@ -42,6 +42,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from cmbagent.phases.base import Phase, PhaseContext, PhaseResult, PhaseStatus
@@ -195,10 +198,10 @@ class PhaseExecutionManager:
             # Install AG2 hooks (idempotent - safe to call multiple times)
             install_ag2_hooks()
 
-            print(f"[PhaseExecutionManager] Event capture initialized for {self.phase.phase_type}")
+            logger.info("Event capture initialized for %s", self.phase.phase_type)
 
         except Exception as e:
-            print(f"[PhaseExecutionManager] Failed to setup event capture: {e}")
+            logger.error("Failed to setup event capture: %s", e)
             self._event_capture = None
 
     def _update_event_capture_context(self, step_id: Optional[str]) -> None:
@@ -226,9 +229,9 @@ class PhaseExecutionManager:
                 from cmbagent.execution.event_capture import set_event_captor
                 set_event_captor(None)
 
-                print(f"[PhaseExecutionManager] Event capture flushed for {self.phase.phase_type}")
+                logger.debug("Event capture flushed for %s", self.phase.phase_type)
             except Exception as e:
-                print(f"[PhaseExecutionManager] Error flushing event capture: {e}")
+                logger.error("Error flushing event capture: %s", e)
 
     def get_managed_cmbagent_kwargs(self) -> Dict[str, Any]:
         """
@@ -333,7 +336,7 @@ class PhaseExecutionManager:
                 )
                 self._current_dag_node_id = node.id
             except Exception as e:
-                print(f"[PhaseExecutionManager] DAG node creation failed: {e}")
+                logger.error("DAG node creation failed: %s", e)
         
         # Log event
         self._log_event(PhaseEventType.PHASE_START, {
@@ -341,9 +344,9 @@ class PhaseExecutionManager:
             'phase_id': self.context.phase_id,
         })
         
-        print(f"\n{'=' * 60}")
-        print(f"PHASE: {self.phase.display_name}")
-        print(f"{'=' * 60}\n")
+        logger.info("=" * 60)
+        logger.info("PHASE: %s", self.phase.display_name)
+        logger.info("=" * 60)
 
     def update_current_node_metadata(self, metadata_update: Dict[str, Any]) -> None:
         """
@@ -360,9 +363,9 @@ class PhaseExecutionManager:
                     status="running",  # Keep current status
                     meta=metadata_update
                 )
-                print(f"[PhaseExecutionManager] Updated phase node metadata with: {list(metadata_update.keys())}")
+                logger.debug("Updated phase node metadata with: %s", list(metadata_update.keys()))
             except Exception as e:
-                print(f"[PhaseExecutionManager] Failed to update phase node metadata: {e}")
+                logger.error("Failed to update phase node metadata: %s", e)
 
     def complete(
         self,
@@ -395,7 +398,7 @@ class PhaseExecutionManager:
                     status="completed"
                 )
             except Exception as e:
-                print(f"[PhaseExecutionManager] DAG node update failed: {e}")
+                logger.error("DAG node update failed on complete: %s", e)
         
         # Track files
         if self.config.enable_file_tracking:
@@ -409,10 +412,10 @@ class PhaseExecutionManager:
             'files_created': self.files_created,
         })
         
-        print(f"\n{'=' * 60}")
-        print(f"PHASE COMPLETE: {self.phase.display_name}")
-        print(f"Execution time: {execution_time:.2f}s")
-        print(f"{'=' * 60}\n")
+        logger.info("=" * 60)
+        logger.info("PHASE COMPLETE: %s", self.phase.display_name)
+        logger.info("Execution time: %.2fs", execution_time)
+        logger.info("=" * 60)
 
         result = PhaseResult(
             status=PhaseStatus.COMPLETED,
@@ -458,7 +461,7 @@ class PhaseExecutionManager:
                     status="failed"
                 )
             except Exception as e:
-                print(f"[PhaseExecutionManager] DAG node update failed: {e}")
+                logger.error("DAG node update failed on fail: %s", e)
         
         # Log failure event
         self._log_event(PhaseEventType.PHASE_FAILED, {
@@ -471,10 +474,10 @@ class PhaseExecutionManager:
         if self.config.enable_callbacks and self.context.callbacks:
             self.context.callbacks.invoke_workflow_failed(error, self.current_step)
         
-        print(f"\n{'=' * 60}")
-        print(f"PHASE FAILED: {self.phase.display_name}")
-        print(f"Error: {error}")
-        print(f"{'=' * 60}\n")
+        logger.error("=" * 60)
+        logger.error("PHASE FAILED: %s", self.phase.display_name)
+        logger.error("Error: %s", error)
+        logger.error("=" * 60)
 
         result = PhaseResult(
             status=PhaseStatus.FAILED,
@@ -526,7 +529,7 @@ class PhaseExecutionManager:
                             "phase_name": self.phase.display_name
                         }
                     )
-                    print(f"[PhaseExecutionManager] Updated existing DAG node for step {step_number}")
+                    logger.debug("Updated existing DAG node for step %d", step_number)
                 else:
                     # Create new node if it doesn't exist (fallback for phases without planning)
                     # Build step label
@@ -558,9 +561,9 @@ class PhaseExecutionManager:
                         }
                     )
                     self._step_dag_node_ids[step_number] = node.id
-                    print(f"[PhaseExecutionManager] Created new DAG node for step {step_number}")
+                    logger.debug("Created new DAG node for step %d", step_number)
             except Exception as e:
-                print(f"[PhaseExecutionManager] Step DAG node update/creation failed: {e}")
+                logger.error("Step DAG node update/creation failed: %s", e)
 
         # Invoke callback
         if self.config.enable_callbacks and self.context.callbacks:
@@ -587,7 +590,7 @@ class PhaseExecutionManager:
         # Update event capture context for this step
         self._update_event_capture_context(step_id=f"step_{step_number}")
 
-        print(f"\n--- Step {step_number}: {description} ---\n")
+        logger.info("--- Step %d: %s ---", step_number, description)
     
     def complete_step(
         self,
@@ -623,7 +626,7 @@ class PhaseExecutionManager:
                         meta=meta_update
                     )
                 except Exception as e:
-                    print(f"[PhaseExecutionManager] Step DAG node update failed: {e}")
+                    logger.error("Step DAG node update failed on complete: %s", e)
 
         # Invoke callback
         if self.config.enable_callbacks and self.context.callbacks:
@@ -644,7 +647,7 @@ class PhaseExecutionManager:
             'summary': summary,
         })
 
-        print(f"\n--- Step {step_number} Complete ---\n")
+        logger.info("--- Step %d Complete ---", step_number)
     
     def fail_step(
         self,
@@ -675,7 +678,7 @@ class PhaseExecutionManager:
                         }
                     )
                 except Exception as e:
-                    print(f"[PhaseExecutionManager] Step DAG node update failed: {e}")
+                    logger.error("Step DAG node update failed on fail: %s", e)
 
         # Invoke callback
         if self.config.enable_callbacks and self.context.callbacks:
@@ -718,7 +721,7 @@ class PhaseExecutionManager:
         if not plan_steps:
             return
 
-        print(f"[PhaseExecutionManager] Adding {len(plan_steps)} plan step nodes to DAG")
+        logger.info("Adding %d plan step nodes to DAG", len(plan_steps))
 
         # Create DAG nodes in database
         if self.config.enable_dag and self._dag_repo:
@@ -756,7 +759,7 @@ class PhaseExecutionManager:
                         }
                     )
                     self._step_dag_node_ids[i] = node.id
-                    print(f"[PhaseExecutionManager] Created step {i} node: {node.id}, agent: {step_agent}, desc: {description[:50]}...")
+                    logger.debug("Created step %d node: %s, agent: %s, desc: %s...", i, node.id, step_agent, description[:50])
 
                     # Create edge from previous node
                     if previous_node_id:
@@ -767,7 +770,7 @@ class PhaseExecutionManager:
                                 dependency_type="sequential"
                             )
                         except Exception as e:
-                            print(f"[PhaseExecutionManager] Edge creation failed: {e}")
+                            logger.error("Edge creation failed: %s", e)
                     elif i == 1 and source_node:
                         # First step connects from source node (e.g., planning phase)
                         # source_node is already the UUID, use it directly
@@ -777,11 +780,9 @@ class PhaseExecutionManager:
                                 to_node_id=node.id,
                                 dependency_type="sequential"
                             )
-                            print(f"[PhaseExecutionManager] Connected first step to source node")
+                            logger.debug("Connected first step to source node")
                         except Exception as e:
-                            print(f"[PhaseExecutionManager] Source edge creation failed: {e}")
-                            import traceback
-                            traceback.print_exc()
+                            logger.error("Source edge creation failed: %s", e, exc_info=True)
 
                     previous_node_id = node.id
 
@@ -807,14 +808,12 @@ class PhaseExecutionManager:
                             dependency_type="sequential"
                         )
                     except Exception as e:
-                        print(f"[PhaseExecutionManager] Terminator edge creation failed: {e}")
+                        logger.error("Terminator edge creation failed: %s", e)
 
-                print(f"[PhaseExecutionManager] Created {len(plan_steps)} step nodes + terminator in database")
+                logger.info("Created %d step nodes + terminator in database", len(plan_steps))
 
             except Exception as e:
-                print(f"[PhaseExecutionManager] Plan step nodes creation failed: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.error("Plan step nodes creation failed: %s", e, exc_info=True)
 
         # NOTE: Do NOT call invoke_planning_complete here!
         # The phase itself (planning.py or hitl_planning.py) is responsible for
@@ -856,7 +855,7 @@ class PhaseExecutionManager:
         try:
             step_node_id = self._step_dag_node_ids.get(step_number)
             if not step_node_id:
-                print(f"[PhaseExecutionManager] Cannot create redo branch: step {step_number} node not found")
+                logger.warning("Cannot create redo branch: step %d node not found", step_number)
                 return None
 
             # Create branch node
@@ -867,11 +866,11 @@ class PhaseExecutionManager:
                 hypothesis=hypothesis or f"Retry attempt {redo_number}"
             )
 
-            print(f"[PhaseExecutionManager] Created redo branch: step {step_number}, redo {redo_number}")
+            logger.info("Created redo branch: step %d, redo %d", step_number, redo_number)
             return branch_node.id
 
         except Exception as e:
-            print(f"[PhaseExecutionManager] Failed to create redo branch: {e}")
+            logger.error("Failed to create redo branch: %s", e)
             return None
 
     def record_sub_agent_call(
@@ -916,7 +915,7 @@ class PhaseExecutionManager:
             return sub_node.id
 
         except Exception as e:
-            print(f"[PhaseExecutionManager] Failed to record sub-agent call: {e}")
+            logger.error("Failed to record sub-agent call: %s", e)
             return None
 
     # =========================================================================
@@ -1055,7 +1054,7 @@ class PhaseExecutionManager:
                     meta=data
                 )
             except Exception as e:
-                print(f"[PhaseExecutionManager] Event logging failed: {e}")
+                logger.error("Event logging failed: %s", e)
     
     # =========================================================================
     # File Tracking

@@ -1,5 +1,13 @@
 """
 WebSocket endpoint and message handlers.
+
+Uses the consolidated ConnectionManager as the single source of truth
+for WebSocket connection management (Stage 4).
+
+Session management (Stages 10-11):
+- Every task execution creates a database-backed session via SessionManager
+- Session state is persisted for pause/resume/continuation across all modes
+- session_id is passed through config to the task executor
 """
 
 import asyncio
@@ -7,7 +15,10 @@ from typing import Any, Dict
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from core.logging import get_logger
 from websocket.events import send_ws_event
+
+logger = get_logger(__name__)
 
 # Active connections storage (fallback when services not available)
 active_connections: Dict[str, WebSocket] = {}
@@ -17,17 +28,20 @@ _services_available = None
 _workflow_service = None
 _connection_manager = None
 _execution_service = None
+_session_manager = None
 
 
 def _check_services():
     """Check if services are available and load them."""
-    global _services_available, _workflow_service, _connection_manager, _execution_service
+    global _services_available, _workflow_service, _connection_manager, _execution_service, _session_manager
     if _services_available is None:
         try:
             from services import workflow_service, connection_manager, execution_service
+            from services.session_manager import get_session_manager
             _workflow_service = workflow_service
             _connection_manager = connection_manager
             _execution_service = execution_service
+            _session_manager = get_session_manager()
             _services_available = True
         except ImportError:
             _services_available = False
@@ -58,18 +72,36 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
         config = data.get("config", {})
 
         # Debug logging
-        print(f"[DEBUG] WebSocket received data for task {task_id}")
-        print(f"[DEBUG] Task: {task[:100]}...")
-        print(f"[DEBUG] Config mode: {config.get('mode', 'NOT SET')}")
-        print(f"[DEBUG] Config keys: {list(config.keys())}")
+        logger.debug("WebSocket received data for task %s", task_id)
+        logger.debug("Task: %s...", task[:100])
+        logger.debug("Config mode: %s", config.get('mode', 'NOT SET'))
+        logger.debug("Config keys: %s", list(config.keys()))
 
         if not task:
             await send_ws_event(websocket, "error", {"message": "No task provided"}, run_id=task_id)
             return
 
+        mode = config.get("mode", "one-shot")
+
+        # Create or reuse session for ALL modes (Stages 10-11)
+        session_id = config.get("copilotSessionId") or config.get("session_id")
+        if services_available and _session_manager and not session_id:
+            try:
+                session_id = _session_manager.create_session(
+                    mode=mode,
+                    config=config,
+                    name=config.get("sessionName") or f"{mode}_{task_id[:8]}"
+                )
+                logger.info("Created session %s for task %s (mode=%s)", session_id, task_id, mode)
+            except Exception as e:
+                logger.warning("Failed to create session for task %s: %s", task_id, e)
+
+        # Inject session_id into config so task executor can use it
+        if session_id:
+            config["session_id"] = session_id
+
         # Create workflow run in database if services available
         if services_available:
-            mode = config.get("mode", "one-shot")
             # Extract mode-specific primary agent and model
             if mode == "planning-control":
                 agent = "planner"
@@ -98,13 +130,14 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
                 model=model,
                 config=config
             )
-            print(f"Created workflow run: {run_result}")
+            logger.info("Created workflow run: %s", run_result)
 
-        # Send initial status
+        # Send initial status with session_id so frontend can track it
         await send_ws_event(
             websocket, "status",
-            {"message": "Starting CMBAgent execution..."},
-            run_id=task_id
+            {"message": "Starting CMBAgent execution...", "session_id": session_id},
+            run_id=task_id,
+            session_id=session_id
         )
 
         # Create background task for execution
@@ -136,9 +169,9 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
                     # Check if execution_task had an exception
                     try:
                         result = execution_task.result()
-                        print(f"[WebSocket] Execution completed successfully for task {task_id}")
+                        logger.info("Execution completed successfully for task %s", task_id)
                     except Exception as exec_error:
-                        print(f"[WebSocket] Execution failed for task {task_id}: {exec_error}")
+                        logger.error("Execution failed for task %s: %s", task_id, exec_error)
                         # Try to send error to client
                         try:
                             await send_ws_event(
@@ -156,10 +189,10 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
                         client_msg = receive_task.result()
                         await handle_client_message(websocket, task_id, client_msg)
                     except WebSocketDisconnect:
-                        print(f"WebSocket disconnected while receiving message for task {task_id}")
+                        logger.info("WebSocket disconnected while receiving for task %s", task_id)
                         break
                     except Exception as e:
-                        print(f"Error handling client message: {e}")
+                        logger.error("Error handling client message: %s", e)
 
                     # Create new receive task for next iteration
                     receive_task = asyncio.create_task(websocket.receive_json())
@@ -173,9 +206,9 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
             raise
 
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected for task {task_id}")
+        logger.info("WebSocket disconnected for task %s", task_id)
     except Exception as e:
-        print(f"Error in WebSocket endpoint: {e}")
+        logger.error("Error in WebSocket endpoint: %s", e)
         try:
             await send_ws_event(
                 websocket, "error",
@@ -208,7 +241,7 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
             await send_ws_event(websocket, "pong", {}, run_id=task_id)
 
     elif msg_type in ["resolve_approval", "approval_response"]:
-        # Handle approval resolution (Stage 6: HITL)
+        # Handle approval resolution (Stage 5: Robust Approvals)
         approval_id = message.get("approval_id")
 
         # Support both 'resolution' and 'approved' formats
@@ -220,31 +253,31 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
         feedback = message.get("feedback", "")
         modifications = message.get("modifications", "")
 
-        # Combine feedback and modifications
+        # Parse modifications into dict
+        modifications_dict = {}
+        if modifications:
+            try:
+                import json
+                modifications_dict = json.loads(modifications) if isinstance(modifications, str) else modifications
+            except (json.JSONDecodeError, TypeError):
+                modifications_dict = {"raw": modifications}
+
+        # Combine feedback and modifications for legacy compatibility
         full_feedback = f"{feedback}\n\nModifications: {modifications}" if modifications else feedback
 
-        # Try in-memory WebSocket approval manager first (for HITL workflows)
+        # Single resolution path (Stage 11C)
         try:
             from cmbagent.database.websocket_approval_manager import WebSocketApprovalManager
 
-            if WebSocketApprovalManager.has_pending(approval_id):
-                modifications_dict = {}
-                if modifications:
-                    try:
-                        import json
-                        modifications_dict = json.loads(modifications) if isinstance(modifications, str) else modifications
-                    except (json.JSONDecodeError, TypeError):
-                        modifications_dict = {"raw": modifications}
+            success = WebSocketApprovalManager.resolve_from_db(
+                approval_id=approval_id,
+                resolution=resolution,
+                user_feedback=full_feedback,
+                modifications=modifications_dict,
+            )
 
-                WebSocketApprovalManager.resolve(
-                    approval_id=approval_id,
-                    resolution=resolution,
-                    user_feedback=full_feedback,
-                    modifications=modifications_dict,
-                )
-
-                print(f"✅ Approval {approval_id} resolved in-memory as {resolution}")
-
+            if success:
+                logger.info("Approval %s resolved as %s", approval_id, resolution)
                 await send_ws_event(
                     websocket, "approval_received",
                     {
@@ -255,72 +288,24 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
                     },
                     run_id=task_id,
                 )
-                return
-        except ImportError:
-            pass
-
-        # Fall back to database-backed approval manager
-        try:
-            from cmbagent.database import get_db_session
-            from cmbagent.database.models import WorkflowRun, ApprovalRequest
-            from cmbagent.database.approval_manager import ApprovalManager
-
-            db = get_db_session()
-            try:
-                approval = db.query(ApprovalRequest).filter(
-                    ApprovalRequest.id == approval_id
-                ).first()
-
-                if not approval:
-                    print(f"Approval {approval_id} not found")
-                    await send_ws_event(
-                        websocket, "error",
-                        {"message": f"Approval {approval_id} not found"},
-                        run_id=task_id
-                    )
-                    return
-
-                run = db.query(WorkflowRun).filter(
-                    WorkflowRun.id == approval.run_id
-                ).first()
-
-                if not run:
-                    print(f"Workflow run {approval.run_id} not found")
-                    return
-
-                approval_manager = ApprovalManager(db, str(run.session_id))
-                approval_manager.resolve_approval(
-                    approval_id=approval_id,
-                    resolution=resolution,
-                    user_feedback=full_feedback
-                )
-
-                print(f"✅ Approval {approval_id} resolved via DB as {resolution}")
-
-                # Send confirmation back to client
+            else:
+                logger.warning("Approval %s not found or already resolved", approval_id)
                 await send_ws_event(
-                    websocket, "approval_received",
-                    {
-                        "approval_id": approval_id,
-                        "approved": resolution == "approved",
-                        "feedback": full_feedback
-                    },
-                    run_id=task_id
+                    websocket, "error",
+                    {"message": f"Approval {approval_id} not found or already resolved"},
+                    run_id=task_id,
                 )
-
-            finally:
-                db.close()
 
         except Exception as e:
-            print(f"Error resolving approval: {e}")
+            logger.error("Error resolving approval: %s", e)
             await send_ws_event(
                 websocket, "error",
                 {"message": f"Failed to resolve approval: {str(e)}"},
-                run_id=task_id
+                run_id=task_id,
             )
 
     elif msg_type == "pause":
-        print(f"Pause requested for task {task_id}")
+        logger.info("Pause requested for task %s", task_id)
 
         if services_available:
             result = _workflow_service.pause_workflow(task_id)
@@ -337,7 +322,7 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
             )
 
     elif msg_type == "resume":
-        print(f"Resume requested for task {task_id}")
+        logger.info("Resume requested for task %s", task_id)
 
         if services_available:
             result = _workflow_service.resume_workflow(task_id)
@@ -354,7 +339,7 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
             )
 
     elif msg_type == "cancel":
-        print(f"Cancel requested for task {task_id}")
+        logger.info("Cancel requested for task %s", task_id)
 
         if services_available:
             result = _workflow_service.cancel_workflow(task_id)
@@ -371,7 +356,7 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
             )
 
     elif msg_type == "request_state":
-        print(f"State request for task {task_id}")
+        logger.debug("State request for task %s", task_id)
         if services_available:
             run_info = _workflow_service.get_run_info(task_id)
             if run_info:
@@ -383,4 +368,4 @@ async def handle_client_message(websocket: WebSocket, task_id: str, message: dic
             await _connection_manager.replay_missed_events(task_id, since_timestamp)
 
     else:
-        print(f"Unknown message type: {msg_type}")
+        logger.warning("Unknown message type: %s", msg_type)

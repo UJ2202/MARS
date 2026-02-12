@@ -23,10 +23,13 @@ import copy
 import json
 import pickle
 import re
+import logging
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.phases.execution_manager import PhaseExecutionManager
 from cmbagent.utils import get_model_config, default_agents_llm_model
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -158,13 +161,11 @@ class HITLControlPhase(Phase):
 
             # Get approval manager
             approval_manager = context.shared_state.get('_approval_manager')
-            print(f"[HITLControlPhase] Approval manager type: {type(approval_manager)}")
-            print(f"[HITLControlPhase] Approval manager: {approval_manager}")
+            logger.debug("approval_manager_info", manager_type=f"{type(approval_manager)}", manager=f"{approval_manager}")
             if approval_manager:
-                print(f"[HITLControlPhase] Approval manager has ws_send_event: {hasattr(approval_manager, 'ws_send_event')}")
+                logger.debug("approval_manager_capabilities", has_ws_send_event=hasattr(approval_manager, 'ws_send_event'))
             else:
-                print(f"[HITLControlPhase] WARNING: No approval manager found in shared_state!")
-                print(f"[HITLControlPhase] Shared state keys: {list(context.shared_state.keys())}")
+                logger.warning("no_approval_manager_in_shared_state", shared_state_keys=f"{list(context.shared_state.keys())}")
 
             # Setup
             from cmbagent.cmbagent import CMBAgent
@@ -240,9 +241,7 @@ class HITLControlPhase(Phase):
                 # Update manager's current step
                 manager.current_step = step_num
 
-                print(f"\n{'='*60}")
-                print(f"STEP {step_num}/{len(plan_steps)}: {step.get('sub_task', 'Unknown')}")
-                print(f"{'='*60}\n")
+                logger.info("step_begin", step_num=step_num, total_steps=len(plan_steps), sub_task=step.get('sub_task', 'Unknown'))
 
                 # Before-step approval
                 if self.config.approval_mode in ["before_step", "both"]:
@@ -258,7 +257,7 @@ class HITLControlPhase(Phase):
 
                     if approval_result is None:  # Skip
                         skipped_steps.append(step_num)
-                        print(f"-> Step {step_num} skipped by human\n")
+                        logger.info("step_skipped_by_human", step_num=step_num)
                         continue
                     elif approval_result is False:  # Rejected
                         return manager.fail(f"Step {step_num} rejected by human", None)
@@ -266,7 +265,7 @@ class HITLControlPhase(Phase):
                         if 'feedback' in approval_result:
                             feedback = approval_result['feedback']
                             self._add_feedback(step_num, "guidance", feedback, "before")
-                            print(f"-> Human feedback for step {step_num}: {feedback}\n")
+                            logger.info("human_feedback_received", step_num=step_num, feedback=feedback)
                     # else: True (approved without feedback)
 
                 # Notify callbacks
@@ -280,7 +279,7 @@ class HITLControlPhase(Phase):
 
                 while not step_accepted and redo_count <= max_redos:
                     if redo_count > 0:
-                        print(f"\n-> Redoing step {step_num} (redo #{redo_count})...")
+                        logger.info("step_redo_initiated", step_num=step_num, redo_count=redo_count)
 
                         # Create redo branch in DAG
                         manager.create_redo_branch(
@@ -300,7 +299,7 @@ class HITLControlPhase(Phase):
                         attempt += 1
 
                         try:
-                            print(f"Executing step {step_num} (attempt {attempt}/{self.config.max_n_attempts})...")
+                            logger.info("step_executing", step_num=step_num, attempt=attempt, max_attempts=self.config.max_n_attempts)
 
                             # Determine starter agent (matches standard ControlPhase)
                             # Only clear work dir on very first execution of step 1
@@ -336,9 +335,9 @@ class HITLControlPhase(Phase):
                                     try:
                                         enable_websocket_for_hitl(cmbagent, approval_manager, context.run_id)
                                     except Exception as e:
-                                        print(f"Warning: Could not enable WebSocket for AG2 handoffs: {e}")
+                                        logger.warning("websocket_ag2_handoff_enable_failed", error=str(e))
                                 else:
-                                    print(f"Warning: No approval_manager - AG2 handoffs will use console input")
+                                    logger.warning("no_approval_manager_for_ag2_handoffs")
 
                             # Get agent for this step
                             if step_num == 1 and plan_steps:
@@ -423,14 +422,14 @@ class HITLControlPhase(Phase):
                                 current_context = copy.deepcopy(cmbagent.final_context)
 
                             if success:
-                                print(f"Step {step_num} completed successfully")
+                                logger.info("step_completed_successfully", step_num=step_num)
                             else:
-                                print(f"Step {step_num} failed: {step_error}")
+                                logger.error("step_failed", step_num=step_num, error=step_error)
 
                         except Exception as e:
                             success = False
                             step_error = str(e)
-                            print(f"Step {step_num} error: {step_error}")
+                            logger.error("step_execution_error", step_num=step_num, error=step_error)
 
                         # On error, ask for human intervention if configured
                         if not success and self.config.approval_mode in ["on_error", "both"]:
@@ -445,10 +444,10 @@ class HITLControlPhase(Phase):
                             )
 
                             if action == "retry":
-                                print(f"-> Retrying step {step_num}...")
+                                logger.info("step_retry", step_num=step_num)
                                 continue
                             elif action == "skip":
-                                print(f"-> Skipping step {step_num}")
+                                logger.info("step_skip_after_error", step_num=step_num)
                                 skipped_steps.append(step_num)
                                 success = True  # Treat as success to continue
                                 break
@@ -488,10 +487,10 @@ class HITLControlPhase(Phase):
                                 if isinstance(review_result, dict) and review_result.get('feedback'):
                                     redo_feedback = review_result['feedback']
                                     self._add_feedback(step_num, "redo requested", redo_feedback, "redo")
-                                    print(f"-> Redo step {step_num} with feedback: {redo_feedback}")
+                                    logger.info("step_redo_with_feedback", step_num=step_num, feedback=redo_feedback)
 
                                 if redo_count > max_redos:
-                                    print(f"-> Max redos ({max_redos}) reached for step {step_num}, continuing")
+                                    logger.warning("max_redos_reached", step_num=step_num, max_redos=max_redos)
                                     step_accepted = True
                                 else:
                                     human_interventions.append({
@@ -506,7 +505,7 @@ class HITLControlPhase(Phase):
                                 if 'feedback' in review_result:
                                     feedback = review_result['feedback']
                                     self._add_feedback(step_num, "notes", feedback, "after")
-                                    print(f"-> Human notes for step {step_num}: {feedback}\n")
+                                    logger.info("human_notes_received", step_num=step_num, feedback=feedback)
                                 step_accepted = True
                             else:
                                 step_accepted = True
@@ -544,7 +543,7 @@ class HITLControlPhase(Phase):
                         pickle.dumps(value)  # Test if picklable
                         filtered_context[key] = value
                     except (TypeError, pickle.PicklingError, AttributeError):
-                        print(f"[HITL] Skipping non-picklable context key: {key}")
+                        logger.debug("skipping_non_picklable_context_key", key=key)
 
                 with open(context_path, 'wb') as f:
                     pickle.dump(filtered_context, f)
@@ -567,11 +566,11 @@ class HITLControlPhase(Phase):
 
                 manager.complete_step(step_num, "Step completed")
 
-                print(f"\nStep {step_num} completed in control phase\n")
+                logger.info("step_completed_in_control_phase", step_num=step_num)
 
             # Save final context (filter non-picklable items)
             context_file = os.path.join(context.work_dir, 'final_context.pkl')
-            
+
             # Filter out non-picklable items before saving
             filtered_final_context = {}
             for key, value in current_context.items():
@@ -581,8 +580,8 @@ class HITLControlPhase(Phase):
                     pickle.dumps(value)
                     filtered_final_context[key] = value
                 except (TypeError, pickle.PicklingError, AttributeError):
-                    print(f"[HITL] Skipping non-picklable final context key: {key}")
-            
+                    logger.debug("skipping_non_picklable_final_context_key", key=key)
+
             with open(context_file, 'wb') as f:
                 pickle.dump(filtered_final_context, f)
 
@@ -705,11 +704,7 @@ class HITLControlPhase(Phase):
         """
         if not approval_manager:
             # Console fallback
-            print(f"\n{'='*60}")
-            print(f"STEP {step_num} APPROVAL")
-            print(f"{'='*60}")
-            print(f"Task: {step.get('sub_task')}")
-            print(f"{'='*60}")
+            logger.info("step_approval_console_prompt", step_num=step_num, task=step.get('sub_task'))
             response = input("\nAction? (y=approve/n=reject/s=skip/[feedback text to approve with]): ").strip()
 
             lower = response.lower()
@@ -738,12 +733,8 @@ class HITLControlPhase(Phase):
             options=["approve", "reject", "skip"],
         )
 
-        print(f"\n{'='*60}")
-        print(f"STEP {step_num} APPROVAL REQUIRED")
-        print(f"{'='*60}")
-        print(message)
-        print("\nWaiting for approval...")
-        print(f"{'='*60}\n")
+        logger.info("step_approval_requested", step_num=step_num, message=message)
+        logger.info("waiting_for_approval", step_num=step_num)
 
         resolved = await approval_manager.wait_for_approval_async(
             str(approval_request.id),
@@ -780,11 +771,7 @@ class HITLControlPhase(Phase):
             dict with 'continue': Continue with feedback
         """
         if not approval_manager:
-            print(f"\n{'='*60}")
-            print(f"STEP {step_num} REVIEW")
-            print(f"{'='*60}")
-            print("Step completed successfully")
-            print(f"{'='*60}")
+            logger.info("step_review_console_prompt", step_num=step_num, status="completed_successfully")
             response = input("\nAction? (c=continue/r=redo/a=abort/[feedback text]): ").strip()
 
             lower = response.lower()
@@ -813,12 +800,8 @@ class HITLControlPhase(Phase):
             options=["continue", "abort", "redo"],
         )
 
-        print(f"\n{'='*60}")
-        print(f"STEP {step_num} REVIEW")
-        print(f"{'='*60}")
-        print(message)
-        print("\nWaiting for review...")
-        print(f"{'='*60}\n")
+        logger.info("step_review_requested", step_num=step_num, message=message)
+        logger.info("waiting_for_review", step_num=step_num)
 
         resolved = await approval_manager.wait_for_approval_async(
             str(approval_request.id),
@@ -858,11 +841,7 @@ class HITLControlPhase(Phase):
             "abort": Abort the workflow
         """
         if not approval_manager:
-            print(f"\n{'='*60}")
-            print(f"STEP {step_num} ERROR (Attempt {attempt})")
-            print(f"{'='*60}")
-            print(f"Error: {error}")
-            print(f"{'='*60}")
+            logger.error("step_error_console_prompt", step_num=step_num, attempt=attempt, error=error)
             response = input("\nHow to proceed? (r=retry/s=skip/a=abort): ").strip().lower()
 
             if response == 'r' or response == 'retry':
@@ -888,12 +867,8 @@ class HITLControlPhase(Phase):
             options=["retry", "skip", "abort"],
         )
 
-        print(f"\n{'='*60}")
-        print(f"STEP {step_num} ERROR - HUMAN INTERVENTION REQUIRED")
-        print(f"{'='*60}")
-        print(message)
-        print("\nWaiting for decision...")
-        print(f"{'='*60}\n")
+        logger.error("step_error_intervention_required", step_num=step_num, message=message)
+        logger.info("waiting_for_error_decision", step_num=step_num)
 
         resolved = await approval_manager.wait_for_approval_async(
             str(approval_request.id),

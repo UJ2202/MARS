@@ -65,11 +65,6 @@ from cmbagent.database.approval_types import (
     ApprovalConfig,
     get_approval_config,
 )
-from cmbagent.database.approval_manager import (
-    ApprovalManager,
-    WorkflowCancelledException,
-    ApprovalTimeoutError,
-)
 from cmbagent.database.websocket_approval_manager import (
     WebSocketApprovalManager,
     SimpleApprovalRequest,
@@ -127,9 +122,6 @@ __all__ = [
     "ApprovalCheckpoint",
     "ApprovalConfig",
     "get_approval_config",
-    "ApprovalManager",
-    "WorkflowCancelledException",
-    "ApprovalTimeoutError",
     "WebSocketApprovalManager",
     "SimpleApprovalRequest",
 ]

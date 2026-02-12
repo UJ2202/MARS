@@ -10,6 +10,9 @@ from pydantic import BaseModel
 
 from models.schemas import TaskRequest, TaskResponse
 
+from core.logging import get_logger
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/api/tasks", tags=["Tasks"])
 
 
@@ -120,10 +123,8 @@ async def get_task_config(task_id: str):
     config = task['config']
     
     # Debug logging
-    print(f"[DEBUG] Task config for {task_id}:")
-    print(f"  Mode: {config.get('mode')}")
-    print(f"  Config keys: {list(config.keys())}")
-    
+    logger.debug("task_config_requested", task_id=task_id, mode=config.get('mode'), config_keys=list(config.keys()))
+
     return {
         'task_id': task_id,
         'description': task['description'],

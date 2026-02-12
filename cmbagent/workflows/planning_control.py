@@ -4,7 +4,10 @@ Planning and control workflow implementations using phase-based architecture.
 
 import os
 import uuid
+import logging
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.utils import (
     work_dir_default,
@@ -46,6 +49,7 @@ def planning_and_control_context_carryover(
     clear_work_dir=False,
     researcher_filename=shared_context_default['researcher_filename'],
     approval_config=None,
+    approval_manager=None,
     callbacks=None,
     hitl_after_planning=False,
 ):
@@ -74,7 +78,8 @@ def planning_and_control_context_carryover(
         restart_at_step: Step number to restart from (-1 for fresh start)
         clear_work_dir: Whether to clear work directory before starting
         researcher_filename: Filename for researcher outputs
-        approval_config: HITL approval configuration
+        approval_config: HITL approval configuration (deprecated, use approval_manager)
+        approval_manager: Direct approval manager injection (preferred)
         callbacks: Workflow callbacks for events
         hitl_after_planning: Add HITL checkpoint after planning
 
@@ -159,6 +164,11 @@ def planning_and_control_context_carryover(
         phases=phases,
     )
 
+    # Determine effective approval manager: prefer direct injection over config-based
+    _effective_approval_manager = approval_manager
+    if not _effective_approval_manager and approval_config:
+        _effective_approval_manager = _get_approval_manager(approval_config)
+
     # Create executor
     executor = WorkflowExecutor(
         workflow=workflow,
@@ -166,7 +176,7 @@ def planning_and_control_context_carryover(
         work_dir=work_dir,
         api_keys=api_keys,
         callbacks=callbacks,
-        approval_manager=_get_approval_manager(approval_config) if approval_config else None,
+        approval_manager=_effective_approval_manager,
     )
 
     # Handle restart case - load existing context
@@ -180,21 +190,17 @@ def planning_and_control_context_carryover(
             executor.context.agent_state = loaded_context
 
     # Run workflow
-    print(f"\n{'=' * 60}")
-    print("Planning and Control Workflow")
-    print(f"{'=' * 60}")
-    print(f"Task: {task[:100]}...")
-    print(f"Phases: {[p['type'] for p in phases]}")
-    print(f"{'=' * 60}\n")
+    logger.info(
+        "Planning and Control Workflow | Task: %s | Phases: %s",
+        task[:100], [p['type'] for p in phases],
+    )
 
     try:
         result = executor.run_sync()
         return _convert_workflow_result_to_legacy(result, executor)
 
     except Exception as e:
-        print(f"\nWorkflow failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Workflow failed: %s", e, exc_info=True)
         raise
 
 
@@ -203,12 +209,11 @@ deep_research = planning_and_control_context_carryover
 
 
 def _get_approval_manager(approval_config):
-    """Get approval manager from config if available."""
-    try:
-        from cmbagent.database.approval_manager import ApprovalManager
-        return ApprovalManager(approval_config)
-    except ImportError:
-        return None
+    """Get approval manager from config if available (legacy fallback)."""
+    logger.warning(
+        "approval_config is deprecated. Pass approval_manager= directly instead."
+    )
+    return None
 
 
 def _convert_workflow_result_to_legacy(workflow_context, executor) -> Dict[str, Any]:

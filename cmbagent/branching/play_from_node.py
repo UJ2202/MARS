@@ -40,9 +40,21 @@ class PlayFromNodeExecutor:
         Returns:
             execution_result: Result of resumed execution with status and context
         """
-        # 1. Validate node exists and is in valid state
-        node = self.db.query(DAGNode).filter(DAGNode.id == node_id).first()
+        # 0. First validate the workflow run exists
+        run = self.db.query(WorkflowRun).filter(WorkflowRun.id == self.run_id).first()
+        if not run:
+            raise ValueError(f"Workflow run {self.run_id} not found")
+
+        # 1. Validate node exists and belongs to this run
+        node = self.db.query(DAGNode).filter(
+            DAGNode.id == node_id,
+            DAGNode.run_id == self.run_id
+        ).first()
         if not node:
+            # Try to find node by id only to give better error message
+            any_node = self.db.query(DAGNode).filter(DAGNode.id == node_id).first()
+            if any_node:
+                raise ValueError(f"Node {node_id} exists but belongs to run {any_node.run_id}, not {self.run_id}")
             raise ValueError(f"Node {node_id} not found")
 
         # 2. Load checkpoint before this node
@@ -62,7 +74,6 @@ class PlayFromNodeExecutor:
         self._reset_downstream_nodes(node_id)
 
         # 4. Update workflow run status to EXECUTING
-        run = self.db.query(WorkflowRun).filter(WorkflowRun.id == self.run_id).first()
         run.status = "executing"
         if not run.meta:
             run.meta = {}

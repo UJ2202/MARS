@@ -10,6 +10,9 @@ from fastapi import APIRouter, HTTPException
 
 from models.schemas import EnhanceInputRequest, EnhanceInputResponse
 
+from core.logging import get_logger
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/api", tags=["Enhance"])
 
 # Import cmbagent at runtime
@@ -43,12 +46,11 @@ async def enhance_input_endpoint(request: EnhanceInputRequest):
         EnhanceInputResponse with enhanced text and cost breakdown
     """
     try:
-        print(f"Processing enhance-input request...")
-        print(f"Input text length: {len(request.input_text)} characters")
-        print(f"Max workers: {request.max_workers}")
-        print(f"Max depth: {request.max_depth}")
+        logger.info("enhance_input_request_started")
+        logger.debug("enhance_input_text_length", length=len(request.input_text))
+        logger.debug("enhance_input_config", max_workers=request.max_workers, max_depth=request.max_depth)
         if request.work_dir:
-            print(f"Work directory: {request.work_dir}")
+            logger.debug("enhance_input_work_dir", work_dir=request.work_dir)
 
         cmbagent = _get_cmbagent()
 
@@ -57,7 +59,7 @@ async def enhance_input_endpoint(request: EnhanceInputRequest):
         if not work_dir:
             # Create a temporary directory for processing
             work_dir = tempfile.mkdtemp(prefix="enhance_input_")
-            print(f"Created temporary work directory: {work_dir}")
+            logger.debug("enhance_input_temp_dir", work_dir=work_dir)
 
         # Check if enhanced_input.md already exists to avoid re-processing
         enhanced_input_file = os.path.join(work_dir, "enhanced_input.md")
@@ -65,7 +67,7 @@ async def enhance_input_endpoint(request: EnhanceInputRequest):
             # Read existing enhanced text if work_dir was provided and file exists
             with open(enhanced_input_file, 'r', encoding='utf-8') as f:
                 enhanced_text = f.read()
-            print("Using existing enhanced_input.md file")
+            logger.info("enhance_input_using_cached")
         else:
             # Call the preprocess_task function
             enhanced_text = cmbagent.preprocess_task(
@@ -92,7 +94,7 @@ async def enhance_input_endpoint(request: EnhanceInputRequest):
                         'files_processed': len(ocr_data.get('entries', []))
                     }
             except Exception as e:
-                print(f"Warning: Could not read OCR cost file: {e}")
+                logger.warning("ocr_cost_file_read_failed", error=str(e))
 
         # Try to read summary processing costs
         summaries_dir = os.path.join(work_dir, "summaries")
@@ -130,7 +132,7 @@ async def enhance_input_endpoint(request: EnhanceInputRequest):
                                             'total_tokens': entry.get('Total Tokens', 0)
                                         })
                 except Exception as e:
-                    print(f"Warning: Could not read summary cost file {cost_file}: {e}")
+                    logger.warning("summary_cost_file_read_failed", file=cost_file, error=str(e))
 
             if all_agent_costs:
                 cost_breakdown['summarization'] = {
@@ -167,7 +169,7 @@ async def enhance_input_endpoint(request: EnhanceInputRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error in enhance_input_endpoint: {str(e)}")
+        logger.error("enhance_input_failed", error=str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Error processing enhance-input request: {str(e)}"

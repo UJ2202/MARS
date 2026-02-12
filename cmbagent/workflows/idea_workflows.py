@@ -4,7 +4,10 @@ Idea generation and idea-to-execution workflows using phase-based architecture.
 
 import os
 import uuid
+import logging
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.utils import (
     work_dir_default,
@@ -94,21 +97,17 @@ def idea_generation(
     )
 
     # Run workflow
-    print(f"\n{'=' * 60}")
-    print("Idea Generation Workflow")
-    print(f"{'=' * 60}")
-    print(f"Task: {task[:100]}...")
-    print(f"Generating {n_ideas} ideas with {n_reviews} review rounds")
-    print(f"{'=' * 60}\n")
+    logger.info(
+        "Idea Generation Workflow | Task: %s | Generating %s ideas with %s review rounds",
+        task[:100], n_ideas, n_reviews,
+    )
 
     try:
         result = executor.run_sync()
         return _convert_workflow_result_to_legacy(result, executor)
 
     except Exception as e:
-        print(f"\nWorkflow failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Workflow failed: %s", e, exc_info=True)
         raise
 
 
@@ -258,21 +257,17 @@ def idea_to_execution(
     )
 
     # Run workflow
-    print(f"\n{'=' * 60}")
-    print("Idea to Execution Workflow")
-    print(f"{'=' * 60}")
-    print(f"Task: {task[:100]}...")
-    print(f"Pipeline: {' → '.join(p['type'] for p in phases)}")
-    print(f"{'=' * 60}\n")
+    logger.info(
+        "Idea to Execution Workflow | Task: %s | Pipeline: %s",
+        task[:100], ' -> '.join(p['type'] for p in phases),
+    )
 
     try:
         result = executor.run_sync()
         return _convert_workflow_result_to_legacy(result, executor)
 
     except Exception as e:
-        print(f"\nWorkflow failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Workflow failed: %s", e, exc_info=True)
         raise
 
 

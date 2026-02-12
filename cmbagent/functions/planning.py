@@ -1,9 +1,12 @@
 """Planning workflow functionality."""
 
+import logging
 from typing import Literal, List
 from autogen import register_function
 from autogen.agentchat.group import ContextVariables, AgentTarget, ReplyResult, TerminateTarget
 from IPython.display import Markdown, display
+
+logger = logging.getLogger(__name__)
 
 
 def record_improved_task(improved_main_task: str, context_variables: ContextVariables, cmbagent_instance, cmbagent_disable_display: bool) -> ReplyResult:
@@ -14,7 +17,7 @@ def record_improved_task(improved_main_task: str, context_variables: ContextVari
     if not cmbagent_disable_display:
         display(Markdown(improved_main_task))
     else:
-        print(improved_main_task)
+        logger.info("improved_task_recorded", task_preview=improved_main_task[:200])
 
     return ReplyResult(
         target=AgentTarget(planner),  ## transfer to planner
@@ -27,26 +30,27 @@ def record_plan(plan_suggestion: str, number_of_steps_in_plan: int, context_vari
     """
     Records a suggested plan and updates relevant execution context.
 
-    This function logs a full plan suggestion into the `context_variables` dictionary. If no feedback 
-    remains to be given (i.e., `context_variables["feedback_left"] == 0`), the most recent plan 
-    suggestion is marked as the final plan. The function also updates the total number of steps in 
+    This function logs a full plan suggestion into the `context_variables` dictionary. If no feedback
+    remains to be given (i.e., `context_variables["feedback_left"] == 0`), the most recent plan
+    suggestion is marked as the final plan. The function also updates the total number of steps in
     the plan.
 
-    The function ensures that the plan is properly stored and transferred to the `plan_reviewer` agent 
+    The function ensures that the plan is properly stored and transferred to the `plan_reviewer` agent
     for further evaluation.
 
     Args:
         plan_suggestion (str): The complete plan suggestion to be recorded. Unaltered, as it is, preserve capitalization and ponctuation.
         number_of_steps_in_plan (int): The total number of **Steps** in the suggested plan, which you read off from the plan suggestion.
-        context_variables (dict): A dictionary maintaining execution context, including previous plans, 
+        context_variables (dict): A dictionary maintaining execution context, including previous plans,
             feedback tracking, and finalized plans.
     """
     plan_reviewer = cmbagent_instance.get_agent_from_name('plan_reviewer')
     terminator = cmbagent_instance.get_agent_from_name('terminator')
-    
-    # DEBUG: Track record_plan calls
-    print(f"[DEBUG record_plan] Called. feedback_left={context_variables.get('feedback_left', 'MISSING')}, num_plans={len(context_variables.get('plans', []))}")
-    
+
+    logger.debug("record_plan_called",
+                 feedback_left=context_variables.get('feedback_left', 'MISSING'),
+                 num_plans=len(context_variables.get('plans', [])))
+
     context_variables["plans"].append(plan_suggestion)
     context_variables["proposed_plan"] = plan_suggestion
     context_variables["number_of_steps_in_plan"] = number_of_steps_in_plan
@@ -66,7 +70,7 @@ def record_plan(plan_suggestion: str, number_of_steps_in_plan: int, context_vari
         )
 
 
-def record_plan_constraints(needed_agents: List[Literal["engineer", "researcher", "idea_maker", "idea_hater", 
+def record_plan_constraints(needed_agents: List[Literal["engineer", "researcher", "idea_maker", "idea_hater",
                                                          "camb_agent", "camb_context", "classy_context",
                                                          "classy_sz_agent", "planck_agent", "aas_keyword_finder"]],
                             context_variables: ContextVariables, cmbagent_instance) -> ReplyResult:
@@ -75,7 +79,7 @@ def record_plan_constraints(needed_agents: List[Literal["engineer", "researcher"
     context_variables["needed_agents"] = needed_agents
 
     str_to_append = f"The plan must strictly involve only the following agents: {', '.join(needed_agents)}\n"
-    
+
     str_to_append += r"""
 **AGENT ROLES**
 Here are the descriptions of the agents that are needed to carry out the plan:
@@ -102,24 +106,25 @@ def record_review(plan_review: str, context_variables: ContextVariables, cmbagen
     """Record reviews of the plan."""
     planner = cmbagent_instance.get_agent_from_name('planner')
     terminator = cmbagent_instance.get_agent_from_name('terminator')
-    
-    # DEBUG: Track record_review calls
-    print(f"[DEBUG record_review] Called. feedback_left BEFORE={context_variables.get('feedback_left', 'MISSING')}")
-    
+
+    logger.debug("record_review_called",
+                 feedback_left_before=context_variables.get('feedback_left', 'MISSING'))
+
     context_variables["reviews"].append(plan_review)
     context_variables["feedback_left"] -= 1
-    
+
     # Guard against going negative
     if context_variables["feedback_left"] < 0:
         context_variables["feedback_left"] = 0
 
     context_variables["recommendations"] = plan_review
-    
-    print(f"[DEBUG record_review] feedback_left AFTER={context_variables.get('feedback_left', 'MISSING')}")
-    
+
+    logger.debug("record_review_updated",
+                 feedback_left_after=context_variables.get('feedback_left', 'MISSING'))
+
     # If no feedback left, terminate instead of going back to planner
     if context_variables["feedback_left"] <= 0:
-        print(f"[DEBUG record_review] Terminating - going to terminator")
+        logger.debug("record_review_terminating", target="terminator")
         context_variables["final_plan"] = context_variables.get("proposed_plan", context_variables["plans"][-1] if context_variables["plans"] else "")
         return ReplyResult(
             target=AgentTarget(terminator),
@@ -127,12 +132,12 @@ def record_review(plan_review: str, context_variables: ContextVariables, cmbagen
             context_variables=context_variables
         )
 
-    print(f"[DEBUG record_review] Continuing - going back to planner")
+    logger.debug("record_review_continuing", target="planner")
     return ReplyResult(
         target=AgentTarget(planner),  ## transfer back to planner
         message=f"""
-Recommendations have been logged.  
-Number of feedback rounds left: {context_variables["feedback_left"]}. 
+Recommendations have been logged.
+Number of feedback rounds left: {context_variables["feedback_left"]}.
 Now, update the plan accordingly, planner!""",
         context_variables=context_variables
     )
@@ -144,26 +149,26 @@ def setup_planning_functions(cmbagent_instance, cmbagent_disable_display: bool):
     plan_recorder = cmbagent_instance.get_agent_from_name('plan_recorder')
     plan_setter = cmbagent_instance.get_agent_from_name('plan_setter')
     review_recorder = cmbagent_instance.get_agent_from_name('review_recorder')
-    
+
     # Create closures to bind cmbagent_instance
     def record_improved_task_closure(improved_main_task: str, context_variables: ContextVariables) -> ReplyResult:
         return record_improved_task(improved_main_task, context_variables, cmbagent_instance, cmbagent_disable_display)
-    
+
     def record_plan_closure(plan_suggestion: str, number_of_steps_in_plan: int, context_variables: ContextVariables) -> ReplyResult:
         return record_plan(plan_suggestion, number_of_steps_in_plan, context_variables, cmbagent_instance)
-    
-    def record_plan_constraints_closure(needed_agents: List[Literal["engineer", "researcher", "idea_maker", "idea_hater", 
+
+    def record_plan_constraints_closure(needed_agents: List[Literal["engineer", "researcher", "idea_maker", "idea_hater",
                                                                      "camb_agent", "camb_context", "classy_context",
                                                                      "classy_sz_agent", "planck_agent", "aas_keyword_finder"]],
                                        context_variables: ContextVariables) -> ReplyResult:
         return record_plan_constraints(needed_agents, context_variables, cmbagent_instance)
-    
+
     def record_review_closure(plan_review: str, context_variables: ContextVariables) -> ReplyResult:
         return record_review(plan_review, context_variables, cmbagent_instance)
-    
+
     # Register task recording
     task_recorder._add_single_function(record_improved_task_closure)
-    
+
     # Register plan recording
     register_function(
         record_plan_closure,
@@ -172,25 +177,25 @@ def setup_planning_functions(cmbagent_instance, cmbagent_disable_display: bool):
         description=r"""
         Records a suggested plan and updates relevant execution context.
 
-        This function logs a full plan suggestion into the `context_variables` dictionary. If no feedback 
-        remains to be given (i.e., `context_variables["feedback_left"] == 0`), the most recent plan 
-        suggestion is marked as the final plan. The function also updates the total number of steps in 
+        This function logs a full plan suggestion into the `context_variables` dictionary. If no feedback
+        remains to be given (i.e., `context_variables["feedback_left"] == 0`), the most recent plan
+        suggestion is marked as the final plan. The function also updates the total number of steps in
         the plan.
 
-        The function ensures that the plan is properly stored and transferred to the `plan_reviewer` agent 
+        The function ensures that the plan is properly stored and transferred to the `plan_reviewer` agent
         for further evaluation.
 
         Args:
             plan_suggestion (str): The complete plan suggestion to be recorded.
             number_of_steps_in_plan (int): The total number of **Steps** in the suggested plan.
-            context_variables (dict): A dictionary maintaining execution context, including previous plans, 
+            context_variables (dict): A dictionary maintaining execution context, including previous plans,
                 feedback tracking, and finalized plans.
         """,
     )
-    
+
     # Register plan constraints
     plan_setter._add_single_function(record_plan_constraints_closure)
-    
+
     # Register review recording
     register_function(
         record_review_closure,

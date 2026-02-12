@@ -20,6 +20,10 @@ import copy
 import json
 import pickle
 import re
+import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.phases.execution_manager import PhaseExecutionManager
@@ -337,7 +341,7 @@ class ControlPhase(Phase):
                         pickle.dumps(value)
                         filtered_context[key] = value
                     except (TypeError, pickle.PicklingError, AttributeError):
-                        print(f"[Control] Skipping non-picklable context key: {key}")
+                        logger.debug("Skipping non-picklable context key: %s", key)
                 
                 with open(context_path, 'wb') as f:
                     pickle.dump(filtered_context, f)
@@ -359,7 +363,7 @@ class ControlPhase(Phase):
                 # Display cost
                 cmbagent.display_cost(name_append=f"step_{step}")
 
-                print(f"\nStep {step} completed in {exec_time:.4f} seconds\n")
+                logger.info("Step %d completed in %.4f seconds", step, exec_time)
 
             # Build output
             output_data = {
@@ -380,8 +384,7 @@ class ControlPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
-            import traceback
-            traceback.print_exc()
+            logger.error("Control phase failed: %s", e, exc_info=True)
             return manager.fail(str(e), traceback.format_exc())
 
     def validate_input(self, context: PhaseContext) -> List[str]:

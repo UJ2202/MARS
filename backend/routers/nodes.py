@@ -6,6 +6,9 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
+from core.logging import get_logger
+logger = get_logger(__name__)
+
 router = APIRouter(prefix="/api", tags=["Nodes"])
 
 # Import services at runtime
@@ -60,7 +63,7 @@ async def get_node_events(
         effective_run_id = None
         if run_id:
             effective_run_id = _resolve_run_id(run_id)
-            print(f"[API] Resolved task_id {run_id} to db_run_id {effective_run_id}")
+            logger.debug("resolved_run_id", task_id=run_id, db_run_id=effective_run_id)
 
         # If no run_id provided, try to find the node and get its run_id
         if not effective_run_id:
@@ -71,11 +74,11 @@ async def get_node_events(
 
             if dag_node:
                 effective_run_id = dag_node.run_id
-                print(f"[API] Found node {node_id} in run {effective_run_id} (most recent)")
+                logger.debug("node_found_in_run", node_id=node_id, run_id=effective_run_id)
 
         # Require run_id for accurate filtering
         if not effective_run_id:
-            print(f"[API] ERROR: No run_id found for node {node_id}")
+            logger.warning("no_run_id_for_node", node_id=node_id)
             return {
                 "node_id": node_id,
                 "total_events": 0,
@@ -129,9 +132,7 @@ async def get_node_events(
         }
 
     except Exception as e:
-        print(f"[API] Error getting node events for {node_id}: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("node_events_failed", node_id=node_id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -160,7 +161,7 @@ async def get_node_execution_summary(node_id: str, run_id: Optional[str] = None)
 
             if dag_node:
                 run_id = dag_node.run_id
-                print(f"[API] Found node {node_id} in run {run_id} (most recent)")
+                logger.debug("node_found_in_run", node_id=node_id, run_id=run_id)
 
         session_manager = SessionManager(db)
         session_id = session_manager.get_or_create_default_session()

@@ -4,7 +4,10 @@ Control workflow implementation using phase-based architecture.
 
 import os
 import uuid
+import logging
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.utils import (
     work_dir_default,
@@ -129,21 +132,17 @@ def control(
     executor.phases[0].config.params['preloaded_plan'] = plan_steps
 
     # Run workflow
-    print(f"\n{'=' * 60}")
-    print("Control Only Workflow")
-    print(f"{'=' * 60}")
-    print(f"Task: {task[:100]}...")
-    print(f"Plan steps: {len(plan_steps)}")
-    print(f"{'=' * 60}\n")
+    logger.info(
+        "Control Only Workflow | Task: %s | Plan steps: %s",
+        task[:100], len(plan_steps),
+    )
 
     try:
         result = executor.run_sync()
         return _convert_workflow_result_to_legacy(result, executor)
 
     except Exception as e:
-        print(f"\nWorkflow failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Workflow failed: %s", e, exc_info=True)
         raise
 
 

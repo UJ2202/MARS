@@ -32,6 +32,9 @@ All workflows now use the phase-based architecture for consistency.
 """
 
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Utilities
 from cmbagent.workflows.utils import (
@@ -88,20 +91,18 @@ try:
         copilot_async,
         continue_copilot,
         continue_copilot_sync,
-        get_active_copilot_sessions,
         quick_task,
         planned_task,
         interactive_session,
     )
 except ImportError as e:
-    print(f"Warning: Could not import copilot workflows: {e}")
+    logger.warning("Could not import copilot workflows: %s", e)
     # Define placeholder functions
     def copilot(*args, **kwargs):
         raise NotImplementedError("Copilot workflows require the orchestrator module")
     copilot_async = copilot
     continue_copilot = copilot
     continue_copilot_sync = copilot
-    get_active_copilot_sessions = lambda: {}
     quick_task = copilot
     planned_task = copilot
     interactive_session = copilot
@@ -113,20 +114,18 @@ try:
         swarm_copilot_async,
         continue_swarm_copilot,
         continue_swarm_copilot_sync,
-        get_active_sessions,
         quick_swarm,
         full_swarm,
         interactive_swarm,
     )
 except ImportError as e:
-    print(f"Warning: Could not import swarm_copilot workflows: {e}")
+    logger.warning("Could not import swarm_copilot workflows: %s", e)
     # Define placeholder functions
     def swarm_copilot(*args, **kwargs):
         raise NotImplementedError("Swarm Copilot workflows require the orchestrator module")
     swarm_copilot_async = swarm_copilot
     continue_swarm_copilot = swarm_copilot
     continue_swarm_copilot_sync = swarm_copilot
-    get_active_sessions = lambda: {}
     quick_swarm = swarm_copilot
     full_swarm = swarm_copilot
     interactive_swarm = swarm_copilot
@@ -173,7 +172,6 @@ __all__ = [
     'copilot_async',
     'continue_copilot',
     'continue_copilot_sync',
-    'get_active_copilot_sessions',
     'quick_task',
     'planned_task',
     'interactive_session',
@@ -182,7 +180,6 @@ __all__ = [
     'swarm_copilot_async',
     'continue_swarm_copilot',
     'continue_swarm_copilot_sync',
-    'get_active_sessions',
     'quick_swarm',
     'full_swarm',
     'interactive_swarm',

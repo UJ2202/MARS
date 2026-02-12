@@ -1,12 +1,14 @@
 import os
 import importlib
+import logging
 from openai import OpenAI
 from .cmbagent_utils import cmbagent_debug
 import requests
-import pprint
 from .utils import path_to_assistants,default_chunking_strategy,YAML,update_yaml_preserving_format
 
-def import_rag_agents():        
+logger = logging.getLogger(__name__)
+
+def import_rag_agents():
     imported_rag_agents = {}
     for filename in os.listdir(path_to_assistants):
         if filename.endswith(".py") and filename != "__init__.py" and filename[0] != ".":
@@ -46,11 +48,7 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
 
             if 'file_search' in agent.info['assistant_config']['tool_resources'].keys():
                 if cmbagent_debug:
-                    print(f"Updating vector store for {agent.info['name']}")
-
-                # print(agent.info['assistant_config']['assistant_id'])
-
-                # print(agent.info['assistant_config']['tool_resources']['file_search'])
+                    logger.debug("Updating vector store for %s", agent.info['name'])
 
                 store_names.append(f"{agent.info['name']}_store")
 
@@ -78,7 +76,7 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
 
     else:
 
-        print("Failed to retrieve vector stores:", response.status_code, response.text)
+        logger.error("Failed to retrieve vector stores: %s %s", response.status_code, response.text)
 
 
     # 3. delete old vector stores if they exist and write new ones
@@ -87,15 +85,11 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
     vector_store_ids = {}
     for vector_store_name,rag_agent in zip(store_names,rag_agents):
 
-        # print('dealing with: ',vector_store_name)
-
         matching_vector_store_ids = [
             store['id'] for store in vector_stores['data'] if store['name'] == vector_store_name
         ]
 
         if matching_vector_store_ids:
-
-            # print(f"Vector store IDs for '{vector_store_name}':", matching_vector_store_ids)
 
             for vector_store_id in matching_vector_store_ids:
 
@@ -108,35 +102,24 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
                 # Check if the request was successful
                 if delete_response.status_code == 200:
 
-                    # print(f"Vector store with ID '{vector_store_id}' deleted successfully.")
-
                     continue
 
                 else:
 
-                    print("Failed to delete vector store:", delete_response.status_code, delete_response.text)
+                    logger.error("Failed to delete vector store: %s %s", delete_response.status_code, delete_response.text)
 
         else:
 
             if cmbagent_debug:
-                print(f"No vector stores found with the name '{vector_store_name}'.")
+                logger.debug("No vector stores found with the name '%s'", vector_store_name)
 
-        # print()
-
-        # print(rag_agent.name)
         chunking_strategy = chunking_strategy[rag_agent.name] if chunking_strategy and rag_agent.name in chunking_strategy else default_chunking_strategy
         if verbose or cmbagent_debug:
-            print(f"{rag_agent.name}: chunking strategy: ")
-            pprint.pprint(chunking_strategy)
-        # print()
+            logger.debug("%s: chunking strategy: %s", rag_agent.name, chunking_strategy)
 
-        # print('calling client.beta.vector_stores.create')
         # Create a vector store called "planck_store"
         vector_store = client.vector_stores.create(name=vector_store_name,
                                                         chunking_strategy=chunking_strategy)
-
-        # print('created vector store with id: ',vector_store.id)
-        # print('\n')
 
         # Initialize a list to hold the file paths
         file_paths = []
@@ -145,7 +128,7 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
 
 
         if cmbagent_debug:
-            print("Files to upload:")
+            logger.debug("Files to upload:")
         for root, dirs, files in os.walk(assistant_data):
             # Filter out unwanted directories like .ipynb_checkpoints
             dirs[:] = [d for d in dirs if not d.startswith('.')]
@@ -157,7 +140,7 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
                     continue
 
                 if cmbagent_debug:
-                    print(f"\t - {file}")
+                    logger.debug("\t - %s", file)
 
                 # Get the absolute path of each file
                 file_paths.append(os.path.join(root, file))
@@ -175,24 +158,23 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
 
         # You can print the status and the file counts of the batch to see the result of this operation.
         if cmbagent_debug:
-            print(file_batch.status)
-            print(file_batch.file_counts)
+            logger.debug("File batch status: %s", file_batch.status)
+            logger.debug("File batch counts: %s", file_batch.file_counts)
 
         rag_agent.info['assistant_config']['tool_resources']['file_search']['vector_store_ids'] = [vector_store.id]
 
         if cmbagent_debug:
-            print(f'{rag_agent.name}: uploaded assistant data to vector store with id: ',vector_store.id)
-            print('\n')
+            logger.debug("%s: uploaded assistant data to vector store with id: %s", rag_agent.name, vector_store.id)
         new_vector_store_ids = {rag_agent.name : vector_store.id}
         vector_store_ids.update(new_vector_store_ids)
 
     cmbagent_instance.vector_store_ids = vector_store_ids
 
     if cmbagent_debug:
-        print("vector stores updated")
+        logger.debug("vector stores updated")
 
         for key, value in cmbagent_instance.vector_store_ids.items():
-            print(f"'{key}': '{value}',")
+            logger.debug("'%s': '%s'", key, value)
 
     # vector_store_ids = self.vector_store_ids
 
@@ -250,7 +232,7 @@ class {agent_name.capitalize()}Agent(BaseAgent):
         yaml = YAML()
         yaml.preserve_quotes = True
         yaml.indent(mapping=2, sequence=4, offset=2)
-        
+
         yaml_file_path = os.path.join(path_to_assistants, f"{agent_name}.yaml")
 
         yaml_content = {
@@ -276,19 +258,19 @@ class {agent_name.capitalize()}Agent(BaseAgent):
                 "admin"
             ]
         }
-        
+
         with open(yaml_file_path, "w") as f:
             yaml.dump(yaml_content, f)
 
-        print(f"Created {agent_name} agent files: {agent_file_path} and {yaml_file_path}")
+        logger.info("Created %s agent files: %s and %s", agent_name, agent_file_path, yaml_file_path)
         # Create a folder for the agent's data
         # agent_data_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data', agent_name)
         dir_path = os.getenv('CMBAGENT_DATA')
         agent_data_folder = os.path.join(dir_path, 'data', agent_name)
-        print(f"Creating data folder for {agent_name} agent: {agent_data_folder}")
+        logger.info("Creating data folder for %s agent: %s", agent_name, agent_data_folder)
         os.makedirs(agent_data_folder, exist_ok=True)
-        print(f"Created data folder for {agent_name} agent: {agent_data_folder}")
-        print(f"Please deposit any relevant files for the {agent_name} agent in this folder.")
+        logger.info("Created data folder for %s agent: %s", agent_name, agent_data_folder)
+        logger.info("Please deposit any relevant files for the %s agent in this folder.", agent_name)
 
     # Return a dictionary with the full paths to the agent data folders
     data_folders = {}
@@ -299,4 +281,3 @@ class {agent_name.capitalize()}Agent(BaseAgent):
         if os.path.isdir(full_path):
             data_folders[agent_folder] = full_path
     return data_folders
-

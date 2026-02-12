@@ -4,7 +4,10 @@ Debug utilities for handoff registration.
 Provides debug printing and logging functionality.
 """
 
+import logging
 from ..cmbagent_utils import cmbagent_debug
+
+logger = logging.getLogger(__name__)
 
 
 def is_debug_enabled() -> bool:
@@ -24,13 +27,13 @@ def debug_print(message: str, indent: int = 1):
         return
 
     if indent == 0:
-        print(message)
+        logger.debug("handoff_debug", message=message)
     elif indent == 1:
-        print(f'→ {message}')
+        logger.debug("handoff_debug", message=message, indent="arrow")
     elif indent == 2:
-        print(f'  ✓ {message}')
+        logger.debug("handoff_debug", message=message, indent="check")
     else:
-        print(f'{"  " * indent}{message}')
+        logger.debug("handoff_debug", message=message, indent_level=indent)
 
 
 def debug_section(title: str):
@@ -43,8 +46,4 @@ def debug_section(title: str):
     if not cmbagent_debug:
         return
 
-    print('\n' + '=' * 60)
-    print(title)
-    print('=' * 60)
-    if not title.startswith('ALL'):
-        print()
+    logger.debug("handoff_debug_section", title=title)

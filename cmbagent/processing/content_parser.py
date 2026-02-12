@@ -4,6 +4,7 @@ Content parsing utilities for document processing.
 This module provides functions to parse formatted content and collect markdown files.
 """
 
+import logging
 import os
 import re
 import glob
@@ -11,6 +12,8 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def parse_formatted_content(content: str) -> Optional[Dict[str, Any]]:
@@ -127,7 +130,7 @@ def parse_formatted_content(content: str) -> Optional[Dict[str, Any]]:
                 summary_data['data_analysis_methods'] = []
 
     except Exception as e:
-        print(f"Warning: Error parsing formatted content: {e}")
+        logger.warning("formatted_content_parse_error", error=str(e))
         return None
 
     return summary_data if summary_data else None
@@ -215,7 +218,7 @@ def process_single_markdown_with_error_handling(
         )
         end_time = time.time()
         execution_time_summarization = end_time - start_time
-        print(f"Execution time summarization: {execution_time_summarization}")
+        logger.info("summarization_timing", execution_time_seconds=execution_time_summarization)
 
         # Save the timing report
         timing_report = {
@@ -226,7 +229,7 @@ def process_single_markdown_with_error_handling(
         os.makedirs(os.path.dirname(timing_path), exist_ok=True)
         with open(timing_path, 'w') as f:
             json.dump(timing_report, f, indent=2)
-        print(f"Timing report saved to {timing_path}")
+        logger.debug("timing_report_saved", path=timing_path)
 
         return {
             "markdown_path": str(markdown_path),

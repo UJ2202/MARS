@@ -1,5 +1,6 @@
 """Main coordinator for registering all functions to agents."""
 
+import logging
 from ..cmbagent_utils import cmbagent_disable_display
 from .ideas import setup_idea_functions
 from .keywords import setup_keyword_functions
@@ -7,6 +8,8 @@ from .planning import setup_planning_functions
 from .execution_control import setup_execution_control_functions
 from .status import setup_status_functions
 from .copilot import setup_copilot_functions
+
+logger = logging.getLogger(__name__)
 
 
 def register_functions_to_agents(cmbagent_instance):
@@ -44,7 +47,7 @@ def register_functions_to_agents(cmbagent_instance):
     classy_context = cmbagent_instance.get_agent_from_name('classy_context')
     plot_judge = cmbagent_instance.get_agent_from_name('plot_judge')
     plot_debugger = cmbagent_instance.get_agent_from_name('plot_debugger')
-    
+
     if not cmbagent_instance.skip_rag_agents:
         classy_sz = cmbagent_instance.get_agent_from_name('classy_sz_agent')
         classy_sz_response_formatter = cmbagent_instance.get_agent_from_name('classy_sz_response_formatter')
@@ -58,22 +61,19 @@ def register_functions_to_agents(cmbagent_instance):
     if getattr(cmbagent_instance, 'enable_ag2_free_tools', True):
         try:
             from cmbagent.external_tools.ag2_free_tools import AG2FreeToolsLoader
-            
-            print("\n" + "="*70)
-            print("Loading AG2 Free Tools for all agents...")
-            print("="*70)
-            
+
+            logger.info("loading_ag2_free_tools")
+
             # Initialize the loader
             loader = AG2FreeToolsLoader()
-            
+
             # Load all free tools (both LangChain and CrewAI)
             all_tools = loader.load_all_free_tools()
             combined_tools = loader.get_combined_tool_list()
-            
+
             if combined_tools:
-                print(f"\n✓ Loaded {len(combined_tools)} free tools total")
-                print("  Registering with all agents...")
-                
+                logger.info("ag2_free_tools_loaded", tool_count=len(combined_tools))
+
                 # List of agents that should have access to external tools
                 agents_for_tools = [
                     planner, researcher, web_surfer, retrieve_assistant, engineer, executor, control, admin,
@@ -81,42 +81,36 @@ def register_functions_to_agents(cmbagent_instance):
                     review_recorder, installer, idea_maker, idea_saver,
                     camb_context, classy_context, plot_judge, plot_debugger,
                 ]
-                
+
                 # Add RAG agents if available
                 if not cmbagent_instance.skip_rag_agents:
                     agents_for_tools.extend([classy_sz, camb, planck])
-                
+
                 # Register tools with all agents
                 for agent in agents_for_tools:
                     try:
                         for tool in combined_tools:
                             agent.register_for_llm()(tool)
                     except Exception as e:
-                        print(f"  ⚠ Could not register tools with {agent.name}: {e}")
-                
+                        logger.warning("agent_tool_registration_failed", agent=agent.name, error=str(e))
+
                 # Register tools for execution with executor
                 try:
                     for tool in combined_tools:
                         executor.register_for_execution()(tool)
-                    print(f"  ✓ Registered {len(combined_tools)} tools for execution with executor")
+                    logger.info("tools_registered_for_execution", tool_count=len(combined_tools), executor="executor")
                 except Exception as e:
-                    print(f"  ⚠ Could not register tools for execution: {e}")
-                
-                print("="*70 + "\n")
+                    logger.warning("executor_tool_registration_failed", error=str(e))
             else:
-                print("  ⚠ No tools loaded. Install dependencies with: pip install -e '.[external-tools]'")
-                print("="*70 + "\n")
-                
+                logger.warning("no_ag2_tools_loaded", hint="Install dependencies with: pip install -e '.[external-tools]'")
+
         except ImportError as e:
-            print(f"\n⚠ AG2 free tools not available: {e}")
-            print("  Install with: pip install -e '.[external-tools]'")
-            print("  Or: ./install_ag2_tools.sh\n")
+            logger.warning("ag2_free_tools_unavailable", error=str(e), hint="pip install -e '.[external-tools]'")
         except Exception as e:
-            print(f"\n⚠ Error loading AG2 free tools: {e}")
-            print("  Continuing without external tools...\n")
+            logger.warning("ag2_free_tools_load_error", error=str(e), action="continuing_without_external_tools")
     else:
-        print("\n⚠ AG2 free tools disabled (enable_ag2_free_tools=False)\n")
-    
+        logger.info("ag2_free_tools_disabled")
+
     # =============================================================================
     # END AG2 FREE TOOLS INTEGRATION
     # =============================================================================
@@ -126,16 +120,14 @@ def register_functions_to_agents(cmbagent_instance):
     # =============================================================================
     if getattr(cmbagent_instance, 'enable_mcp_client', False) and cmbagent_instance.mcp_tool_integration:
         try:
-            print("\n" + "="*70)
-            print("Registering MCP Tools with all agents...")
-            print("="*70)
-            
+            logger.info("registering_mcp_tools")
+
             # Get all discovered MCP tools
             mcp_tools = cmbagent_instance.mcp_client_manager.get_all_tools()
-            
+
             if mcp_tools:
-                print(f"\n✓ Discovered {len(mcp_tools)} MCP tools")
-                
+                logger.info("mcp_tools_discovered", tool_count=len(mcp_tools))
+
                 # Group by server for display
                 tools_by_server = {}
                 for tool in mcp_tools:
@@ -143,10 +135,10 @@ def register_functions_to_agents(cmbagent_instance):
                     if server not in tools_by_server:
                         tools_by_server[server] = []
                     tools_by_server[server].append(tool['name'])
-                
+
                 for server_name, tool_names in tools_by_server.items():
-                    print(f"  {server_name}: {len(tool_names)} tools")
-                
+                    logger.debug("mcp_server_tools", server=server_name, tool_count=len(tool_names))
+
                 # List of agents that should have access to MCP tools
                 agents_for_mcp = [
                     planner, researcher, web_surfer, retrieve_assistant, engineer, executor, control, admin,
@@ -154,11 +146,11 @@ def register_functions_to_agents(cmbagent_instance):
                     review_recorder, installer, idea_maker, idea_saver,
                     camb_context, classy_context, plot_judge, plot_debugger,
                 ]
-                
+
                 # Add RAG agents if available
                 if not cmbagent_instance.skip_rag_agents:
                     agents_for_mcp.extend([classy_sz, camb, planck])
-                
+
                 # Register MCP tools with all agents
                 total_registered = 0
                 for agent in agents_for_mcp:
@@ -166,20 +158,16 @@ def register_functions_to_agents(cmbagent_instance):
                         count = cmbagent_instance.mcp_tool_integration.register_tools_with_agent(agent)
                         total_registered += count
                     except Exception as e:
-                        print(f"  ⚠ Could not register MCP tools with {agent.name}: {e}")
-                
-                print(f"  ✓ Registered MCP tools with {len(agents_for_mcp)} agents")
-                print("="*70 + "\n")
+                        logger.warning("mcp_agent_tool_registration_failed", agent=agent.name, error=str(e))
+
+                logger.info("mcp_tools_registered", agent_count=len(agents_for_mcp))
             else:
-                print("  ⚠ No MCP tools discovered. Check server configuration.")
-                print("="*70 + "\n")
-                
+                logger.warning("no_mcp_tools_discovered", hint="Check server configuration")
+
         except Exception as e:
-            print(f"\n⚠ Error registering MCP tools: {e}")
-            print("  Continuing without MCP tools...\n")
+            logger.warning("mcp_tools_registration_error", error=str(e), action="continuing_without_mcp_tools")
     elif getattr(cmbagent_instance, 'enable_mcp_client', False):
-        print("\n⚠ MCP client enabled but not initialized properly")
-        print("  Check MCP configuration and dependencies\n")
+        logger.warning("mcp_client_not_initialized", hint="Check MCP configuration and dependencies")
     # =============================================================================
     # END MCP CLIENT INTEGRATION
     # =============================================================================

@@ -1,5 +1,6 @@
 # CMBAGENT_GUI.py
 
+import logging
 import streamlit as st
 import os
 import re
@@ -25,6 +26,8 @@ from json import JSONDecodeError
 import unicodedata
 import time
 from collections import deque
+
+logger = logging.getLogger(__name__)
 
 os.environ["CMBAGENT_DEBUG"] = "false"
 os.environ["CMBAGENT_DISABLE_DISPLAY"] = "true"
@@ -459,7 +462,7 @@ def main():
         except JSONDecodeError:
             broken = fn + ".broken"
             shutil.move(fn, broken)
-            print(f"⚠️  History file was corrupt – renamed to {broken}")
+            logger.warning("chat_history_corrupt", broken_file=broken)
             return []
 
         # if we see our 3-key wrapper, peel off page + chat_mode
@@ -1419,7 +1422,7 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
                     img = Image.open(p)
                     to_display.append(("file", img))
                 except Exception as e:
-                    print(f"⚠️  Could not open {p}: {e}")
+                    logger.warning("image_open_failed", path=p, error=str(e))
             # -----------------------------------------------------------------------
 
             # ——— also load any .md files from ./output (without clearing to_display) ———

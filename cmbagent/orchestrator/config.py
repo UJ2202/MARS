@@ -37,10 +37,10 @@ class OrchestratorConfig:
     enable_logging: bool = True
     enable_metrics: bool = True
 
-    # Directories
-    log_dir: Optional[Path] = field(default_factory=lambda: Path("./orchestrator_logs"))
-    dag_output_dir: Optional[Path] = field(default_factory=lambda: Path("./orchestrator_dags"))
-    checkpoint_dir: Optional[Path] = field(default_factory=lambda: Path("./orchestrator_checkpoints"))
+    # Directories (resolved relative to work_dir at runtime via resolve_dirs())
+    log_dir: Optional[Path] = None
+    dag_output_dir: Optional[Path] = None
+    checkpoint_dir: Optional[Path] = None
 
     # Execution behavior
     max_retries: int = 3
@@ -74,18 +74,28 @@ class OrchestratorConfig:
     db_connection_string: Optional[str] = None
 
     def __post_init__(self):
-        """Create directories if they don't exist."""
-        if self.enable_logging and self.log_dir:
-            self.log_dir = Path(self.log_dir)
-            self.log_dir.mkdir(parents=True, exist_ok=True)
+        """Validate config. Directory creation deferred to resolve_dirs()."""
+        pass
 
-        if self.save_dag_visualization and self.dag_output_dir:
-            self.dag_output_dir = Path(self.dag_output_dir)
-            self.dag_output_dir.mkdir(parents=True, exist_ok=True)
+    def resolve_dirs(self, work_dir: str) -> None:
+        """Resolve and create orchestrator directories inside work_dir.
 
-        if self.checkpoint_interval > 0 and self.checkpoint_dir:
-            self.checkpoint_dir = Path(self.checkpoint_dir)
-            self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        Args:
+            work_dir: The task's working directory (e.g., ~/Desktop/cmbdir/{task_id})
+        """
+        if self.enable_logging and self.log_dir is None:
+            self.log_dir = Path(work_dir) / "orchestrator_logs"
+
+        if self.save_dag_visualization and self.dag_output_dir is None:
+            self.dag_output_dir = Path(work_dir) / "orchestrator_dags"
+
+        if self.checkpoint_interval > 0 and self.checkpoint_dir is None:
+            self.checkpoint_dir = Path(work_dir) / "checkpoints"
+
+        # Create directories
+        for d in (self.log_dir, self.dag_output_dir, self.checkpoint_dir):
+            if d is not None:
+                Path(d).mkdir(parents=True, exist_ok=True)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -93,8 +103,8 @@ class OrchestratorConfig:
             'enable_dag_tracking': self.enable_dag_tracking,
             'enable_logging': self.enable_logging,
             'enable_metrics': self.enable_metrics,
-            'log_dir': str(self.log_dir),
-            'dag_output_dir': str(self.dag_output_dir),
+            'log_dir': str(self.log_dir) if self.log_dir else None,
+            'dag_output_dir': str(self.dag_output_dir) if self.dag_output_dir else None,
             'max_retries': self.max_retries,
             'retry_delay': self.retry_delay,
             'pass_context_by_default': self.pass_context_by_default,

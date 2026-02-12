@@ -4,7 +4,10 @@ One-shot workflow implementation using phase-based architecture.
 
 import os
 import uuid
+import logging
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from cmbagent.utils import (
     work_dir_default,
@@ -112,20 +115,14 @@ def one_shot(
     )
 
     # Run workflow
-    print(f"\n{'=' * 60}")
-    print(f"One Shot Workflow ({agent})")
-    print(f"{'=' * 60}")
-    print(f"Task: {task[:100]}...")
-    print(f"{'=' * 60}\n")
+    logger.info("One Shot Workflow (%s) | Task: %s", agent, task[:100])
 
     try:
         result = executor.run_sync()
         return _convert_workflow_result_to_legacy(result, executor)
 
     except Exception as e:
-        print(f"\nWorkflow failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error("Workflow failed: %s", e, exc_info=True)
         raise
 
 

@@ -42,7 +42,9 @@ from .hitl import (
     disable_hitl_checkpoints,
     configure_admin_for_websocket,
     enable_websocket_for_hitl,
+    configure_admin_for_copilot_tool_approval,
 )
+from .copilot_handoffs import register_copilot_mode_handoffs
 from .debug import debug_print, debug_section, is_debug_enabled
 
 
@@ -52,7 +54,8 @@ from .debug import debug_print, debug_section, is_debug_enabled
 
 def register_all_hand_offs(
     cmbagent_instance,
-    hitl_config: Optional[Dict] = None
+    hitl_config: Optional[Dict] = None,
+    copilot_config: Optional[Dict] = None,
 ):
     """
     Register all agent handoffs for the CMBAgent instance.
@@ -125,6 +128,10 @@ def register_all_hand_offs(
     if hitl_config:
         register_hitl_handoffs(agents, hitl_config)
 
+    # Copilot-specific handoffs (tool approval with human in exec chain)
+    if copilot_config:
+        register_copilot_mode_handoffs(agents, copilot_config)
+
     if is_debug_enabled():
         debug_section('ALL HANDOFFS REGISTERED SUCCESSFULLY')
 
@@ -134,5 +141,7 @@ __all__ = [
     'register_all_hand_offs',
     'configure_hitl_checkpoints',
     'disable_hitl_checkpoints',
-    'get_all_agents',  # Also export for advanced usage
+    'configure_admin_for_copilot_tool_approval',
+    'register_copilot_mode_handoffs',
+    'get_all_agents',
 ]

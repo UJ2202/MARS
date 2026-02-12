@@ -4,6 +4,7 @@ Document summarization functionality for CMBAgent.
 This module provides functions to summarize single documents and batches of documents.
 """
 
+import logging
 import os
 import json
 import time
@@ -19,6 +20,8 @@ from cmbagent.processing.content_parser import (
     collect_markdown_files,
     process_single_markdown_with_error_handling,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def summarize_document(
@@ -112,12 +115,12 @@ def summarize_document(
             summary_file = os.path.join(work_dir, 'document_summary.json')
             with open(summary_file, 'w', encoding='utf-8') as f:
                 json.dump(document_summary, f, indent=2, ensure_ascii=False)
-            print(f"Document summary saved to: {summary_file}")
+            logger.info("document_summary_saved", path=summary_file)
         except Exception as e:
-            print(f"Warning: Could not save document_summary.json: {e}")
+            logger.warning("document_summary_save_failed", error=str(e))
 
-    # Pretty print the document_summary
-    print(json.dumps(document_summary, indent=4))
+    # Log the document_summary
+    logger.debug("document_summary_result", summary=json.dumps(document_summary, indent=4))
 
     # Delete codebase and database folders as they are not needed
     shutil.rmtree(os.path.join(work_dir, final_context['codebase_path']), ignore_errors=True)
@@ -160,15 +163,13 @@ def summarize_documents(
     if not os.path.isdir(folder_path):
         raise ValueError(f"Path is not a directory: {folder_path}")
 
-    print(f"📁 Scanning folder: {folder_path}")
-    print(f"🔍 Max depth: {max_depth}")
-    print(f"👥 Max workers: {max_workers}")
+    logger.info("scanning_folder", folder=folder_path, max_depth=max_depth, max_workers=max_workers)
 
     # Collect all markdown files
     markdown_files = collect_markdown_files(folder_path, max_depth)
 
     if not markdown_files:
-        print("⚠️ No markdown files found in the specified folder.")
+        logger.warning("no_markdown_files_found", folder=folder_path)
         return {
             "processed_files": 0,
             "failed_files": 0,
@@ -178,7 +179,7 @@ def summarize_documents(
             "work_dir_base": str(work_dir_base)
         }
 
-    print(f"📄 Found {len(markdown_files)} markdown files")
+    logger.info("markdown_files_found", count=len(markdown_files))
 
     # Create base work directory
     work_dir_base = os.path.abspath(os.path.expanduser(str(work_dir_base)))
@@ -221,15 +222,15 @@ def summarize_documents(
                 result = future.result()
                 if result.get("success", False):
                     results["processed_files"] += 1
-                    print(f"✓ Processed [{index:02d}]: {Path(markdown_path).name}")
+                    logger.info("document_processed", index=index, filename=Path(markdown_path).name)
                 else:
                     results["failed_files"] += 1
-                    print(f"✗ Failed [{index:02d}]: {Path(markdown_path).name} - {result.get('error', 'Unknown error')}")
+                    logger.warning("document_processing_failed", index=index, filename=Path(markdown_path).name, error=result.get('error', 'Unknown error'))
 
                 results["results"].append(result)
             except Exception as e:
                 results["failed_files"] += 1
-                print(f"✗ Failed [{index:02d}]: {Path(markdown_path).name} - {str(e)}")
+                logger.warning("document_processing_failed", index=index, filename=Path(markdown_path).name, error=str(e))
                 results["results"].append({
                     "markdown_path": str(markdown_path),
                     "index": index,
@@ -240,11 +241,7 @@ def summarize_documents(
     end_time = time.time()
     total_time = end_time - start_time
 
-    print(f"\n📋 Processing complete:")
-    print(f"  Successfully processed: {results['processed_files']} files")
-    print(f"  Failed: {results['failed_files']} files")
-    print(f"  Total time: {total_time:.2f} seconds")
-    print(f"  Output directory: {results['work_dir_base']}")
+    logger.info("processing_complete", processed=results['processed_files'], failed=results['failed_files'], total_time_seconds=round(total_time, 2), output_dir=results['work_dir_base'])
 
     # Save overall summary
     summary_file = os.path.join(work_dir_base, "processing_summary.json")
@@ -254,8 +251,8 @@ def summarize_documents(
 
         with open(summary_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"📄 Overall summary saved to: {summary_file}")
+        logger.info("processing_summary_saved", path=summary_file)
     except Exception as e:
-        print(f"⚠️ Warning: Could not save overall summary: {e}")
+        logger.warning("processing_summary_save_failed", error=str(e))
 
     return results
