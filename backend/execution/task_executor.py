@@ -18,11 +18,13 @@ from typing import Any, Dict
 
 from fastapi import WebSocket
 
+from core.config import settings
 from core.logging import get_logger
 from websocket.events import send_ws_event
 from execution.stream_capture import StreamCapture, AG2IOStreamCapture
 from execution.dag_tracker import DAGTracker
 from execution.isolated_executor import get_isolated_executor
+from backend.loggers import LoggerFactory
 
 logger = get_logger(__name__)
 
@@ -131,13 +133,14 @@ async def execute_cmbagent_task(
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
 
-    # Get work directory from config or use default
-    work_dir = config.get("workDir", "~/Desktop/cmbdir")
+    # Get work directory from config or use default from settings
+    work_dir = config.get("workDir", settings.default_work_dir)
     if work_dir.startswith("~"):
         work_dir = os.path.expanduser(work_dir)
 
-    # Create a subdirectory for this specific task
-    task_work_dir = os.path.join(work_dir, task_id)
+    # Create task directory nested under session
+    # Structure: {work_dir}/sessions/{session_id}/tasks/{task_id}
+    task_work_dir = os.path.join(work_dir, "sessions", session_id, "tasks", task_id)
     os.makedirs(task_work_dir, exist_ok=True)
 
     # Set up environment variables
@@ -313,10 +316,27 @@ async def execute_cmbagent_task(
 
         start_time = time.time()
 
+        # Create run and session loggers for segregated logging
+        run_logger, session_logger, legacy_symlink = LoggerFactory.create_loggers(
+            session_id=session_id,
+            run_id=task_id,
+            work_dir=work_dir,
+            task_work_dir=task_work_dir  # Nested under session/tasks/{task_id}
+        )
+
+        # Log run started to BOTH files
+        await run_logger.write("run.started", "",
+            mode=mode, agent=agent,
+            model=engineer_model, work_dir=task_work_dir)
+        await session_logger.write("run.started", f"[{task_id}]",
+            mode=mode, agent=agent,
+            model=engineer_model, work_dir=task_work_dir)
+
         # Create stream capture (relay only - no detection logic)
         stream_capture = StreamCapture(
             websocket, task_id, send_ws_event,
             loop=loop, work_dir=task_work_dir, session_id=session_id,
+            run_logger=run_logger, session_logger=session_logger
         )
 
         # Create callbacks
@@ -580,7 +600,9 @@ async def execute_cmbagent_task(
 
             # For HITL/copilot modes, suppress stdout to prevent logs
             # from leaking to the main terminal - route only to WebSocket
-            suppress_stdout = mode in {"copilot", "hitl-interactive"}
+            # Suppress stdout for all modes to prevent agent logs in terminal
+            # All output is captured and sent to WebSocket + log files
+            suppress_stdout = True
 
             class StreamWrapper:
                 def __init__(self, original, capture, loop, suppress=False):
@@ -632,7 +654,10 @@ async def execute_cmbagent_task(
                 # Set up AG2 IOStream capture
                 try:
                     from autogen.io.base import IOStream
-                    ag2_iostream = AG2IOStreamCapture(websocket, task_id, send_ws_event, loop, session_id=session_id)
+                    ag2_iostream = AG2IOStreamCapture(
+                        websocket, task_id, send_ws_event, loop,
+                        session_id=session_id, session_logger=session_logger
+                    )
                     IOStream.set_global_default(ag2_iostream)
                 except Exception as e:
                     logger.warning("Could not set AG2 IOStream: %s", e)
@@ -970,9 +995,13 @@ async def execute_cmbagent_task(
 
         execution_time = time.time() - start_time
 
+        # Log run completion to BOTH files
+        await run_logger.write("run.completed", "", status="success", execution_time=f"{execution_time:.2f}s")
+        await session_logger.write("run.completed", f"[{task_id}]", status="success", execution_time=f"{execution_time:.2f}s")
+
         # Close stream capture log file
         if stream_capture and hasattr(stream_capture, 'close'):
-            stream_capture.close()
+            await stream_capture.close()
 
         # Update DAG nodes to completed status
         if dag_tracker and dag_tracker.node_statuses:
@@ -982,6 +1011,14 @@ async def execute_cmbagent_task(
                     dag_tracker.track_files_in_work_dir(task_work_dir, node_id)
             if "terminator" in dag_tracker.node_statuses:
                 await dag_tracker.update_node_status("terminator", "completed")
+
+        # Safety net: scan work_dir/cost/ for any cost JSONs not yet persisted
+        # This catches cases where the callback-based path silently failed
+        if cost_collector:
+            try:
+                cost_collector.collect_from_work_dir(task_work_dir)
+            except Exception as e:
+                logger.warning("Cost collect_from_work_dir failed: %s", e)
 
         # Mark workflow as completed
         if services_available:
@@ -1048,13 +1085,24 @@ async def execute_cmbagent_task(
         error_msg = f"Error executing CMBAgent task: {str(e)}"
         logger.error(error_msg)
 
+        # Log run failure to BOTH files
+        await run_logger.write("run.failed", "", error=str(e))
+        await session_logger.write("run.failed", f"[{task_id}]", error=str(e))
+
         # Close stream capture log file on error
         if stream_capture and hasattr(stream_capture, 'close'):
-            stream_capture.close()
+            await stream_capture.close()
 
         if dag_tracker and dag_tracker.node_statuses:
             for node_id in dag_tracker.node_statuses:
                 await dag_tracker.update_node_status(node_id, "failed", error=error_msg)
+
+        # Safety net: persist any cost data written before the failure
+        if cost_collector:
+            try:
+                cost_collector.collect_from_work_dir(task_work_dir)
+            except Exception:
+                pass  # Best-effort during error handling
 
         if services_available:
             _workflow_service.fail_workflow(task_id, error_msg)
@@ -1134,7 +1182,7 @@ async def _execute_isolated(
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
 
-    work_dir = config.get("workDir", "~/Desktop/cmbdir")
+    work_dir = config.get("workDir", settings.default_work_dir)
     if work_dir.startswith("~"):
         work_dir = os.path.expanduser(work_dir)
 
@@ -1194,7 +1242,8 @@ async def _execute_isolated(
             task=task,
             config=config,
             output_callback=output_callback,
-            work_dir=work_dir
+            work_dir=work_dir,
+            task_work_dir=task_work_dir  # Put run.log alongside cost/, data/, etc.
         )
 
         # Final session state save (Stage 7)

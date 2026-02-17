@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { ArrowLeft, Calendar, Tags, Globe, Sparkles, Download, Loader2, Code, MessageSquare, FileText, Settings, CheckCircle2, AlertCircle } from 'lucide-react'
-import { getApiUrl } from '@/lib/config'
+import { getApiUrl, config } from '@/lib/config'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import TaskWorkspaceView from './TaskWorkspaceView'
 import ConsoleOutput from '@/components/ConsoleOutput'
@@ -256,7 +256,7 @@ ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
         nPlanReviews: 1,
         planInstructions: 'Use researcher to gather information from specified sources, then use engineer to analyze and write the report.',
         agent: 'planner',
-        workDir: '~/cmbagent_workdir',
+        workDir: config.workDir,
         // Enable HITL
         approvalMode: 'after_planning',  // Request approval after plan is created
         requireApprovalBeforeSteps: false,

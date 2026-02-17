@@ -250,6 +250,55 @@ class DAGNode(Base):
         Index("idx_dag_nodes_parent", "parent_node_id"),
     )
 
+    @staticmethod
+    def resolve_node_id(db_session, original_node_id: str, run_id: str = None):
+        """Resolve an original short node ID to its database record.
+
+        DAG node IDs in the database are hashed to avoid cross-run collisions.
+        The original short ID (e.g. 'planning', 'step_1') is stored in meta['id'].
+        This method finds the DB record using either direct ID match or meta lookup.
+
+        Args:
+            db_session: SQLAlchemy session
+            original_node_id: The original short node ID (e.g. 'planning', 'step_1')
+            run_id: Optional run_id to scope the search
+
+        Returns:
+            DAGNode instance or None
+        """
+        from sqlalchemy import cast, String
+
+        # First try direct ID match (works for old-style non-hashed IDs)
+        query = db_session.query(DAGNode).filter(DAGNode.id == original_node_id)
+        if run_id:
+            query = query.filter(DAGNode.run_id == run_id)
+        node = query.first()
+        if node:
+            return node
+
+        # Try meta-based lookup for hashed IDs
+        if run_id:
+            nodes = db_session.query(DAGNode).filter(
+                DAGNode.run_id == run_id
+            ).all()
+            for n in nodes:
+                if n.meta and isinstance(n.meta, dict) and n.meta.get("id") == original_node_id:
+                    return n
+
+        return None
+
+    @staticmethod
+    def resolve_db_id(db_session, original_node_id: str, run_id: str = None) -> str:
+        """Resolve an original short node ID to its database ID string.
+
+        Convenience wrapper around resolve_node_id that returns just the ID.
+
+        Returns:
+            The database ID string, or the original_node_id if not found.
+        """
+        node = DAGNode.resolve_node_id(db_session, original_node_id, run_id)
+        return node.id if node else original_node_id
+
 
 class DAGEdge(Base):
     """Edge connecting nodes in the workflow DAG."""
@@ -334,6 +383,7 @@ class CostRecord(Base):
     step_id = Column(String(36), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=True, index=True)
     session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
     model = Column(String(100), nullable=False, index=True)
+    agent_name = Column(String(200), nullable=True, index=True)
     prompt_tokens = Column(Integer, nullable=False, default=0)
     completion_tokens = Column(Integer, nullable=False, default=0)
     total_tokens = Column(Integer, nullable=False, default=0)

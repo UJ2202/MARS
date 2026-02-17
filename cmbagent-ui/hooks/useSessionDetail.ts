@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback } from "react";
-import { getApiUrl } from "@/lib/config";
 import { SessionDetail, SessionRun } from "@/types/sessions";
 
 export function useSessionDetail(sessionId: string | null) {
@@ -22,8 +21,8 @@ export function useSessionDetail(sessionId: string | null) {
 
     try {
       const [detailRes, runsRes] = await Promise.all([
-        fetch(getApiUrl(`/api/sessions/${sessionId}`)),
-        fetch(getApiUrl(`/api/sessions/${sessionId}/runs`)),
+        fetch(`/api/sessions/${sessionId}`),
+        fetch(`/api/sessions/${sessionId}/runs`),
       ]);
 
       if (!detailRes.ok) {

@@ -132,7 +132,7 @@ class WorkflowService:
                     model=model,
                     status=WorkflowState.EXECUTING.value,
                     started_at=datetime.now(timezone.utc),
-                    meta=config or {}  # Store config in meta field
+                    meta={**(config or {}), "task_id": task_id}  # Store config + task_id in meta
                 )
 
                 run_info = {

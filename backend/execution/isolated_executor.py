@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from multiprocessing import Process, Queue
 from typing import Any, Callable, Dict, Optional, Awaitable
 
+from core.config import settings
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -86,8 +87,14 @@ class IsolatedTaskExecutor:
 
         # Determine work directory
         if not work_dir:
-            work_dir = os.path.expanduser(config.get("workDir", "~/Desktop/cmbdir"))
-        task_work_dir = os.path.join(work_dir, task_id)
+            work_dir = os.path.expanduser(config.get("workDir", settings.default_work_dir))
+
+        # Get session_id from config (default to "default_session" if not provided)
+        session_id = config.get("session_id", "default_session")
+
+        # Create task directory nested under session
+        # Structure: {work_dir}/sessions/{session_id}/tasks/{task_id}
+        task_work_dir = os.path.join(work_dir, "sessions", session_id, "tasks", task_id)
         os.makedirs(task_work_dir, exist_ok=True)
 
         # Start subprocess

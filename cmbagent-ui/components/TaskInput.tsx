@@ -6,6 +6,7 @@ import { CredentialsKeyIcon } from './CredentialsKeyIcon'
 import { CredentialsModal } from './CredentialsModal'
 import { ModelSelector } from './ModelSelector'
 import { useCredentials } from '../hooks/useCredentials'
+import { config as appConfig } from '../lib/config'
 
 // Tooltip component - tooltip appears only when hovering over the question mark icon
 const Tooltip = ({ children, text, wide = false, position = 'auto' }: { children: React.ReactNode; text?: string; wide?: boolean; position?: 'auto' | 'top' | 'bottom' }) => (
@@ -69,7 +70,7 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
     maxRounds: 25,
     maxAttempts: 1,
     agent: 'engineer',
-    workDir: '~/cmbagent_workdir',
+    workDir: appConfig.workDir,
     mode: 'one-shot' as 'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive' | 'copilot',
     // Global model options
     defaultModel: 'gpt-4.1-2025-04-14',
@@ -1272,13 +1273,13 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
                       type="text"
                       value={config.workDir}
                       onChange={(e) => setConfig({...config, workDir: e.target.value})}
-                      placeholder="~/cmbagent_workdir"
+                      placeholder={appConfig.workDir}
                       className="flex-1 px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-transparent"
                       disabled={isRunning}
                     />
                     <button
                       type="button"
-                      onClick={() => setConfig({...config, workDir: '~/cmbagent_workdir'})}
+                      onClick={() => setConfig({...config, workDir: appConfig.workDir})}
                       disabled={isRunning}
                       className="px-2 py-1 bg-gray-600/20 text-gray-300 rounded text-xs hover:bg-gray-600/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Reset to default"

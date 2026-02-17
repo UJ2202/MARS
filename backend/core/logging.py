@@ -39,6 +39,16 @@ def add_context_processor(logger, method_name, event_dict):
 
 _configured = False
 
+# CRITICAL: Configure structlog immediately on module import to prevent
+# incorrect default configuration from being used
+# This is a minimal config that will be replaced by configure_logging()
+structlog.configure(
+    processors=[structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    wrapper_class=structlog.stdlib.BoundLogger,
+    cache_logger_on_first_use=False,
+)
+
 
 def configure_logging(
     log_level: str = "INFO",
@@ -56,6 +66,8 @@ def configure_logging(
         log_file: Optional file path for log output
     """
     global _configured
+
+    print(f"[CONFIGURE_LOGGING] Called with log_file={log_file}, log_level={log_level}", file=sys.stderr)
 
     # Processors for structlog-native loggers
     structlog_processors = [
@@ -121,7 +133,10 @@ def configure_logging(
 
     # Add file handler if specified
     if log_file:
-        file_handler = logging.FileHandler(log_file)
+        print(f"[CONFIGURE_LOGGING] Adding file handler for {log_file}", file=sys.stderr)
+        # Use mode 'a' (append) and delay=False to ensure immediate writes
+        file_handler = logging.FileHandler(log_file, mode='a', delay=False)
+        file_handler.setLevel(getattr(logging, log_level.upper()))  # Explicitly set level
         file_handler.setFormatter(structlog.stdlib.ProcessorFormatter(
             foreign_pre_chain=foreign_processors,
             processors=[
@@ -130,6 +145,7 @@ def configure_logging(
             ],
         ))
         root_logger.addHandler(file_handler)
+        print(f"[CONFIGURE_LOGGING] File handler added successfully, total handlers: {len(root_logger.handlers)}", file=sys.stderr)
 
     # Suppress noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -153,6 +169,12 @@ def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """
     if not _configured:
         configure_logging()
+
+    # Ensure the stdlib logger has proper level set
+    stdlib_logger = logging.getLogger(name)
+    if stdlib_logger.level == logging.NOTSET:
+        stdlib_logger.setLevel(logging.INFO)
+
     return structlog.get_logger(name)
 
 

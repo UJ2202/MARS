@@ -10,6 +10,9 @@ export const config = {
   // WebSocket URL for real-time communication
   wsUrl: process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000',
 
+  // Work directory for task outputs and logs
+  workDir: process.env.NEXT_PUBLIC_CMBAGENT_WORK_DIR || '~/Desktop/cmbdir',
+
   // Debug mode
   debug: process.env.NEXT_PUBLIC_DEBUG === 'true',
 };

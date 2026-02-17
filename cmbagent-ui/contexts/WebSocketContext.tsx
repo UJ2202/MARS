@@ -160,13 +160,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     setPendingApproval(null);
   }, []);
 
-  // Session-aware console output: skip session-scoped messages from main console
+  // Session-aware console output: show all output in main console
+  // Session-scoping was intended for multi-session UIs, but currently we show everything
   const sessionFilteredAddConsole = useCallback((output: string) => {
-    // _sessionScoped flag is set by the event handler when an event has _session_id
-    // This check is done via a ref to avoid stale closure issues
-    if (!sessionScopedEventRef.current) {
-      addConsoleOutput(output);
-    }
+    // Always add to console - session_id is for tracking, not filtering display
+    addConsoleOutput(output);
   }, [addConsoleOutput]);
 
   // Ref to track whether current event being processed is session-scoped

@@ -20,8 +20,10 @@ _log_config = {}
 
 
 def _get_default_log_file() -> str:
-    """Get default log file path (~/.cmbagent/logs/backend.log)."""
-    log_dir = Path.home() / ".cmbagent" / "logs"
+    """Get default log file path in work directory."""
+    work_dir = os.getenv("CMBAGENT_DEFAULT_WORK_DIR", "~/Desktop/cmbdir")
+    work_dir = os.path.expanduser(work_dir)
+    log_dir = Path(work_dir) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return str(log_dir / "backend.log")
 

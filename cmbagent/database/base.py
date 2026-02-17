@@ -16,11 +16,19 @@ Base = declarative_base()
 
 # Database URL from environment or default to SQLite
 def get_database_url():
-    """Get database URL from environment or use default SQLite."""
-    default_db_dir = Path.home() / ".cmbagent"
-    default_db_dir.mkdir(parents=True, exist_ok=True)
-    default_url = f"sqlite:///{default_db_dir}/cmbagent.db"
-    return os.getenv("CMBAGENT_DATABASE_URL", default_url)
+    """Get database URL from environment or use default SQLite in work directory."""
+    # Check if custom database URL is provided
+    custom_url = os.getenv("CMBAGENT_DATABASE_URL")
+    if custom_url:
+        return custom_url
+
+    # Default: SQLite in work directory
+    work_dir = os.getenv("CMBAGENT_DEFAULT_WORK_DIR", "~/Desktop/cmbdir")
+    work_dir = os.path.expanduser(work_dir)
+    db_dir = Path(work_dir) / "database"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    default_url = f"sqlite:///{db_dir}/cmbagent.db"
+    return default_url
 
 
 # Global engine and session factory
@@ -95,6 +103,9 @@ def _apply_schema_migrations(engine):
     migrations = {
         "files": [
             ("session_id", "VARCHAR(36)"),
+        ],
+        "cost_records": [
+            ("agent_name", "VARCHAR(200)"),
         ],
     }
 

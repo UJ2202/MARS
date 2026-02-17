@@ -17,6 +17,15 @@ interface DatabaseCostData {
     completion_tokens: number;
     call_count: number;
   }>;
+  agent_breakdown: Array<{
+    agent: string;
+    model: string;
+    cost: number;
+    tokens: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    call_count: number;
+  }>;
   step_breakdown: Array<{
     step_id: string;
     cost: number;
@@ -85,7 +94,15 @@ export function useCostData(runId: string | null) {
       output_tokens: m.completion_tokens,
       call_count: m.call_count
     })),
-    agent_breakdown: [], // Not available from database yet
+    agent_breakdown: (costData.agent_breakdown || []).map(a => ({
+      agent: a.agent,
+      model: a.model,
+      cost: a.cost,
+      tokens: a.tokens,
+      input_tokens: a.prompt_tokens,
+      output_tokens: a.completion_tokens,
+      call_count: a.call_count
+    })),
     step_breakdown: costData.step_breakdown.map(s => ({
       step_id: s.step_id,
       step_number: parseInt(s.step_id.replace(/\D/g, '')) || 0,

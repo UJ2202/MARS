@@ -46,16 +46,12 @@ class PlayFromNodeExecutor:
             raise ValueError(f"Workflow run {self.run_id} not found")
 
         # 1. Validate node exists and belongs to this run
-        node = self.db.query(DAGNode).filter(
-            DAGNode.id == node_id,
-            DAGNode.run_id == self.run_id
-        ).first()
+        node = DAGNode.resolve_node_id(self.db, node_id, self.run_id)
         if not node:
-            # Try to find node by id only to give better error message
-            any_node = self.db.query(DAGNode).filter(DAGNode.id == node_id).first()
-            if any_node:
-                raise ValueError(f"Node {node_id} exists but belongs to run {any_node.run_id}, not {self.run_id}")
-            raise ValueError(f"Node {node_id} not found")
+            raise ValueError(f"Node {node_id} not found in run {self.run_id}")
+
+        # Use the resolved DB node ID for subsequent queries
+        db_node_id = node.id
 
         # 2. Load checkpoint before this node
         checkpoint = self._find_checkpoint_before_node(node_id)
@@ -71,7 +67,7 @@ class PlayFromNodeExecutor:
             context.update(context_override)
 
         # 3. Mark all nodes after branch point as PENDING
-        self._reset_downstream_nodes(node_id)
+        self._reset_downstream_nodes(db_node_id)
 
         # 4. Update workflow run status to EXECUTING
         run.status = "executing"
@@ -97,7 +93,7 @@ class PlayFromNodeExecutor:
 
     def _find_checkpoint_before_node(self, node_id: str) -> Optional[Checkpoint]:
         """Find most recent checkpoint before this node."""
-        node = self.db.query(DAGNode).filter(DAGNode.id == node_id).first()
+        node = DAGNode.resolve_node_id(self.db, node_id, self.run_id)
 
         if not node:
             return None
@@ -119,7 +115,14 @@ class PlayFromNodeExecutor:
 
     def _reset_downstream_nodes(self, start_node_id: str):
         """Reset all nodes after start_node to PENDING."""
-        start_node = self.db.query(DAGNode).filter(DAGNode.id == start_node_id).first()
+        start_node = self.db.query(DAGNode).filter(
+            DAGNode.id == start_node_id,
+            DAGNode.run_id == self.run_id
+        ).first()
+
+        if not start_node:
+            # Try resolving as original node ID
+            start_node = DAGNode.resolve_node_id(self.db, start_node_id, self.run_id)
 
         if not start_node:
             logger.warning(f"Start node {start_node_id} not found")
@@ -169,8 +172,13 @@ class PlayFromNodeExecutor:
             # Check if there's a checkpoint before this node
             checkpoint = self._find_checkpoint_before_node(node.id)
 
+            # Return original node ID from meta if available
+            original_id = node.id
+            if node.meta and isinstance(node.meta, dict) and "id" in node.meta:
+                original_id = node.meta["id"]
+
             resumable_nodes.append({
-                "node_id": node.id,
+                "node_id": original_id,
                 "order_index": node.order_index,
                 "node_type": node.node_type,
                 "agent": node.agent,

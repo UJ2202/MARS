@@ -41,7 +41,6 @@ export type SessionDetailTab =
   | "overview"
   | "dag"
   | "console"
-  | "conversation"
   | "events"
   | "costs"
   | "files"

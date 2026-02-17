@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Loader2, Play, Pause, Trash2, RefreshCw, Filter, Eye } from "lucide-react";
-import { getApiUrl } from "@/lib/config";
 
 interface Session {
   session_id: string;
@@ -62,7 +61,7 @@ export function SessionList({ onResume, onViewLogs, onSelect, selectedSessionId,
       if (selectedMode) params.set("mode", selectedMode);
       params.set("limit", "50");
 
-      const response = await fetch(getApiUrl(`/api/sessions?${params}`));
+      const response = await fetch(`/api/sessions?${params}`);
       if (!response.ok) throw new Error("Failed to fetch sessions");
 
       const data = await response.json();
@@ -80,7 +79,7 @@ export function SessionList({ onResume, onViewLogs, onSelect, selectedSessionId,
 
   const handleSuspend = async (sessionId: string) => {
     try {
-      const response = await fetch(getApiUrl(`/api/sessions/${sessionId}/suspend`), {
+      const response = await fetch(`/api/sessions/${sessionId}/suspend`, {
         method: "POST",
       });
       if (response.ok) {
@@ -95,7 +94,7 @@ export function SessionList({ onResume, onViewLogs, onSelect, selectedSessionId,
     if (!confirm("Are you sure you want to delete this session?")) return;
 
     try {
-      const response = await fetch(getApiUrl(`/api/sessions/${sessionId}`), {
+      const response = await fetch(`/api/sessions/${sessionId}`, {
         method: "DELETE",
       });
       if (response.ok) {

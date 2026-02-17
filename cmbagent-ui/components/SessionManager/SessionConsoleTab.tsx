@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Terminal, Download, Copy, Check, AlertCircle, Loader2 } from "lucide-react";
-import { getApiUrl } from "@/lib/config";
 
 interface SessionConsoleTabProps {
   runId: string;
@@ -20,7 +19,7 @@ export function SessionConsoleTab({ runId }: SessionConsoleTabProps) {
     setLoading(true);
     setError(null);
 
-    fetch(getApiUrl(`/api/runs/${runId}/console-log`))
+    fetch(`/api/runs/${runId}/console-log`)
       .then((r) => {
         if (!r.ok) {
           if (r.status === 404) throw new Error("No console log available for this run");

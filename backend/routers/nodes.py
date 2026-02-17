@@ -65,15 +65,23 @@ async def get_node_events(
             effective_run_id = _resolve_run_id(run_id)
             logger.debug("resolved_run_id", task_id=run_id, db_run_id=effective_run_id)
 
+        # Resolve original node_id to hashed DB node_id
+        resolved_node_id = node_id
+        if effective_run_id:
+            resolved_node_id = DAGNode.resolve_db_id(db, node_id, effective_run_id)
+
         # If no run_id provided, try to find the node and get its run_id
         if not effective_run_id:
             from cmbagent.database.models import WorkflowRun
-            dag_node = db.query(DAGNode).join(WorkflowRun).filter(
-                DAGNode.id == node_id
-            ).order_by(WorkflowRun.started_at.desc()).first()
+            dag_node = DAGNode.resolve_node_id(db, node_id)
+            if not dag_node:
+                dag_node = db.query(DAGNode).join(WorkflowRun).filter(
+                    DAGNode.id == node_id
+                ).order_by(WorkflowRun.started_at.desc()).first()
 
             if dag_node:
                 effective_run_id = dag_node.run_id
+                resolved_node_id = dag_node.id
                 logger.debug("node_found_in_run", node_id=node_id, run_id=effective_run_id)
 
         # Require run_id for accurate filtering
@@ -88,7 +96,7 @@ async def get_node_events(
 
         # Build query with mandatory run_id filter
         query = db.query(ExecutionEvent).filter(
-            ExecutionEvent.node_id == node_id,
+            ExecutionEvent.node_id == resolved_node_id,
             ExecutionEvent.run_id == effective_run_id
         )
 
@@ -152,23 +160,34 @@ async def get_node_execution_summary(node_id: str, run_id: Optional[str] = None)
 
         db = get_db_session()
 
+        # Resolve run_id
+        effective_run_id = _resolve_run_id(run_id) if run_id else None
+
+        # Resolve original node_id to hashed DB node_id
+        resolved_node_id = node_id
+        if effective_run_id:
+            resolved_node_id = DAGNode.resolve_db_id(db, node_id, effective_run_id)
+
         # If no run_id provided, try to find it from the most recent node
-        if not run_id:
+        if not effective_run_id:
             from cmbagent.database.models import WorkflowRun
-            dag_node = db.query(DAGNode).join(WorkflowRun).filter(
-                DAGNode.id == node_id
-            ).order_by(WorkflowRun.started_at.desc()).first()
+            dag_node = DAGNode.resolve_node_id(db, node_id)
+            if not dag_node:
+                dag_node = db.query(DAGNode).join(WorkflowRun).filter(
+                    DAGNode.id == node_id
+                ).order_by(WorkflowRun.started_at.desc()).first()
 
             if dag_node:
-                run_id = dag_node.run_id
-                logger.debug("node_found_in_run", node_id=node_id, run_id=run_id)
+                effective_run_id = dag_node.run_id
+                resolved_node_id = dag_node.id
+                logger.debug("node_found_in_run", node_id=node_id, run_id=effective_run_id)
 
         session_manager = SessionManager(db)
         session_id = session_manager.get_or_create_default_session()
 
         enricher = DAGMetadataEnricher(db, session_id)
 
-        summary = enricher.enrich_node(node_id, run_id=run_id)
+        summary = enricher.enrich_node(resolved_node_id, run_id=effective_run_id)
         db.close()
 
         return summary
@@ -191,19 +210,30 @@ async def get_node_files(node_id: str, run_id: Optional[str] = None):
 
         db = get_db_session()
 
+        # Resolve run_id
+        effective_run_id = _resolve_run_id(run_id) if run_id else None
+
+        # Resolve original node_id to hashed DB node_id
+        resolved_node_id = node_id
+        if effective_run_id:
+            resolved_node_id = DAGNode.resolve_db_id(db, node_id, effective_run_id)
+
         # If no run_id provided, try to find it from the most recent node
-        if not run_id:
-            dag_node = db.query(DAGNode).join(WorkflowRun).filter(
-                DAGNode.id == node_id
-            ).order_by(WorkflowRun.started_at.desc()).first()
+        if not effective_run_id:
+            dag_node = DAGNode.resolve_node_id(db, node_id)
+            if not dag_node:
+                dag_node = db.query(DAGNode).join(WorkflowRun).filter(
+                    DAGNode.id == node_id
+                ).order_by(WorkflowRun.started_at.desc()).first()
 
             if dag_node:
-                run_id = dag_node.run_id
+                effective_run_id = dag_node.run_id
+                resolved_node_id = dag_node.id
 
         # Filter files by both node_id and run_id if available
-        query = db.query(File).filter(File.node_id == node_id)
-        if run_id:
-            query = query.filter(File.run_id == run_id)
+        query = db.query(File).filter(File.node_id == resolved_node_id)
+        if effective_run_id:
+            query = query.filter(File.run_id == effective_run_id)
 
         files = query.all()
 

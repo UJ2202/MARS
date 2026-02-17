@@ -5,6 +5,8 @@ Pydantic models for Copilot API request and response validation.
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
 
+from core.config import settings
+
 
 # =============================================================================
 # Copilot Configuration Models
@@ -103,7 +105,7 @@ class CopilotConfig(BaseModel):
 
     # Work directory
     workDir: str = Field(
-        default="~/Desktop/cmbdir",
+        default_factory=lambda: settings.default_work_dir,
         description="Working directory for task outputs"
     )
 

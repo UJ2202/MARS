@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   LayoutDashboard,
   Terminal,
-  MessageSquare,
   Activity,
   DollarSign,
   FileText,
@@ -20,7 +19,6 @@ import { useSessionDetail } from "@/hooks/useSessionDetail";
 import { SessionDetailTab } from "@/types/sessions";
 import { SessionOverview } from "./SessionOverview";
 import { SessionConsoleTab } from "./SessionConsoleTab";
-import { SessionConversationTab } from "./SessionConversationTab";
 import { SessionConfigTab } from "./SessionConfigTab";
 import { SessionCostsTab } from "./SessionCostsTab";
 import { SessionDAGTab } from "./SessionDAGTab";
@@ -36,7 +34,6 @@ const tabs: { id: SessionDetailTab; label: string; icon: typeof Activity; needsR
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "dag", label: "DAG", icon: GitBranch, needsRun: true },
   { id: "console", label: "Console", icon: Terminal, needsRun: true },
-  { id: "conversation", label: "Chat", icon: MessageSquare },
   { id: "events", label: "Events", icon: Activity, needsRun: true },
   { id: "costs", label: "Costs", icon: DollarSign, needsRun: true },
   { id: "files", label: "Files", icon: FileText, needsRun: true },
@@ -264,12 +261,6 @@ export function SessionDetailPanel({
           ) : (
             noRunMessage
           ))}
-
-        {activeTab === "conversation" && (
-          <SessionConversationTab
-            messages={detail.conversation_history || []}
-          />
-        )}
 
         {activeTab === "events" &&
           (selectedRunId ? (

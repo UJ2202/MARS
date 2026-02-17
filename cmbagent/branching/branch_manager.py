@@ -66,10 +66,7 @@ class BranchManager:
             raise ValueError(f"Run {self.run_id} not found")
 
         # 2. Find DAG node to get step number
-        dag_node = self.db.query(DAGNode).filter(
-            DAGNode.id == node_id,
-            DAGNode.run_id == self.run_id
-        ).first()
+        dag_node = DAGNode.resolve_node_id(self.db, node_id, self.run_id)
 
         if not dag_node:
             raise ValueError(f"DAG node {node_id} not found for run {self.run_id}")

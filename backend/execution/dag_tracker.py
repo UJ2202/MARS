@@ -3,6 +3,7 @@ DAG Tracker for workflow visualization and state management.
 """
 
 import copy
+import hashlib
 import os
 import asyncio
 from datetime import datetime, timezone
@@ -303,11 +304,44 @@ class DAGTracker:
         for node in self.nodes:
             self.node_statuses[node["id"]] = "pending"
 
-        # Persist fixed-pipeline DAGs immediately
-        if not template.get("dynamic_steps"):
-            self._persist_dag_nodes_to_db()
+        # Persist all DAGs to database (both dynamic and fixed-pipeline)
+        self._persist_dag_nodes_to_db()
 
         return {"nodes": self.nodes, "edges": self.edges, "levels": len(self.nodes)}
+
+    def _make_dag_node_id(self, node_id: str) -> str:
+        """Create a unique DAG node ID for database storage.
+
+        Generates a deterministic UUID-like ID scoped to the current run,
+        avoiding cross-run collisions for generic IDs like 'planning', 'step_1'.
+        Keeps a mapping so the same input always returns the same output.
+        """
+        if not hasattr(self, '_node_id_map'):
+            self._node_id_map = {}
+
+        if node_id in self._node_id_map:
+            return self._node_id_map[node_id]
+
+        if not self.run_id:
+            self._node_id_map[node_id] = node_id
+            return node_id
+
+        # Create a deterministic short hash: run_id + node_id → consistent ID
+        combined = f"{self.run_id}:{node_id}"
+        hash_hex = hashlib.md5(combined.encode()).hexdigest()
+        # Use first 32 chars of hex as a UUID-like ID (fits in String(36))
+        db_id = hash_hex[:32]
+        self._node_id_map[node_id] = db_id
+        return db_id
+
+    def _reverse_node_id(self, db_node_id: str) -> str:
+        """Reverse map a DB node ID back to the original short node ID."""
+        if not hasattr(self, '_node_id_map'):
+            return db_node_id
+        for short_id, mapped_id in self._node_id_map.items():
+            if mapped_id == db_node_id:
+                return short_id
+        return db_node_id
 
     def _persist_dag_nodes_to_db(self):
         """Persist DAG nodes to database to satisfy foreign key constraints."""
@@ -315,49 +349,46 @@ class DAGTracker:
             return
 
         try:
-            # Check if session is in a valid state for new operations
-            # SQLAlchemy 2.0+ uses in_transaction(), older versions use is_active
-            if hasattr(self.db_session, 'in_transaction'):
-                if self.db_session.in_transaction():
-                    logger.debug("dag_persist_skipped", reason="transaction_in_progress")
-                    return
-            elif hasattr(self.db_session, 'is_active'):
-                # For older SQLAlchemy - check transaction state
-                if self.db_session.is_active and hasattr(self.db_session, 'transaction'):
-                    if self.db_session.transaction and self.db_session.transaction.is_active:
-                        logger.debug("dag_persist_skipped", reason="transaction_active")
-                        return
-
             from cmbagent.database.models import DAGNode, DAGEdge
 
             for idx, node in enumerate(self.nodes):
+                db_node_id = self._make_dag_node_id(node["id"])
+
                 existing_node = self.db_session.query(DAGNode).filter(
-                    DAGNode.id == node["id"]
+                    DAGNode.id == db_node_id,
+                    DAGNode.run_id == self.run_id
                 ).first()
 
-                if not existing_node:
+                if existing_node:
+                    # Update status and meta for existing nodes
+                    existing_node.status = node.get("status", existing_node.status)
+                    existing_node.meta = node
+                else:
                     dag_node = DAGNode(
-                        id=node["id"],
+                        id=db_node_id,
                         run_id=self.run_id,
                         session_id=self.session_id,
                         node_type=node.get("type", "agent"),
                         agent=node.get("agent", "unknown"),
-                        status="pending",
+                        status=node.get("status", "pending"),
                         order_index=node.get("step_number", idx),
                         meta=node
                     )
                     self.db_session.add(dag_node)
 
             for edge in self.edges:
+                db_source_id = self._make_dag_node_id(edge["source"])
+                db_target_id = self._make_dag_node_id(edge["target"])
+
                 existing_edge = self.db_session.query(DAGEdge).filter(
-                    DAGEdge.from_node_id == edge["source"],
-                    DAGEdge.to_node_id == edge["target"]
+                    DAGEdge.from_node_id == db_source_id,
+                    DAGEdge.to_node_id == db_target_id
                 ).first()
 
                 if not existing_edge:
                     dag_edge = DAGEdge(
-                        from_node_id=edge["source"],
-                        to_node_id=edge["target"],
+                        from_node_id=db_source_id,
+                        to_node_id=db_target_id,
                         dependency_type="sequential"
                     )
                     self.db_session.add(dag_edge)
@@ -372,6 +403,39 @@ class DAGTracker:
             else:
                 logger.error("dag_persist_failed", error=str(e), exc_info=True)
 
+            if self.db_session:
+                try:
+                    self.db_session.rollback()
+                except Exception:
+                    pass
+
+    def _update_node_status_in_db(self, node_id: str, new_status: str, error: str = None):
+        """Update a single node's status in the database."""
+        if not self.db_session or not self.run_id:
+            return
+
+        try:
+            from cmbagent.database.models import DAGNode
+
+            db_node_id = self._make_dag_node_id(node_id)
+            db_node = self.db_session.query(DAGNode).filter(
+                DAGNode.id == db_node_id,
+                DAGNode.run_id == self.run_id
+            ).first()
+
+            if db_node:
+                db_node.status = new_status
+                # Update meta with current in-memory node data
+                for node in self.nodes:
+                    if node["id"] == node_id:
+                        db_node.meta = node
+                        break
+                _safe_commit(self.db_session, f"dag_node_status_{node_id}")
+            else:
+                # Node not yet persisted - persist all nodes first
+                self._persist_dag_nodes_to_db()
+        except Exception as e:
+            logger.debug("dag_node_status_update_failed", node_id=node_id, error=str(e))
             if self.db_session:
                 try:
                     self.db_session.rollback()
@@ -484,6 +548,9 @@ class DAGTracker:
         else:
             self.edges.append({"source": f"step_{len(steps)}", "target": "terminator"})
 
+        # Persist all nodes (including new step nodes) to database
+        self._persist_dag_nodes_to_db()
+
         # Emit dag_updated event
         try:
             effective_run_id = self.run_id or self.task_id
@@ -555,22 +622,20 @@ class DAGTracker:
         if new_status == "completed" and work_dir:
             self.track_files_in_work_dir(work_dir, node_id)
 
+        # Update persisted node status in database
+        self._update_node_status_in_db(node_id, new_status, error)
+
         # Create ExecutionEvent in database
         if self.event_repo and node_info:
             try:
-                # Try to persist DAG nodes first (only if not already in transaction)
-                try:
-                    self._persist_dag_nodes_to_db()
-                except Exception as persist_error:
-                    logger.debug("dag_nodes_persist_attempt_failed", error=str(persist_error))
-
                 agent_name = node_info.get("agent", "unknown")
+                db_node_id = self._make_dag_node_id(node_id)
 
                 if new_status == "running":
                     self.execution_order_counter += 1
                     event = self.event_repo.create_event(
                         run_id=self.run_id,
-                        node_id=node_id,
+                        node_id=db_node_id,
                         event_type="agent_call",
                         execution_order=self.execution_order_counter,
                         event_subtype="execution",
@@ -606,7 +671,7 @@ class DAGTracker:
                         self.execution_order_counter += 1
                         self.event_repo.create_event(
                             run_id=self.run_id,
-                            node_id=node_id,
+                            node_id=db_node_id,
                             event_type="agent_call",
                             execution_order=self.execution_order_counter,
                             event_subtype="execution",
@@ -720,6 +785,8 @@ class DAGTracker:
 
             file_repo = FileRepository(self.db_session, self.session_id)
             event_id = self.node_event_map.get(node_id) if node_id else None
+            # Use DB-scoped node_id for FK reference
+            db_node_id = self._make_dag_node_id(node_id) if node_id else None
 
             # Resolve step_id from node_id or current state
             db_step_id = step_id
@@ -792,7 +859,7 @@ class DAGTracker:
                             run_id=self.run_id,
                             file_path=file_path,
                             file_type=file_type,
-                            node_id=node_id,
+                            node_id=db_node_id,
                             step_id=db_step_id,
                             event_id=event_id,
                             workflow_phase=file_phase,
@@ -914,6 +981,9 @@ class DAGTracker:
         self.nodes.append(node)
         self.node_statuses[node_id] = "completed"
         self.edges.append({"source": step_id, "target": node_id})
+
+        # Persist branch point node to database
+        self._persist_dag_nodes_to_db()
 
         effective_run_id = self.run_id or self.task_id
         try:

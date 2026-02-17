@@ -91,6 +91,7 @@ class CostCollector:
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         cost_usd=cost_value,
+                        agent_name=entry.get("Agent", "unknown"),
                     )
 
         except Exception as e:

@@ -13,6 +13,8 @@ from typing import Dict, Any, Optional, Callable, TYPE_CHECKING
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.config import settings
+
 # Use forward references to avoid circular imports
 if TYPE_CHECKING:
     from services.workflow_service import WorkflowService
@@ -122,11 +124,16 @@ class ExecutionService:
         
         try:
             # Get work directory
-            work_dir = config.get("workDir", "~/Desktop/cmbdir")
+            work_dir = config.get("workDir", settings.default_work_dir)
             if work_dir.startswith("~"):
                 work_dir = os.path.expanduser(work_dir)
-            
-            task_work_dir = os.path.join(work_dir, task_id)
+
+            # Get session_id from config (default to "default_session" if not provided)
+            session_id = config.get("session_id", "default_session")
+
+            # Create task directory nested under session
+            # Structure: {work_dir}/sessions/{session_id}/tasks/{task_id}
+            task_work_dir = os.path.join(work_dir, "sessions", session_id, "tasks", task_id)
             os.makedirs(task_work_dir, exist_ok=True)
             
             # Send workflow started event

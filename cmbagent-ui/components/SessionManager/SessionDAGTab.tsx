@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { Loader2, AlertCircle } from "lucide-react";
 import { DAGVisualization } from "@/components/dag";
-import { getApiUrl } from "@/lib/config";
 
 interface SessionDAGTabProps {
   runId: string;
@@ -20,7 +19,7 @@ export function SessionDAGTab({ runId }: SessionDAGTabProps) {
     setLoading(true);
     setError(null);
 
-    fetch(getApiUrl(`/api/runs/${runId}/dag`))
+    fetch(`/api/runs/${runId}/dag`)
       .then((r) => {
         if (!r.ok) {
           if (r.status === 404) throw new Error("No DAG data for this run");
