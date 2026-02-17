@@ -7,6 +7,10 @@ import logging
 import uvicorn
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add the parent directory to the path to import cmbagent
 sys.path.append(str(Path(__file__).parent.parent))
