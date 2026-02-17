@@ -13,6 +13,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+      - CMBAGENT_CORS_ORIGINS=${CMBAGENT_CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
     volumes:
       # Mount a directory for task outputs
       - ./outputs:/app/outputs

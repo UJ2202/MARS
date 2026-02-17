@@ -137,6 +137,9 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 GEMINI_API_KEY=your-gemini-api-key
 PERPLEXITY_API_KEY=your-perplexity-api-key
 MISTRAL_API_KEY=your-mistral-api-key
+
+# Optional - Backend configuration
+CMBAGENT_CORS_ORIGINS=http://localhost:3000,http://localhost:3001  # Comma-separated list of allowed CORS origins
 ```
 
 ### Frontend Configuration

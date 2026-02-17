@@ -38,6 +38,11 @@ class Settings:
         self.app_title = os.getenv("CMBAGENT_APP_TITLE", self.app_title)
         self.app_version = os.getenv("CMBAGENT_APP_VERSION", self.app_version)
         self.default_work_dir = os.getenv("CMBAGENT_DEFAULT_WORK_DIR", self.default_work_dir)
+        
+        # Load CORS origins from environment variable (comma-separated list)
+        cors_env = os.getenv("CMBAGENT_CORS_ORIGINS")
+        if cors_env:
+            self.cors_origins = [origin.strip() for origin in cors_env.split(",")]
         self.max_file_size_mb = int(os.getenv("CMBAGENT_MAX_FILE_SIZE_MB", str(self.max_file_size_mb)))
         self.debug = os.getenv("CMBAGENT_DEBUG", "false").lower() == "true"
 
