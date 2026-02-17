@@ -23,6 +23,7 @@ dependencies = [
     "ruamel.yaml",
     "ag2[openai]>=0.10.3",
     # "google-cloud-aiplatform==1.91.0",
+    "google-generativeai>=0.8.0",
     "jsonref==1.1.0",
     "cobaya",                   # to use yaml_load_file function    # TODO: maybe replace if only yaml_load_file is needed
     "pandas >=2.2",
