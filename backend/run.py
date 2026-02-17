@@ -18,10 +18,15 @@ if __name__ == "__main__":
     logger.info("Starting CMBAgent Backend Server")
     logger.info("Server: http://localhost:8000 | WebSocket: ws://localhost:8000/ws/{task_id} | Docs: http://localhost:8000/docs")
 
+    log_dir = Path.home() / ".cmbagent" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Logs will be written to %s/backend.log", log_dir)
+
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
+        log_config=None,  # Don't override app's logging configuration
     )

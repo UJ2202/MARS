@@ -715,17 +715,6 @@ Please provide more details or clarify your request.
                     'final_context': planning_context,
                 }
 
-        # Update the planning phase node with the plan content
-        manager.update_current_node_metadata({
-            "plan": plan,
-            "num_steps": len(plan),
-            "steps_summary": [s.get('sub_task', s.get('task', '')) for s in plan]
-        })
-
-        # Add plan step nodes to DAG (after approval, so modified plan is used)
-        # Pass the current phase node ID so steps connect to the planning phase
-        manager.add_plan_step_nodes(plan, source_node=manager._current_dag_node_id)
-
         # ============ EXECUTION PHASE ============
         logger.info("--- Execution Phase ---")
 

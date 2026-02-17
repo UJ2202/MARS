@@ -3,10 +3,13 @@ Database base configuration and connection management.
 """
 
 import os
+import logging
 from pathlib import Path
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text, inspect
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import StaticPool
+
+logger = logging.getLogger(__name__)
 
 # Create declarative base
 Base = declarative_base()
@@ -80,15 +83,48 @@ def get_db_session():
     return SessionFactory()
 
 
+def _apply_schema_migrations(engine):
+    """Apply missing column migrations for existing tables.
+
+    create_all() only creates new tables; it does not alter existing ones.
+    This function adds columns that were introduced after the initial schema.
+    """
+    insp = inspect(engine)
+
+    # Map of table -> list of (column_name, sql_type) to ensure exist
+    migrations = {
+        "files": [
+            ("session_id", "VARCHAR(36)"),
+        ],
+    }
+
+    with engine.begin() as conn:
+        for table, columns in migrations.items():
+            if not insp.has_table(table):
+                continue
+            existing = {col["name"] for col in insp.get_columns(table)}
+            for col_name, col_type in columns:
+                if col_name not in existing:
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
+                    ))
+                    logger.info("Added column %s.%s", table, col_name)
+
+
 def init_database():
     """Initialize database by creating all tables."""
     from cmbagent.database.models import (
-        Session, Project, WorkflowRun, WorkflowStep,
+        Session, SessionState, Project, WorkflowRun, WorkflowStep,
         DAGNode, DAGEdge, Checkpoint, Message,
-        CostRecord, ApprovalRequest, Branch,
-        WorkflowMetric, File, StateHistory,
+        CostRecord, ApprovalRequest, ActiveConnection, Branch,
+        RacingGroup, WorkflowMetric, File, StateHistory,
+        ExecutionEvent,
     )
 
     engine = get_engine()
     Base.metadata.create_all(engine)
+
+    # Add columns that were introduced after initial table creation
+    _apply_schema_migrations(engine)
+
     return engine

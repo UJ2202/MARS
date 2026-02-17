@@ -540,7 +540,8 @@ class CMBAgent:
                     cost_dict["Prompt Tokens"][i]     += summed_prompt
                     cost_dict["Completion Tokens"][i] += summed_comp
                     cost_dict["Total Tokens"][i]      += summed_total
-                    cost_dict["Model"][i]             += model_name
+                    if model_name not in cost_dict["Model"][i]:
+                        cost_dict["Model"][i] = model_name
                 else:
                     cost_dict["Agent"].append(name)
                     cost_dict["Cost ($)"].append(summed_cost)
@@ -660,14 +661,25 @@ class CMBAgent:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # Save to JSON file in workdir
+        cost_dir = os.path.join(self.work_dir, "cost")
+        os.makedirs(cost_dir, exist_ok=True)
         if name_append is not None:
-            json_path = os.path.join(self.work_dir, f"cost/cost_report_{name_append}_{timestamp}.json")
+            json_path = os.path.join(cost_dir, f"cost_report_{name_append}_{timestamp}.json")
         else:
-            json_path = os.path.join(self.work_dir, f"cost/cost_report_{timestamp}.json")
+            json_path = os.path.join(cost_dir, f"cost_report_{timestamp}.json")
         with open(json_path, 'w') as f:
             json.dump(cost_data, f, indent=2)
 
         self.logger.info("cost_report_saved, path=%s", json_path)
+
+        # Emit cost callback so app layer (CostCollector) can persist to DB
+        if hasattr(self, '_callbacks') and self._callbacks:
+            self._callbacks.invoke_cost_update({
+                "cost_json_path": json_path,
+                "total_cost": float(df["Cost ($)"].sum()) if not df.empty else 0,
+                "total_tokens": int(df["Total Tokens"].sum()) if not df.empty else 0,
+                "records": cost_data,
+            })
 
         self.final_context['cost_report_path'] = json_path
 

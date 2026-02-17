@@ -25,9 +25,6 @@ from cmbagent.execution.ag2_hooks import (
     install_ag2_hooks,
     uninstall_ag2_hooks
 )
-from cmbagent.execution.callback_integration import (
-    create_callbacks_with_event_capture
-)
 
 # File tracking system components
 from cmbagent.execution.file_registry import (
@@ -67,7 +64,6 @@ __all__ = [
     # AG2 hooks
     "install_ag2_hooks",
     "uninstall_ag2_hooks",
-    "create_callbacks_with_event_capture",
     # File tracking system
     "FileRegistry",
     "FileCategory",

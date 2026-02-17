@@ -106,7 +106,8 @@ class ExecutionService:
             mode=config.get("mode", "one-shot"),
             agent=config.get("agent", "engineer"),
             model=config.get("model", "gpt-4o"),
-            config=config
+            config=config,
+            session_id=config.get("session_id")
         )
         
         self._active_executions[task_id] = {

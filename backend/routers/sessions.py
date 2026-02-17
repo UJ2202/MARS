@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from core.logging import get_logger
 from services.session_manager import get_session_manager
 
-router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+router = APIRouter(prefix="/api/sessions", tags=["sessions"], redirect_slashes=False)
 logger = get_logger(__name__)
 
 
@@ -66,9 +66,86 @@ class SessionActionResponse(BaseModel):
     message: str
 
 
+# ==================== Workflow Modes ====================
+
+# All supported workflow modes with metadata
+WORKFLOW_MODES = [
+    {
+        "id": "copilot",
+        "label": "Copilot",
+        "description": "Interactive multi-agent assistant with flexible routing",
+        "supports_resume": True,
+        "supports_hitl": True,
+    },
+    {
+        "id": "planning-control",
+        "label": "Planning & Control",
+        "description": "Two-phase planning then execution workflow",
+        "supports_resume": True,
+        "supports_hitl": True,
+    },
+    {
+        "id": "one-shot",
+        "label": "One Shot",
+        "description": "Single agent, no-planning execution",
+        "supports_resume": False,
+        "supports_hitl": False,
+    },
+    {
+        "id": "hitl-interactive",
+        "label": "HITL Interactive",
+        "description": "Full human-in-the-loop with iterative guidance",
+        "supports_resume": True,
+        "supports_hitl": True,
+    },
+    {
+        "id": "idea-generation",
+        "label": "Idea Generation",
+        "description": "Research idea generation and selection pipeline",
+        "supports_resume": True,
+        "supports_hitl": True,
+    },
+    {
+        "id": "ocr",
+        "label": "OCR",
+        "description": "PDF text extraction via OCR",
+        "supports_resume": False,
+        "supports_hitl": False,
+    },
+    {
+        "id": "arxiv",
+        "label": "arXiv Filter",
+        "description": "Extract and download arXiv papers",
+        "supports_resume": False,
+        "supports_hitl": False,
+    },
+    {
+        "id": "enhance-input",
+        "label": "Enhance Input",
+        "description": "Enhance text with arXiv references and context",
+        "supports_resume": False,
+        "supports_hitl": False,
+    },
+]
+
+
+@router.get("/modes/list")
+async def list_workflow_modes():
+    """
+    List all available workflow modes with metadata.
+
+    Returns mode information including whether they support session
+    resume and human-in-the-loop features.
+    """
+    return {
+        "modes": WORKFLOW_MODES,
+        "total": len(WORKFLOW_MODES)
+    }
+
+
 # ==================== Endpoints ====================
 
-@router.post("/", response_model=SessionResponse)
+@router.post("", response_model=SessionResponse)
 async def create_session(request: SessionCreateRequest):
     """
     Create a new session.
@@ -109,7 +186,7 @@ async def create_session(request: SessionCreateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/", response_model=SessionListResponse)
+@router.get("", response_model=SessionListResponse)
 async def list_sessions(
     status: Optional[str] = Query(None, description="Filter by status (active, suspended, completed)"),
     mode: Optional[str] = Query(None, description="Filter by workflow mode"),
@@ -145,7 +222,7 @@ async def get_session(session_id: str):
     """
     try:
         session_manager = get_session_manager()
-        state = session_manager.load_session_state(session_id)
+        state = session_manager.load_session_state(session_id, include_completed=True)
         if not state:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
@@ -188,7 +265,7 @@ async def get_session_history(
     """
     try:
         session_manager = get_session_manager()
-        state = session_manager.load_session_state(session_id)
+        state = session_manager.load_session_state(session_id, include_completed=True)
         if not state:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
@@ -303,69 +380,6 @@ async def delete_session(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== Workflow Modes ====================
-
-# All supported workflow modes with metadata
-WORKFLOW_MODES = [
-    {
-        "id": "copilot",
-        "label": "Copilot",
-        "description": "Interactive multi-agent assistant with flexible routing",
-        "supports_resume": True,
-        "supports_hitl": True,
-    },
-    {
-        "id": "planning-control",
-        "label": "Planning & Control",
-        "description": "Two-phase planning then execution workflow",
-        "supports_resume": True,
-        "supports_hitl": True,
-    },
-    {
-        "id": "one-shot",
-        "label": "One Shot",
-        "description": "Single agent, no-planning execution",
-        "supports_resume": False,
-        "supports_hitl": False,
-    },
-    {
-        "id": "hitl-interactive",
-        "label": "HITL Interactive",
-        "description": "Full human-in-the-loop with iterative guidance",
-        "supports_resume": True,
-        "supports_hitl": True,
-    },
-    {
-        "id": "idea-generation",
-        "label": "Idea Generation",
-        "description": "Research idea generation and selection pipeline",
-        "supports_resume": True,
-        "supports_hitl": True,
-    },
-    {
-        "id": "ocr",
-        "label": "OCR",
-        "description": "PDF text extraction via OCR",
-        "supports_resume": False,
-        "supports_hitl": False,
-    },
-    {
-        "id": "arxiv",
-        "label": "arXiv Filter",
-        "description": "Extract and download arXiv papers",
-        "supports_resume": False,
-        "supports_hitl": False,
-    },
-    {
-        "id": "enhance-input",
-        "label": "Enhance Input",
-        "description": "Enhance text with arXiv references and context",
-        "supports_resume": False,
-        "supports_hitl": False,
-    },
-]
-
-
 @router.get("/{session_id}/runs")
 async def get_session_runs(session_id: str):
     """
@@ -410,17 +424,3 @@ async def get_session_runs(session_id: str):
     except Exception as e:
         logger.error("session_runs_failed", session_id=session_id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/modes/list")
-async def list_workflow_modes():
-    """
-    List all available workflow modes with metadata.
-
-    Returns mode information including whether they support session
-    resume and human-in-the-loop features.
-    """
-    return {
-        "modes": WORKFLOW_MODES,
-        "total": len(WORKFLOW_MODES)
-    }

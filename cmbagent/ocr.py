@@ -564,13 +564,14 @@ class MistralOCRProcessor:
 
 
 # User-facing convenience functions
-def process_single_pdf(pdf_path: str, 
-                      save_markdown: bool = True, 
-                      save_json: bool = True, 
+def process_single_pdf(pdf_path: str,
+                      save_markdown: bool = True,
+                      save_json: bool = True,
                       save_text: bool = False,
                       output_dir: str = None,
                       meta_data_path: str = None,
-                      work_dir: str = None):
+                      work_dir: str = None,
+                      callbacks=None):
     """
     Process a single PDF file with Mistral OCR.
     
@@ -582,12 +583,15 @@ def process_single_pdf(pdf_path: str,
         output_dir: Directory to save the output files
         meta_data_path: Path to the metadata file
         work_dir: Working directory for cost tracking (optional)
-    
+        callbacks: Optional WorkflowCallbacks for tracking
+
     Returns:
         Dictionary with extracted text by page and cost information
     """
+    if callbacks:
+        callbacks.invoke_phase_change("execution", 1)
     processor = MistralOCRProcessor()
-    return processor.process_single_pdf(
+    result = processor.process_single_pdf(
         pdf_path=pdf_path,
         save_markdown=save_markdown,
         save_json=save_json,
@@ -596,6 +600,13 @@ def process_single_pdf(pdf_path: str,
         meta_data_path=meta_data_path,
         work_dir=work_dir
     )
+    if callbacks:
+        from cmbagent.callbacks import StepInfo, StepStatus
+        callbacks.invoke_step_complete(StepInfo(
+            step_number=1, goal="OCR processing", description="OCR processing",
+            status=StepStatus.COMPLETED,
+        ))
+    return result
 
 def process_folder(folder_path: str, 
                    save_markdown: bool = True, 

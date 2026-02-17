@@ -48,6 +48,8 @@ def configure_logging(
     """
     Configure structured logging for the application.
 
+    Can be called multiple times (e.g., after uvicorn overrides logging).
+
     Args:
         log_level: Minimum log level (DEBUG, INFO, WARNING, ERROR)
         json_output: Use JSON format (for production)
@@ -55,10 +57,24 @@ def configure_logging(
     """
     global _configured
 
-    # Shared processors
-    shared_processors = [
+    # Processors for structlog-native loggers
+    structlog_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        add_context_processor,
+    ]
+
+    # Processors for foreign (stdlib) log records
+    # NOTE: filter_by_level is excluded because it crashes on stdlib records
+    # where the logger object is None in the ProcessorFormatter context
+    foreign_processors = [
+        structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
@@ -79,18 +95,18 @@ def configure_logging(
 
     # Configure structlog
     structlog.configure(
-        processors=shared_processors + [
+        processors=structlog_processors + [
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
+        cache_logger_on_first_use=False,  # Allow re-configuration
     )
 
     # Configure standard library logging
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared_processors,
+        foreign_pre_chain=foreign_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             renderer,
@@ -107,7 +123,7 @@ def configure_logging(
     if log_file:
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(structlog.stdlib.ProcessorFormatter(
-            foreign_pre_chain=shared_processors,
+            foreign_pre_chain=foreign_processors,
             processors=[
                 structlog.stdlib.ProcessorFormatter.remove_processors_meta,
                 structlog.processors.JSONRenderer(),  # Always JSON for files

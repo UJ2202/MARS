@@ -28,7 +28,8 @@ def preprocess_task(
     summarizer_response_formatter_model: str = default_agents_llm_model['summarizer_response_formatter'],
     skip_arxiv_download: bool = False,
     skip_ocr: bool = False,
-    skip_summarization: bool = False
+    skip_summarization: bool = False,
+    callbacks=None,
 ) -> str:
     """
     Preprocess a task description by:
@@ -48,6 +49,7 @@ def preprocess_task(
         skip_arxiv_download: Skip the arXiv download step
         skip_ocr: Skip the OCR step
         skip_summarization: Skip the summarization step
+        callbacks: Optional WorkflowCallbacks for tracking
 
     Returns:
         The original text with appended "Contextual Information and References" section
@@ -56,6 +58,9 @@ def preprocess_task(
     from cmbagent.arxiv_downloader import arxiv_filter
     from cmbagent.ocr import process_folder
     from cmbagent.processing.document_summarizer import summarize_documents
+
+    if callbacks:
+        callbacks.invoke_phase_change("execution", 1)
 
     logger.info("task_preprocessing_started", work_dir=work_dir)
 

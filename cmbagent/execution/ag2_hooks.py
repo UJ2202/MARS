@@ -133,15 +133,45 @@ def patch_group_chat():
 
 def patch_code_executor():
     """
-    Patch code execution to capture code_exec events.
+    Patch LocalCommandLineCodeExecutor to capture code_exec events.
     """
     try:
-        from autogen.coding import CodeBlock, CodeExecutor
-        
-        # This is a simplified version - actual implementation may vary
-        # based on how code execution is done in AG2
-        
-        logger.info("Code executor hooks registered")
+        from autogen.coding import LocalCommandLineCodeExecutor
+
+        original_execute = LocalCommandLineCodeExecutor.execute_code_blocks
+
+        @functools.wraps(original_execute)
+        def enhanced_execute_code_blocks(self, code_blocks, *args, **kwargs):
+            """Enhanced execute_code_blocks with event capture."""
+            captor = get_event_captor()
+
+            if captor and captor.enabled:
+                for block in code_blocks:
+                    captor.capture_code_execution(
+                        agent_name=getattr(self, '_agent_name', 'code_executor'),
+                        code=block.code,
+                        language=block.language,
+                    )
+
+            start_time = time.time()
+            result = original_execute(self, code_blocks, *args, **kwargs)
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            if captor and captor.enabled:
+                captor.capture_code_execution(
+                    agent_name=getattr(self, '_agent_name', 'code_executor'),
+                    code='\n'.join(b.code for b in code_blocks),
+                    language=code_blocks[0].language if code_blocks else 'python',
+                    result=result.output[:2000] if result.output else None,
+                    exit_code=result.exit_code,
+                    duration_ms=duration_ms,
+                )
+
+            return result
+
+        LocalCommandLineCodeExecutor.execute_code_blocks = enhanced_execute_code_blocks
+
+        logger.info("LocalCommandLineCodeExecutor patched successfully")
         return True
 
     except Exception as e:

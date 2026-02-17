@@ -183,20 +183,21 @@ class ArxivDownloader:
 
 
 # User-facing convenience function
-def arxiv_filter(input_text: str, work_dir = work_dir_default) -> Dict[str, Any]:
+def arxiv_filter(input_text: str, work_dir = work_dir_default, callbacks=None) -> Dict[str, Any]:
     """
-    Extract all arXiv URLs from input text and download the corresponding PDFs 
+    Extract all arXiv URLs from input text and download the corresponding PDFs
     to the docs folder inside the work directory.
-    
+
     Args:
         input_text (str): Text containing arXiv URLs to extract and download
         work_dir (str): Working directory where docs/ folder will be created.
                        Defaults to cmbagent's standard work directory.
-    
+        callbacks: Optional WorkflowCallbacks for tracking
+
     Returns:
         Dict[str, Any]: Summary of the download operation including:
             - urls_found: List of URLs found
-            - downloads_attempted: Number of downloads attempted  
+            - downloads_attempted: Number of downloads attempted
             - downloads_successful: Number of successful downloads
             - downloads_failed: Number of failed downloads
             - downloads_skipped: Number of skipped downloads (already exist)
@@ -204,8 +205,17 @@ def arxiv_filter(input_text: str, work_dir = work_dir_default) -> Dict[str, Any]
             - failed_downloads: List of failed download attempts with errors
             - output_directory: Path to the output directory
     """
+    if callbacks:
+        callbacks.invoke_phase_change("execution", 1)
     downloader = ArxivDownloader(work_dir=str(work_dir) if work_dir else None)
-    return downloader.download_from_text(input_text)
+    result = downloader.download_from_text(input_text)
+    if callbacks:
+        from cmbagent.callbacks import StepInfo, StepStatus
+        callbacks.invoke_step_complete(StepInfo(
+            step_number=1, goal="arXiv download", description="arXiv download",
+            status=StepStatus.COMPLETED,
+        ))
+    return result
 
 
 if __name__ == '__main__':

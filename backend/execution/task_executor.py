@@ -9,6 +9,7 @@ Session management (Stages 10-11):
 
 import asyncio
 import concurrent.futures
+import contextvars
 import os
 import sys
 import time
@@ -72,11 +73,12 @@ async def execute_cmbagent_task(
 ):
     """Execute CMBAgent task with real-time output streaming.
 
-    Uses isolated subprocess execution for non-HITL modes (Stage 6)
+    Uses isolated subprocess execution for utility modes (Stage 6)
     to prevent global state pollution between concurrent tasks.
 
-    HITL modes (copilot, hitl-interactive) fall back to legacy in-process
-    execution since they require bidirectional communication.
+    Production modes (one-shot, planning-control, HITL, etc.) use
+    in-process execution with full tracking infrastructure:
+    DAGTracker, CostCollector, EventRepository, FileRepository.
 
     Session management (Stages 10-11):
     - session_id is extracted from config (created by websocket handler)
@@ -92,19 +94,26 @@ async def execute_cmbagent_task(
     """
     mode = config.get("mode", "one-shot")
 
-    # HITL modes require bidirectional communication (approval queues)
-    # so they use legacy in-process execution for now
-    hitl_modes = {"copilot", "hitl-interactive"}
+    # Modes that require in-process execution with full tracking:
+    # - HITL modes need bidirectional communication (approval queues)
+    # - All production modes need DAGTracker, CostCollector, EventRepository,
+    #   and FileRepository which only exist in the in-process path
+    tracked_modes = {
+        "copilot", "hitl-interactive",          # HITL: bidirectional comms
+        "planning-control", "idea-generation",  # Need dynamic DAG + full tracking
+        "deep-research-extended",               # Need dynamic DAG + full tracking
+        "one-shot",                             # Need DAG + cost + file tracking
+    }
 
-    if USE_ISOLATED_EXECUTION and mode not in hitl_modes:
+    if USE_ISOLATED_EXECUTION and mode not in tracked_modes:
         logger.info("Task %s using isolated execution (mode=%s)", task_id, mode)
         await _execute_isolated(websocket, task_id, task, config)
         return
 
-    if mode in hitl_modes:
-        logger.info("Task %s using legacy execution for HITL mode=%s", task_id, mode)
+    if mode in tracked_modes:
+        logger.info("Task %s using tracked in-process execution (mode=%s)", task_id, mode)
     else:
-        logger.info("Task %s using legacy execution (isolated disabled)", task_id)
+        logger.info("Task %s using in-process execution (isolated disabled)", task_id)
 
     # Fall through to legacy execution
     services_available = _check_services()
@@ -143,7 +152,8 @@ async def execute_cmbagent_task(
         await send_ws_event(
             websocket, "status",
             {"message": "Initializing CMBAgent..."},
-            run_id=task_id
+            run_id=task_id,
+            session_id=session_id
         )
 
         # Import cmbagent
@@ -167,15 +177,27 @@ async def execute_cmbagent_task(
             if run_info:
                 db_run_id = run_info.get("db_run_id")
 
+        # Get event loop early - needed by DAGTracker and StreamCapture
+        loop = asyncio.get_event_loop()
+
         # Create DAG tracker for this execution
         dag_tracker = DAGTracker(
-            websocket, task_id, mode, send_ws_event, run_id=db_run_id
+            websocket, task_id, mode, send_ws_event, run_id=db_run_id,
+            session_id=session_id, event_loop=loop
         )
         dag_data = dag_tracker.create_dag_for_mode(task, config)
         effective_run_id = dag_tracker.run_id or task_id
 
+        # Create CostCollector for JSON-based cost tracking
+        from backend.execution.cost_collector import CostCollector
+        cost_collector = CostCollector(
+            db_session=dag_tracker.db_session,
+            session_id=session_id or dag_tracker.session_id or "",
+            run_id=effective_run_id,
+        )
+
         # Set initial phase based on mode
-        if mode in ["planning-control", "idea-generation", "hitl-interactive", "copilot"]:
+        if mode in ["planning-control", "idea-generation", "hitl-interactive", "copilot", "deep-research-extended"]:
             dag_tracker.set_phase("planning", None)
         else:
             dag_tracker.set_phase("execution", None)
@@ -190,7 +212,8 @@ async def execute_cmbagent_task(
                 "edges": dag_tracker.edges,
                 "levels": dag_data.get("levels", 1)
             },
-            run_id=effective_run_id
+            run_id=effective_run_id,
+            session_id=session_id
         )
 
         # Planning & Control specific parameters
@@ -215,12 +238,28 @@ async def execute_cmbagent_task(
         await send_ws_event(
             websocket, "output",
             {"message": f"🚀 Starting CMBAgent in {mode.replace('-', ' ').title()} mode"},
-            run_id=task_id
+            run_id=task_id,
+            session_id=session_id
         )
         await send_ws_event(
             websocket, "output",
             {"message": f"📋 Task: {task}"},
-            run_id=task_id
+            run_id=task_id,
+            session_id=session_id
+        )
+
+        # Emit workflow_started so the frontend resets cost/file/timeline state
+        await send_ws_event(
+            websocket, "workflow_started",
+            {
+                "run_id": effective_run_id,
+                "task_description": task[:200],
+                "mode": mode,
+                "agent": agent,
+                "model": engineer_model,
+            },
+            run_id=effective_run_id,
+            session_id=session_id
         )
 
         # Update first node to running
@@ -233,54 +272,65 @@ async def execute_cmbagent_task(
             await send_ws_event(
                 websocket, "output",
                 {"message": f"Configuration: Planner={planner_model}, Engineer={engineer_model}"},
-                run_id=task_id
+                run_id=task_id,
+                session_id=session_id
             )
         elif mode == "idea-generation":
             await send_ws_event(
                 websocket, "output",
                 {"message": f"Configuration: Idea Maker={idea_maker_model}, Idea Hater={idea_hater_model}"},
-                run_id=task_id
+                run_id=task_id,
+                session_id=session_id
             )
         elif mode == "ocr":
             await send_ws_event(
                 websocket, "output",
                 {"message": f"Configuration: Save Markdown={save_markdown}, Max Workers={max_workers}"},
-                run_id=task_id
+                run_id=task_id,
+                session_id=session_id
             )
         elif mode == "copilot":
             await send_ws_event(
                 websocket, "output",
                 {"message": f"Configuration: Agents={config.get('availableAgents', ['engineer', 'researcher'])}, Planning={config.get('enablePlanning', True)}"},
-                run_id=task_id
+                run_id=task_id,
+                session_id=session_id
             )
         elif mode == "hitl-interactive":
             await send_ws_event(
                 websocket, "output",
                 {"message": f"Configuration: Variant={config.get('hitlVariant', 'full_interactive')}, Engineer={engineer_model}"},
-                run_id=task_id
+                run_id=task_id,
+                session_id=session_id
+            )
+        elif mode == "one-shot":
+            await send_ws_event(
+                websocket, "output",
+                {"message": f"Configuration: Agent={agent}, Model={engineer_model}"},
+                run_id=task_id,
+                session_id=session_id
             )
 
         start_time = time.time()
-        loop = asyncio.get_event_loop()
 
-        # Create stream capture with DAG tracking
+        # Create stream capture (relay only - no detection logic)
         stream_capture = StreamCapture(
             websocket, task_id, send_ws_event,
-            dag_tracker=dag_tracker, loop=loop, work_dir=task_work_dir,
-            mode=mode  # Pass mode so StreamCapture knows if it's HITL
+            loop=loop, work_dir=task_work_dir, session_id=session_id,
         )
 
         # Create callbacks
         from cmbagent.callbacks import (
-            create_websocket_callbacks, merge_callbacks,
+            merge_callbacks,
             create_print_callbacks, WorkflowCallbacks
         )
+        from backend.callbacks import create_websocket_callbacks
 
         def ws_send_event(event_type: str, data: Dict[str, Any]):
             """Send WebSocket event from sync context."""
             try:
                 future = asyncio.run_coroutine_threadsafe(
-                    send_ws_event(websocket, event_type, data, run_id=task_id),
+                    send_ws_event(websocket, event_type, data, run_id=task_id, session_id=session_id),
                     loop
                 )
                 try:
@@ -420,6 +470,20 @@ async def execute_cmbagent_task(
                 dag_tracker.set_phase(phase, step_number)
                 logger.debug("Phase changed to: %s, step: %s", phase, step_number)
 
+                # One-shot DAG node transitions:
+                # When the one_shot phase starts executing, mark init → completed
+                # and execute → running so the UI shows real-time progress.
+                if phase == "one_shot" and mode == "one-shot":
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            dag_tracker.update_node_status("init", "completed"), loop
+                        ).result(timeout=5.0)
+                        asyncio.run_coroutine_threadsafe(
+                            dag_tracker.update_node_status("execute", "running"), loop
+                        ).result(timeout=5.0)
+                    except Exception as e:
+                        logger.warning("Failed to update one-shot DAG nodes: %s", e)
+
             # Save session state on phase change for ALL modes (Stages 10-11)
             if session_manager and session_id:
                 try:
@@ -446,8 +510,11 @@ async def execute_cmbagent_task(
                         dag_tracker.update_node_status("planning", "completed"), loop
                     ).result(timeout=5.0)
                     # Note: Human review is tracked as events within the planning phase, not a separate node
-                # Track files created during planning
-                dag_tracker.track_files_in_work_dir(task_work_dir, "planning")
+                # Track files created during planning (explicit phase, not guessed)
+                dag_tracker.track_files_in_work_dir(
+                    task_work_dir, "planning",
+                    workflow_phase="planning",
+                )
                 logger.debug("Tracked planning files and synced DAG")
 
         def on_step_start_tracking(step_info):
@@ -465,7 +532,11 @@ async def execute_cmbagent_task(
                 asyncio.run_coroutine_threadsafe(
                     dag_tracker.update_node_status(step_node_id, "completed", work_dir=task_work_dir), loop
                 ).result(timeout=5.0)
-                dag_tracker.track_files_in_work_dir(task_work_dir, step_node_id)
+                dag_tracker.track_files_in_work_dir(
+                    task_work_dir, step_node_id,
+                    workflow_phase="control",
+                    generating_agent=getattr(step_info, 'agent', None) or "engineer",
+                )
                 logger.debug("Tracked files for step %s", step_info.step_number)
 
         def on_step_failed_tracking(step_info):
@@ -476,6 +547,10 @@ async def execute_cmbagent_task(
                     dag_tracker.update_node_status(step_node_id, "failed", error=step_info.error), loop
                 ).result(timeout=5.0)
 
+        def on_cost_update_tracking(cost_data):
+            """Route cost data to CostCollector for DB persistence and WS emission."""
+            cost_collector.collect_from_callback(cost_data, ws_send_func=ws_send_event)
+
         event_tracking_callbacks = WorkflowCallbacks(
             on_agent_message=on_agent_msg,
             on_code_execution=on_code_exec,
@@ -485,6 +560,7 @@ async def execute_cmbagent_task(
             on_step_start=on_step_start_tracking,
             on_step_complete=on_step_complete_tracking,
             on_step_failed=on_step_failed_tracking,
+            on_cost_update=on_cost_update_tracking,
         )
 
         pause_callbacks = WorkflowCallbacks(
@@ -556,7 +632,7 @@ async def execute_cmbagent_task(
                 # Set up AG2 IOStream capture
                 try:
                     from autogen.io.base import IOStream
-                    ag2_iostream = AG2IOStreamCapture(websocket, task_id, send_ws_event, loop)
+                    ag2_iostream = AG2IOStreamCapture(websocket, task_id, send_ws_event, loop, session_id=session_id)
                     IOStream.set_global_default(ag2_iostream)
                 except Exception as e:
                     logger.warning("Could not set AG2 IOStream: %s", e)
@@ -570,17 +646,8 @@ async def execute_cmbagent_task(
 
                 # Execute based on mode
                 if mode == "planning-control":
-                    # Set up approval manager for HITL (Stage 11C: unified approval path)
-                    approval_mode = config.get("approvalMode", "none")
-                    pc_approval_manager = None
-
-                    if approval_mode != "none":
-                        from cmbagent.database.websocket_approval_manager import WebSocketApprovalManager
-                        pc_approval_manager = WebSocketApprovalManager(
-                            ws_send_event, task_id, db_factory=_approval_db_factory
-                        )
-                        logger.info("Planning-control HITL enabled with mode: %s", approval_mode)
-
+                    # Pure planning → control, NO approval gates.
+                    # For HITL approval, use "hitl-interactive" mode instead.
                     logger.info("Using phase-based workflow for planning-control")
 
                     results = cmbagent.planning_and_control_context_carryover(
@@ -600,8 +667,6 @@ async def execute_cmbagent_task(
                         default_formatter_model=default_formatter_model,
                         default_llm_model=default_llm_model,
                         callbacks=workflow_callbacks,
-                        approval_manager=pc_approval_manager,
-                        hitl_after_planning=(approval_mode in ("after_planning", "both")),
                     )
                 elif mode == "hitl-interactive":
                     # HITL Interactive mode - full human-in-the-loop workflow
@@ -798,7 +863,8 @@ async def execute_cmbagent_task(
                             save_json=save_json,
                             save_text=save_text,
                             output_dir=output_dir,
-                            work_dir=task_work_dir
+                            work_dir=task_work_dir,
+                            callbacks=workflow_callbacks,
                         )
                     elif os.path.isdir(pdf_path):
                         results = cmbagent.process_folder(
@@ -815,15 +881,37 @@ async def execute_cmbagent_task(
                 elif mode == "arxiv":
                     results = cmbagent.arxiv_filter(
                         input_text=task,
-                        work_dir=task_work_dir
+                        work_dir=task_work_dir,
+                        callbacks=workflow_callbacks,
                     )
                 elif mode == "enhance-input":
                     results = cmbagent.preprocess_task(
                         text=task,
                         work_dir=task_work_dir,
                         max_workers=max_workers,
-                        clear_work_dir=False
+                        clear_work_dir=False,
+                        callbacks=workflow_callbacks,
                     )
+                elif mode == "deep-research-extended":
+                    from cmbagent.workflows.composer import get_workflow, WorkflowExecutor
+
+                    workflow_def = get_workflow("deep_research_extended")
+                    executor = WorkflowExecutor(
+                        workflow=workflow_def,
+                        task=task,
+                        work_dir=task_work_dir,
+                        api_keys=api_keys,
+                        callbacks=workflow_callbacks,
+                    )
+                    wf_context = executor.run_sync()
+                    results = {
+                        "chat_history": [],
+                        "final_context": wf_context.shared_state,
+                        "run_id": wf_context.run_id,
+                        "total_time": wf_context.phase_timings.get("total", 0),
+                    }
+                    for r in executor.results:
+                        results["chat_history"].extend(r.chat_history)
                 else:
                     # One Shot mode
                     results = cmbagent.one_shot(
@@ -836,7 +924,8 @@ async def execute_cmbagent_task(
                         api_keys=api_keys,
                         clear_work_dir=False,
                         default_formatter_model=default_formatter_model,
-                        default_llm_model=default_llm_model
+                        default_llm_model=default_llm_model,
+                        callbacks=workflow_callbacks,
                     )
 
                 return results
@@ -846,9 +935,10 @@ async def execute_cmbagent_task(
                 sys.stdout = original_stdout
                 sys.stderr = original_stderr
 
-        # Run CMBAgent in executor
+        # Run CMBAgent in executor with contextvars propagation
+        ctx = contextvars.copy_context()
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(run_cmbagent)
+            future = executor.submit(ctx.run, run_cmbagent)
 
             while not future.done():
                 await asyncio.sleep(1)
@@ -860,7 +950,8 @@ async def execute_cmbagent_task(
                     await send_ws_event(
                         websocket, "workflow_cancelled",
                         {"message": "Workflow cancelled by user"},
-                        run_id=task_id
+                        run_id=task_id,
+                        session_id=session_id
                     )
                     return
 
@@ -871,7 +962,8 @@ async def execute_cmbagent_task(
                 await send_ws_event(
                     websocket, "heartbeat",
                     {"timestamp": time.time()},
-                    run_id=task_id
+                    run_id=task_id,
+                    session_id=session_id
                 )
 
             results = future.result()
@@ -911,7 +1003,8 @@ async def execute_cmbagent_task(
         await send_ws_event(
             websocket, "output",
             {"message": f"✅ Task completed in {execution_time:.2f} seconds"},
-            run_id=task_id
+            run_id=task_id,
+            session_id=session_id
         )
 
         await send_ws_event(
@@ -930,10 +1023,26 @@ async def execute_cmbagent_task(
         )
 
         await send_ws_event(
+            websocket, "workflow_completed",
+            {
+                "run_id": effective_run_id,
+                "execution_time": execution_time,
+                "mode": mode,
+            },
+            run_id=effective_run_id,
+            session_id=session_id
+        )
+
+        await send_ws_event(
             websocket, "complete",
             {"message": "Task execution completed successfully"},
-            run_id=task_id
+            run_id=task_id,
+            session_id=session_id
         )
+
+        # Close DAG tracker DB session
+        if dag_tracker:
+            dag_tracker.close()
 
     except Exception as e:
         error_msg = f"Error executing CMBAgent task: {str(e)}"
@@ -964,10 +1073,22 @@ async def execute_cmbagent_task(
                 logger.warning("Failed to suspend session: %s", se)
 
         await send_ws_event(
+            websocket, "workflow_failed",
+            {"error": error_msg, "run_id": task_id},
+            run_id=task_id,
+            session_id=session_id
+        )
+
+        await send_ws_event(
             websocket, "error",
             {"message": error_msg},
-            run_id=task_id
+            run_id=task_id,
+            session_id=session_id
         )
+
+        # Close DAG tracker DB session on error
+        if dag_tracker:
+            dag_tracker.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1019,7 +1140,7 @@ async def _execute_isolated(
 
     async def output_callback(event_type: str, data: Dict[str, Any]):
         """Forward subprocess output to WebSocket and track state (Stage 7)."""
-        await send_ws_event(websocket, event_type, data, run_id=task_id)
+        await send_ws_event(websocket, event_type, data, run_id=task_id, session_id=session_id)
 
         # Track conversation for session save (Stage 7)
         if session_id and event_type in ("output", "agent_message", "error", "cost_update"):
@@ -1102,11 +1223,11 @@ async def _execute_isolated(
             "work_dir": result.get("work_dir", ""),
             "base_work_dir": work_dir,
             "mode": result.get("mode", config.get("mode", "one-shot"))
-        }, run_id=task_id)
+        }, run_id=task_id, session_id=session_id)
 
         await send_ws_event(websocket, "complete", {
             "message": "Task execution completed successfully"
-        }, run_id=task_id)
+        }, run_id=task_id, session_id=session_id)
 
     except Exception as e:
         error_msg = f"Error executing CMBAgent task: {str(e)}"
@@ -1130,4 +1251,4 @@ async def _execute_isolated(
         await send_ws_event(websocket, "error", {
             "message": error_msg,
             "error_type": type(e).__name__
-        }, run_id=task_id)
+        }, run_id=task_id, session_id=session_id)

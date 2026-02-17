@@ -10,11 +10,13 @@ Automatically captures all execution events from AG2 agents including:
 - State transitions
 """
 
+import contextvars
 import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from threading import Lock
+import threading
 import time
 import asyncio
 
@@ -37,11 +39,12 @@ class EventCaptureManager:
         session_id: str,
         enabled: bool = True,
         buffer_size: int = 50,
-        websocket = None
+        websocket = None,
+        emit_event_callback = None
     ):
         """
         Initialize event capture manager.
-        
+
         Args:
             db_session: Database session
             run_id: Workflow run ID
@@ -49,6 +52,8 @@ class EventCaptureManager:
             enabled: Whether event capture is enabled
             buffer_size: Number of events to buffer before flush
             websocket: Optional WebSocket connection for real-time streaming
+            emit_event_callback: Optional async callback for emitting events via WebSocket.
+                Signature: async (websocket, event: ExecutionEvent, run_id: str) -> None
         """
         self.db = db_session
         self.run_id = run_id
@@ -56,40 +61,55 @@ class EventCaptureManager:
         self.enabled = enabled
         self.buffer_size = buffer_size
         self.websocket = websocket
-        
+        self._emit_event_callback = emit_event_callback
+
         # Event repository
         self.event_repo = EventRepository(db_session, session_id)
-        
+
         # Context tracking
         self.current_node_id: Optional[str] = None
         self.current_step_id: Optional[str] = None
-        self.execution_order = 0
-        
-        # Event buffer for batch writes
-        self.event_buffer: List[ExecutionEvent] = []
-        self.buffer_lock = Lock()
-        
+
+        # Thread-safe execution order counter
+        self._lock = Lock()
+        self._order_counter = 0
+
+        # Thread-local event stacks for nested event tracking
+        self._event_stack_local = threading.local()
+
+        # Event buffer for batch writes (protected by _lock)
+        self._buffer: List[ExecutionEvent] = []
+
         # Performance tracking
         self.total_events = 0
         self.total_capture_time_ms = 0
-        
-        # Event ID stack for nested events
-        self.event_stack: List[str] = []
     
     def set_context(self, node_id: Optional[str] = None, step_id: Optional[str] = None):
         """
         Update current execution context.
-        
+
         Args:
             node_id: Current DAG node ID
             step_id: Current workflow step ID
         """
         if node_id:
             self.current_node_id = node_id
-            self.execution_order = 0  # Reset order for new node
-        
+
         if step_id:
             self.current_step_id = step_id
+
+    @property
+    def event_stack(self) -> List[str]:
+        """Thread-local event stack."""
+        if not hasattr(self._event_stack_local, 'stack'):
+            self._event_stack_local.stack = []
+        return self._event_stack_local.stack
+
+    def _next_order(self) -> int:
+        """Thread-safe execution order counter."""
+        with self._lock:
+            self._order_counter += 1
+            return self._order_counter
     
     def capture_agent_call(
         self,
@@ -134,7 +154,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            logger.error("Error capturing agent_call event: %s", e)
+            logger.error("event_capture_failed event_type=agent_call error=%s", e)
             return None
     
     def capture_agent_response(
@@ -181,7 +201,7 @@ class EventCaptureManager:
                 )
         
         except Exception as e:
-            logger.error("Error capturing agent response: %s", e)
+            logger.error("event_capture_failed event_type=agent_response error=%s", e)
     
     def capture_tool_call(
         self,
@@ -227,7 +247,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            logger.error("Error capturing tool_call event: %s", e)
+            logger.error("event_capture_failed event_type=tool_call error=%s", e)
             return None
     
     def capture_code_execution(
@@ -283,7 +303,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            logger.error("Error capturing code_exec event: %s", e)
+            logger.error("event_capture_failed event_type=code_exec error=%s", e)
             return None
     
     def capture_file_generation(
@@ -345,7 +365,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            logger.error("Error capturing file_gen event: %s", e)
+            logger.error("event_capture_failed event_type=file_gen error=%s", e)
             return None
     
     def capture_handoff(
@@ -386,7 +406,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            logger.error("Error capturing handoff event: %s", e)
+            logger.error("event_capture_failed event_type=handoff error=%s", e)
             return None
     
     def capture_message(
@@ -450,7 +470,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            logger.error("Error capturing message event: %s", e)
+            logger.error("event_capture_failed event_type=message error=%s", e)
             return None
     
     def capture_error(
@@ -492,7 +512,7 @@ class EventCaptureManager:
             return event.id
             
         except Exception as e:
-            logger.error("Error capturing error event: %s", e)
+            logger.error("event_capture_failed event_type=error error=%s", e)
             return None
     
     def _create_event(
@@ -515,7 +535,7 @@ class EventCaptureManager:
         Returns:
             Created ExecutionEvent instance
         """
-        with self.buffer_lock:
+        with self._lock:
             event = self.event_repo.create_event(
                 run_id=self.run_id,
                 node_id=self.current_node_id,
@@ -524,7 +544,7 @@ class EventCaptureManager:
                 event_type=event_type,
                 event_subtype=event_subtype,
                 agent_name=agent_name,
-                execution_order=self.execution_order,
+                execution_order=self._next_order(),
                 depth=depth,
                 inputs=inputs,
                 outputs=outputs,
@@ -533,8 +553,7 @@ class EventCaptureManager:
                 duration_ms=duration_ms,
                 meta=meta
             )
-            
-            self.execution_order += 1
+
             self.total_events += 1
             
             # Emit event via WebSocket if available
@@ -548,36 +567,11 @@ class EventCaptureManager:
             return event
     
     async def _emit_event_websocket(self, event: ExecutionEvent):
-        """Emit event via WebSocket."""
+        """Emit event via WebSocket using the provided callback."""
+        if not self._emit_event_callback:
+            return
         try:
-            # Import here to avoid circular dependencies
-            import sys
-            from pathlib import Path
-            backend_path = Path(__file__).parent.parent.parent / "backend"
-            if str(backend_path) not in sys.path:
-                sys.path.insert(0, str(backend_path))
-
-            from websocket_events import create_event_captured_event
-            from websocket.events import send_ws_event
-            
-            ws_event = create_event_captured_event(
-                run_id=self.run_id,
-                event_id=event.id,
-                event_type=event.event_type,
-                execution_order=event.execution_order,
-                timestamp=event.timestamp.isoformat() if event.timestamp else datetime.now(timezone.utc).isoformat(),
-                node_id=event.node_id,
-                event_subtype=event.event_subtype,
-                agent_name=event.agent_name,
-                depth=event.depth
-            )
-            
-            await send_ws_event(
-                self.websocket,
-                ws_event.event_type,
-                ws_event.data,
-                run_id=self.run_id
-            )
+            await self._emit_event_callback(self.websocket, event, self.run_id)
         except Exception as e:
             # Silently ignore websocket errors to not break event capture
             pass
@@ -606,7 +600,7 @@ class EventCaptureManager:
             "enabled": self.enabled,
             "current_node_id": self.current_node_id,
             "current_step_id": self.current_step_id,
-            "execution_order": self.execution_order
+            "execution_order": self._order_counter
         }
     
     def flush(self):
@@ -621,16 +615,22 @@ class EventCaptureManager:
         self.enabled = False
 
 
-# Global event capture manager instance (optional)
-_global_event_captor: Optional[EventCaptureManager] = None
+
+_event_captor_var: contextvars.ContextVar[Optional['EventCaptureManager']] = (
+    contextvars.ContextVar('event_captor', default=None)
+)
 
 
 def get_event_captor() -> Optional[EventCaptureManager]:
-    """Get the global event captor instance."""
-    return _global_event_captor
+    """Get the event captor for the current execution context."""
+    return _event_captor_var.get()
 
 
 def set_event_captor(captor: Optional[EventCaptureManager]):
-    """Set the global event captor instance."""
-    global _global_event_captor
-    _global_event_captor = captor
+    """Set the event captor for the current execution context.
+
+    Uses contextvars to isolate per-session/per-branch.
+    When using ThreadPoolExecutor, use contextvars.copy_context()
+    to propagate the captor to worker threads.
+    """
+    _event_captor_var.set(captor)

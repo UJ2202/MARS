@@ -2,7 +2,7 @@
 WebSocket event helpers and utilities.
 """
 
-import logging
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -13,6 +13,10 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Retry configuration for transient WS failures
+_WS_MAX_RETRIES = 2
+_WS_RETRY_BACKOFF_BASE = 0.1  # seconds
+
 
 async def send_ws_event(
     websocket: WebSocket,
@@ -21,14 +25,11 @@ async def send_ws_event(
     run_id: str = None,
     session_id: str = None
 ) -> bool:
-    """Send a WebSocket event in the standardized protocol format.
+    """Send a WebSocket event with retry on transient failure.
 
-    This helper ensures all WebSocket messages follow the event protocol:
-    - event_type: The type of event (e.g., 'output', 'status', 'workflow_started')
-    - timestamp: ISO format timestamp
-    - run_id: Optional run identifier
-    - session_id: Optional session identifier
-    - data: Event-specific data payload
+    Retries up to ``_WS_MAX_RETRIES`` times with exponential back-off
+    for transient errors (e.g. brief network hiccups).  Permanent
+    disconnects are detected via ``WebSocketState`` and bail immediately.
 
     Returns:
         bool: True if sent successfully, False otherwise
@@ -36,10 +37,8 @@ async def send_ws_event(
     # Check connection state before sending
     try:
         if websocket.client_state != WebSocketState.CONNECTED:
-            logger.debug("WebSocket not connected, skipping event", event_type=event_type)
             return False
     except Exception:
-        # If we can't check state, try to send anyway
         pass
 
     message = {
@@ -53,9 +52,22 @@ async def send_ws_event(
     if session_id:
         message["session_id"] = session_id
 
-    try:
-        await websocket.send_json(message)
-        return True
-    except Exception as e:
-        logger.warning("Failed to send WebSocket event %s: %s", event_type, e)
-        return False
+    last_error = None
+    for attempt in range(_WS_MAX_RETRIES + 1):
+        try:
+            await websocket.send_json(message)
+            return True
+        except Exception as e:
+            last_error = e
+            # If socket is no longer connected, don't retry
+            try:
+                if websocket.client_state != WebSocketState.CONNECTED:
+                    break
+            except Exception:
+                break
+            if attempt < _WS_MAX_RETRIES:
+                await asyncio.sleep(_WS_RETRY_BACKOFF_BASE * (2 ** attempt))
+
+    logger.warning("ws_send_failed event=%s retries=%d error=%s",
+                    event_type, _WS_MAX_RETRIES, last_error)
+    return False

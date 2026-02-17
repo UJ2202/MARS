@@ -7,8 +7,10 @@ from ruamel.yaml import YAML
 from .cmbagent_utils import cmbagent_debug
 from pathlib import Path
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='[%(name)s] %(message)s')
+# Configure logging - only set up handler if no handlers exist yet
+# (avoids overriding structured logging configured by the backend)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format='[%(name)s] %(message)s')
 
 logger = logging.getLogger(__name__)
 

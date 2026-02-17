@@ -56,6 +56,8 @@ from cmbagent.phases.idea_generation import IdeaGenerationPhase, IdeaGenerationP
 from cmbagent.phases.hitl_planning import HITLPlanningPhase, HITLPlanningPhaseConfig
 from cmbagent.phases.hitl_control import HITLControlPhase, HITLControlPhaseConfig
 from cmbagent.phases.copilot_phase import CopilotPhase, CopilotPhaseConfig
+from cmbagent.phases.literature_review import LiteratureReviewPhase, LiteratureReviewConfig
+from cmbagent.phases.synthesis import SynthesisPhase, SynthesisConfig
 
 
 # Register all phases with the registry
@@ -67,6 +69,8 @@ PhaseRegistry.register_class("idea_generation", IdeaGenerationPhase)
 PhaseRegistry.register_class("hitl_planning", HITLPlanningPhase)
 PhaseRegistry.register_class("hitl_control", HITLControlPhase)
 PhaseRegistry.register_class("copilot", CopilotPhase)
+PhaseRegistry.register_class("literature_review", LiteratureReviewPhase)
+PhaseRegistry.register_class("synthesis", SynthesisPhase)
 
 
 __all__ = [
@@ -115,6 +119,14 @@ __all__ = [
     # Copilot
     'CopilotPhase',
     'CopilotPhaseConfig',
+
+    # Literature Review (sample extensibility phase)
+    'LiteratureReviewPhase',
+    'LiteratureReviewConfig',
+
+    # Synthesis (sample extensibility phase)
+    'SynthesisPhase',
+    'SynthesisConfig',
 
     # Execution manager
     'PhaseExecutionManager',

@@ -21,17 +21,20 @@ from cmbagent.database.models import WorkflowStep
 class RetryContextManager:
     """Manages retry context for workflow steps"""
 
-    def __init__(self, db_session: Session, session_id: str):
+    def __init__(self, db_session: Session, session_id: str, emit_event_callback=None):
         """
         Initialize retry context manager.
 
         Args:
             db_session: Database session
             session_id: Current session ID
+            emit_event_callback: Optional callback for emitting WebSocket events.
+                Signature: (event_type: str, run_id: str, data: dict) -> None
         """
         self.db = db_session
         self.session_id = session_id
         self.error_analyzer = ErrorAnalyzer()
+        self._emit_event_callback = emit_event_callback
 
     def create_retry_context(
         self,
@@ -119,65 +122,49 @@ class RetryContextManager:
         return retry_context
 
     def _emit_retry_started_event(self, step, retry_context, user_feedback):
-        """Emit retry started event to WebSocket"""
+        """Emit retry started event via callback"""
+        if not self._emit_event_callback:
+            return
         try:
-            from backend.websocket_events import WebSocketEvent, WebSocketEventType, StepRetryStartedData
-            from backend.event_queue import event_queue
-
-            event_data = StepRetryStartedData(
-                step_id=str(step.id),
-                step_number=step.step_number,
-                attempt_number=retry_context.current_attempt,
-                max_attempts=retry_context.max_attempts,
-                error_category=retry_context.error_category,
-                error_pattern=retry_context.error_pattern,
-                success_probability=retry_context.success_probability,
-                strategy=retry_context.strategy,
-                suggestions=retry_context.suggested_fixes[:5],  # Limit to 5 suggestions
-                has_user_feedback=bool(user_feedback)
+            self._emit_event_callback(
+                "step_retry_started",
+                str(step.run_id) if step.run_id else None,
+                {
+                    "step_id": str(step.id),
+                    "step_number": step.step_number,
+                    "attempt_number": retry_context.current_attempt,
+                    "max_attempts": retry_context.max_attempts,
+                    "error_category": retry_context.error_category,
+                    "error_pattern": retry_context.error_pattern,
+                    "success_probability": retry_context.success_probability,
+                    "strategy": retry_context.strategy,
+                    "suggestions": retry_context.suggested_fixes[:5],
+                    "has_user_feedback": bool(user_feedback)
+                }
             )
-
-            event = WebSocketEvent(
-                event_type=WebSocketEventType.STEP_RETRY_STARTED,
-                timestamp=datetime.utcnow(),
-                run_id=str(step.run_id) if step.run_id else None,
-                data=event_data.dict()
-            )
-
-            if step.run_id:
-                event_queue.push(str(step.run_id), event)
-
         except Exception as e:
             # Don't fail retry if event emission fails
-            logger.warning("retry_started_event_emission_failed", error=str(e))
+            logger.warning("retry_started_event_emission_failed error=%s", e)
 
     def _emit_retry_backoff_event(self, step, attempt_number, backoff_seconds, strategy):
-        """Emit retry backoff event to WebSocket"""
+        """Emit retry backoff event via callback"""
+        if not self._emit_event_callback:
+            return
         try:
-            from backend.websocket_events import WebSocketEvent, WebSocketEventType, StepRetryBackoffData
-            from backend.event_queue import event_queue
-
-            event_data = StepRetryBackoffData(
-                step_id=str(step.id),
-                step_number=step.step_number,
-                attempt_number=attempt_number,
-                backoff_seconds=backoff_seconds,
-                retry_strategy=strategy
+            self._emit_event_callback(
+                "step_retry_backoff",
+                str(step.run_id) if step.run_id else None,
+                {
+                    "step_id": str(step.id),
+                    "step_number": step.step_number,
+                    "attempt_number": attempt_number,
+                    "backoff_seconds": backoff_seconds,
+                    "retry_strategy": strategy
+                }
             )
-
-            event = WebSocketEvent(
-                event_type=WebSocketEventType.STEP_RETRY_BACKOFF,
-                timestamp=datetime.utcnow(),
-                run_id=str(step.run_id) if step.run_id else None,
-                data=event_data.dict()
-            )
-
-            if step.run_id:
-                event_queue.push(str(step.run_id), event)
-
         except Exception as e:
             # Don't fail retry if event emission fails
-            logger.warning("retry_backoff_event_emission_failed", error=str(e))
+            logger.warning("retry_backoff_event_emission_failed error=%s", e)
 
     def _load_previous_attempts(self, step: WorkflowStep) -> List[RetryAttempt]:
         """

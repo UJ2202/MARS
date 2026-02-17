@@ -346,3 +346,67 @@ class BranchComparator:
         }
 
         return summary
+
+    def compare_costs(
+        self,
+        parent_run_id: str,
+        branch_run_ids: List[str],
+    ) -> Dict[str, Any]:
+        """Compare cost and token usage across a parent run and its branches.
+
+        Args:
+            parent_run_id: Root / parent workflow run ID.
+            branch_run_ids: List of branch workflow run IDs to compare.
+
+        Returns:
+            Dict keyed by run_id with ``total_cost``, ``total_tokens``,
+            ``prompt_tokens``, ``completion_tokens``, and ``model_breakdown``.
+        """
+        results: Dict[str, Any] = {}
+
+        for run_id in [parent_run_id] + list(branch_run_ids):
+            costs = self.db.query(CostRecord).filter(
+                CostRecord.run_id == run_id,
+            ).all()
+
+            model_breakdown: Dict[str, Dict[str, Any]] = {}
+            total_cost = 0.0
+            total_prompt = 0
+            total_completion = 0
+
+            for c in costs:
+                cost_val = float(c.cost_usd) if c.cost_usd else 0.0
+                prompt = c.prompt_tokens or 0
+                completion = c.completion_tokens or 0
+
+                total_cost += cost_val
+                total_prompt += prompt
+                total_completion += completion
+
+                model = c.model or "unknown"
+                if model not in model_breakdown:
+                    model_breakdown[model] = {
+                        "cost": 0.0,
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                    }
+                model_breakdown[model]["cost"] += cost_val
+                model_breakdown[model]["prompt_tokens"] += prompt
+                model_breakdown[model]["completion_tokens"] += completion
+
+            # Attach branch name
+            run = self.db.query(WorkflowRun).filter(WorkflowRun.id == run_id).first()
+            name = "main"
+            if run and run.meta:
+                name = run.meta.get("branch_name", "main")
+
+            results[run_id] = {
+                "branch_name": name,
+                "total_cost": round(total_cost, 6),
+                "total_tokens": total_prompt + total_completion,
+                "prompt_tokens": total_prompt,
+                "completion_tokens": total_completion,
+                "model_breakdown": model_breakdown,
+            }
+
+        return results

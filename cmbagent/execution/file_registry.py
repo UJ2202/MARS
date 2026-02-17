@@ -1,6 +1,11 @@
 """
 File Registry - Central tracking system for all workflow files.
 
+DEPRECATED: Use cmbagent.database.file_repository.FileRepository for DB-backed
+file tracking (Stage 4). This in-memory registry is kept for backward
+compatibility with output_collector and tracked_code_executor until Stage 6
+(Workflow Migration) consolidates all consumers.
+
 This module provides the core file management system for CMBAgent,
 enabling proper tracking, categorization, and aggregation of all
 generated artifacts across different execution modes.

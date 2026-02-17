@@ -10,8 +10,9 @@ This module handles the execution of branches where:
 import os
 import json
 import logging
+import contextvars
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 from cmbagent.database.models import (
     WorkflowRun, WorkflowStep, DAGNode, Checkpoint, Branch
@@ -460,3 +461,47 @@ PLANNING GUIDELINES:
             config.update(modifications["parameter_overrides"])
 
         return config
+
+    def execute_in_branch_context(
+        self,
+        fn: Callable[..., Any],
+        db_session=None,
+        *args,
+        **kwargs,
+    ) -> Any:
+        """Run *fn* inside an isolated contextvars context for this branch.
+
+        This ensures:
+        - The EventCaptureManager is scoped to the branch run_id / session_id
+        - The parent context's captor is untouched after the call
+        - Thread-safety via ``contextvars.copy_context()``
+
+        Args:
+            fn: Callable that performs the branch workflow execution.
+            db_session: Optional DB session for the EventCaptureManager.
+                        Falls back to ``self.db`` if not provided.
+            *args, **kwargs: Forwarded to *fn*.
+
+        Returns:
+            Whatever *fn* returns.
+        """
+        from cmbagent.execution.event_capture import (
+            EventCaptureManager,
+            set_event_captor,
+        )
+
+        session = db_session or self.db
+        branch_session_id = self.branch_run.session_id if self.branch_run else ""
+
+        ctx = contextvars.copy_context()
+
+        def _run():
+            captor = EventCaptureManager(
+                db_session=session,
+                run_id=self.branch_run_id,
+                session_id=branch_session_id,
+            )
+            set_event_captor(captor)
+            return fn(*args, **kwargs)
+
+        return ctx.run(_run)

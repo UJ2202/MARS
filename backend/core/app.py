@@ -3,6 +3,8 @@ FastAPI application factory and configuration.
 """
 
 import os
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,21 +15,45 @@ from core.logging import configure_logging
 # Global app instance
 _app: FastAPI = None
 
+# Store log config for re-application after uvicorn overrides
+_log_config = {}
+
+
+def _get_default_log_file() -> str:
+    """Get default log file path (~/.cmbagent/logs/backend.log)."""
+    log_dir = Path.home() / ".cmbagent" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return str(log_dir / "backend.log")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """App lifespan: re-apply logging after uvicorn overrides it."""
+    configure_logging(**_log_config)
+    import logging
+    logging.getLogger(__name__).info("Backend started, logs writing to %s", _log_config.get("log_file", "console"))
+    yield
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    global _app
+    global _app, _log_config
 
-    # Configure structured logging based on environment
-    configure_logging(
-        log_level=os.getenv("LOG_LEVEL", "INFO"),
-        json_output=os.getenv("LOG_JSON", "false").lower() == "true",
-        log_file=os.getenv("LOG_FILE")
-    )
+    # Build log config
+    log_file = os.getenv("LOG_FILE") or _get_default_log_file()
+    _log_config = {
+        "log_level": os.getenv("LOG_LEVEL", "INFO"),
+        "json_output": os.getenv("LOG_JSON", "false").lower() == "true",
+        "log_file": log_file,
+    }
+
+    # Initial configure (may be overridden by uvicorn, re-applied in lifespan)
+    configure_logging(**_log_config)
 
     app = FastAPI(
         title=settings.app_title,
         version=settings.app_version,
+        lifespan=lifespan,
     )
 
     # Configure CORS

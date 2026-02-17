@@ -2,6 +2,7 @@
 DAG Tracker for workflow visualization and state management.
 """
 
+import copy
 import os
 import asyncio
 from datetime import datetime, timezone
@@ -13,11 +14,117 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _safe_commit(db_session, context: str = "unknown") -> bool:
+    """Commit with rollback on IntegrityError/OperationalError.
+
+    Returns True on success, False on failure (after rollback).
+    """
+    try:
+        db_session.commit()
+        return True
+    except Exception as e:
+        error_type = type(e).__name__
+        logger.error("db_commit_failed context=%s error_type=%s error=%s",
+                      context, error_type, e)
+        try:
+            db_session.rollback()
+        except Exception as rb_err:
+            logger.warning("db_rollback_failed context=%s error=%s", context, rb_err)
+        return False
+
+# ---------------------------------------------------------------------------
+# Template-based DAG definitions (Task 1.1)
+# ---------------------------------------------------------------------------
+
+DAG_TEMPLATES = {
+    "plan-execute": {
+        "initial_nodes": [
+            {"id": "planning", "label": "Planning Phase", "type": "planning",
+             "agent": "planner", "status": "pending", "step_number": 0,
+             "description": "Analyzing task and creating execution plan"},
+        ],
+        "initial_edges": [],
+        "dynamic_steps": True,
+    },
+    "fixed-pipeline": {
+        "initial_nodes": [
+            {"id": "init", "label": "Initialize", "type": "planning",
+             "status": "pending", "step_number": 0, "description": "Initialize agent"},
+            {"id": "execute", "label": "Execute", "type": "agent",
+             "status": "pending", "step_number": 1, "description": "Execute task"},
+            {"id": "terminator", "label": "Completion", "type": "terminator",
+             "agent": "system", "status": "pending", "step_number": 2},
+        ],
+        "initial_edges": [
+            {"source": "init", "target": "execute"},
+            {"source": "execute", "target": "terminator"},
+        ],
+        "dynamic_steps": False,
+    },
+    "three-stage-pipeline": {
+        "initial_nodes": [
+            {"id": "init", "label": "Initialize", "type": "planning",
+             "status": "pending", "step_number": 0},
+            {"id": "process", "label": "Process", "type": "agent",
+             "status": "pending", "step_number": 1},
+            {"id": "output", "label": "Output", "type": "agent",
+             "status": "pending", "step_number": 2},
+            {"id": "terminator", "label": "Completion", "type": "terminator",
+             "agent": "system", "status": "pending", "step_number": 3},
+        ],
+        "initial_edges": [
+            {"source": "init", "target": "process"},
+            {"source": "process", "target": "output"},
+            {"source": "output", "target": "terminator"},
+        ],
+        "dynamic_steps": False,
+    },
+    "lit-plan-execute-synthesize": {
+        "initial_nodes": [
+            {"id": "literature_review", "label": "Literature Review", "type": "agent",
+             "agent": "researcher", "status": "pending", "step_number": 0,
+             "description": "Reviewing existing research and literature"},
+            {"id": "planning", "label": "Planning Phase", "type": "planning",
+             "agent": "planner", "status": "pending", "step_number": 1,
+             "description": "Analyzing task and creating execution plan"},
+        ],
+        "initial_edges": [
+            {"source": "literature_review", "target": "planning"},
+        ],
+        "dynamic_steps": True,
+        "synthesis_after_steps": True,
+    },
+}
+
+MODE_TO_TEMPLATE = {
+    "planning-control": ("plan-execute", {"planning": {"label": "Planning Phase"}}),
+    "hitl-interactive": ("plan-execute", {"planning": {"label": "HITL Planning"}}),
+    "idea-generation": ("plan-execute", {"planning": {"label": "Idea Planning Phase"}}),
+    "one-shot": ("fixed-pipeline", {}),
+    "ocr": ("three-stage-pipeline", {
+        "init": {"label": "Initialize OCR"},
+        "process": {"label": "Process PDFs", "agent": "ocr"},
+        "output": {"label": "Save Output", "agent": "ocr"},
+    }),
+    "arxiv": ("three-stage-pipeline", {
+        "init": {"label": "Parse Text"},
+        "process": {"label": "Filter arXiv URLs", "agent": "arxiv"},
+        "output": {"label": "Download Papers", "agent": "arxiv"},
+    }),
+    "enhance-input": ("fixed-pipeline", {
+        "execute": {"label": "Enhance Input", "agent": "enhancer"},
+    }),
+    "deep-research-extended": ("lit-plan-execute-synthesize", {}),
+}
+
+
 class DAGTracker:
     """Track DAG state and emit events for UI visualization using database."""
 
     def __init__(self, websocket: WebSocket, task_id: str, mode: str,
-                 send_event_func, run_id: str = None):
+                 send_event_func, run_id: str = None,
+                 db_session=None, session_id: str = None,
+                 event_loop=None):
         self.websocket = websocket
         self.task_id = task_id
         self.mode = mode
@@ -27,47 +134,69 @@ class DAGTracker:
         self.current_step = 0
         self.node_statuses = {}
         self.db_session = None
-        self.dag_builder = None
-        self.dag_visualizer = None
+        self._owns_db_session = False  # True when we created the session ourselves
         self.run_id = run_id
-        self.session_id = None
+        self.session_id = session_id  # Propagated to all WS events
         self.event_repo = None
         self.node_event_map = {}
         self.execution_order_counter = 0
+        self._event_loop = event_loop  # For cross-thread WS emission
 
         # Track current workflow phase (planning, control, execution)
         self.current_phase = "execution"
         self.current_step_number = None
 
-        # Try to initialize database connection
+        if db_session:
+            # Use injected DB session (Task 1.5)
+            self.db_session = db_session
+            self.session_id = session_id
+            self._setup_repos()
+        else:
+            self._init_database()
+
+    def _init_database(self) -> None:
+        """Initialize database connection from scratch."""
         try:
             from cmbagent.database import get_db_session as get_session, init_database
-            from cmbagent.database.dag_builder import DAGBuilder
-            from cmbagent.database.dag_visualizer import DAGVisualizer
             from cmbagent.database.repository import WorkflowRepository, EventRepository
             from cmbagent.database.session_manager import SessionManager
 
             init_database()
             self.db_session = get_session()
+            self._owns_db_session = True
 
             session_manager = SessionManager(self.db_session)
-            self.session_id = session_manager.get_or_create_default_session()
+            if not self.session_id:
+                self.session_id = session_manager.get_or_create_default_session()
 
-            self.workflow_repo = WorkflowRepository(self.db_session, self.session_id)
-            self.event_repo = EventRepository(self.db_session, self.session_id)
-
-            if not self.run_id:
-                logger.debug("no_run_id_provided", task_id=task_id)
-                self.run_id = task_id
-
-            # Create WorkflowRun record if it doesn't exist
-            self._ensure_workflow_run_exists(mode, task_id)
-
-            self.dag_builder = DAGBuilder(self.db_session, self.session_id)
-            self.dag_visualizer = DAGVisualizer(self.db_session)
+            self._setup_repos()
             logger.info("dag_system_initialized", run_id=self.run_id)
         except Exception as e:
             logger.warning("dag_system_init_failed", error=str(e), exc_info=True)
+
+    def close(self) -> None:
+        """Close the DB session if we own it."""
+        if self._owns_db_session and self.db_session:
+            try:
+                self.db_session.close()
+            except Exception:
+                pass
+            self.db_session = None
+            self._owns_db_session = False
+
+    def _setup_repos(self) -> None:
+        """Set up repositories assuming db_session and session_id are set."""
+        from cmbagent.database.repository import WorkflowRepository, EventRepository
+
+        self.workflow_repo = WorkflowRepository(self.db_session, self.session_id)
+        self.event_repo = EventRepository(self.db_session, self.session_id)
+
+        if not self.run_id:
+            logger.debug("no_run_id_provided", task_id=self.task_id)
+            self.run_id = self.task_id
+
+        # Create WorkflowRun record if it doesn't exist
+        self._ensure_workflow_run_exists(self.mode, self.task_id)
 
     def _ensure_workflow_run_exists(self, mode: str, task_id: str):
         """Ensure a WorkflowRun record exists for this run_id.
@@ -100,12 +229,11 @@ class DAGTracker:
                 meta={"task_id": task_id}
             )
             self.db_session.add(workflow_run)
-            self.db_session.commit()
+            _safe_commit(self.db_session, "workflow_run_create")
             logger.info("workflow_run_created", run_id=self.run_id)
 
         except Exception as e:
             logger.error("workflow_run_ensure_failed", error=str(e), exc_info=True)
-            self.db_session.rollback()
 
     def _update_workflow_run_task(self, task: str, config: Dict[str, Any]):
         """Update WorkflowRun with actual task description and config."""
@@ -132,193 +260,54 @@ class DAGTracker:
                 logger.debug("workflow_run_task_updated")
         except Exception as e:
             logger.error("workflow_run_task_update_failed", error=str(e))
-            self.db_session.rollback()
+            try:
+                self.db_session.rollback()
+            except Exception:
+                pass
 
     def create_dag_for_mode(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create initial DAG structure based on execution mode."""
-        # Update WorkflowRun with actual task description
+        """Create initial DAG structure based on execution mode using templates."""
         self._update_workflow_run_task(task, config)
 
-        if self.mode == "planning-control":
-            return self._create_planning_control_dag(task, config)
-        elif self.mode == "idea-generation":
-            return self._create_idea_generation_dag(task, config)
+        template_key, overrides = MODE_TO_TEMPLATE.get(self.mode, ("fixed-pipeline", {}))
+        template = DAG_TEMPLATES[template_key]
+
+        # Dynamic overrides based on config
+        if self.mode == "one-shot":
+            agent = config.get("agent", "engineer")
+            overrides = {"execute": {"label": f"Execute ({agent})", "agent": agent}}
         elif self.mode == "hitl-interactive":
-            return self._create_hitl_dag(task, config)
-        elif self.mode == "one-shot":
-            return self._create_one_shot_dag(task, config)
-        elif self.mode == "ocr":
-            return self._create_ocr_dag(task, config)
-        elif self.mode == "arxiv":
-            return self._create_arxiv_dag(task, config)
-        elif self.mode == "enhance-input":
-            return self._create_enhance_input_dag(task, config)
-        else:
-            return self._create_one_shot_dag(task, config)
+            hitl_variant = config.get("hitlVariant", "full_interactive")
+            label = "HITL Planning" if hitl_variant in ("planning_only", "full_interactive") else "Planning Phase"
+            overrides = {"planning": {"label": label}}
 
-    def _create_planning_control_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create initial DAG for planning-control mode."""
-        self.nodes = [
-            {
-                "id": "planning",
-                "label": "Planning Phase",
-                "type": "planning",
-                "agent": "planner",
-                "status": "pending",
-                "step_number": 0,
-                "description": "Analyzing task and creating execution plan",
-                "task": task[:100] + "..." if len(task) > 100 else task
-            }
-        ]
-        self.edges = []
+        return self._create_from_template(template, task, overrides)
+
+    def _create_from_template(self, template: Dict[str, Any], task: str,
+                              overrides: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """Create DAG nodes and edges from a template with optional overrides."""
+        self.nodes = copy.deepcopy(template["initial_nodes"])
+        self.edges = copy.deepcopy(template["initial_edges"])
+
+        # Apply per-node overrides
+        for node in self.nodes:
+            node_overrides = overrides.get(node["id"])
+            if node_overrides:
+                node.update(node_overrides)
+
+        # Add task display to first node
+        if self.nodes:
+            task_display = task[:100] + "..." if len(task) > 100 else task
+            self.nodes[0]["task"] = task_display
 
         for node in self.nodes:
             self.node_statuses[node["id"]] = "pending"
 
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 1}
-
-    def _create_idea_generation_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create initial DAG for idea-generation mode.
-        
-        Like planning-control mode, starts with just a planning node.
-        Steps are added dynamically after the plan is generated.
-        """
-        self.nodes = [
-            {
-                "id": "planning",
-                "label": "Idea Planning Phase",
-                "type": "planning",
-                "agent": "planner",
-                "status": "pending",
-                "step_number": 0,
-                "description": "Planning idea generation workflow",
-                "task": task[:100] + "..." if len(task) > 100 else task
-            }
-        ]
-        self.edges = []
-
-        for node in self.nodes:
-            self.node_statuses[node["id"]] = "pending"
-
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 1}
-
-    def _create_hitl_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create initial DAG for HITL (Human-in-the-Loop) interactive mode.
-
-        The HITL workflow has these phases:
-        1. Planning Phase - AI generates plan (with human feedback iterations)
-        2. Execution Steps - Executed with optional human checkpoints
-
-        Steps are added dynamically after the plan is generated and approved.
-        Human review is tracked as events within steps, not as separate nodes.
-        """
-        hitl_variant = config.get("hitlVariant", "full_interactive")
-
-        # All HITL variants start with just the planning node
-        # Steps are added dynamically after plan approval
-        label = "HITL Planning" if hitl_variant in ("planning_only", "full_interactive") else "Planning Phase"
-
-        self.nodes = [
-            {
-                "id": "planning",
-                "label": label,
-                "type": "planning",
-                "agent": "planner",
-                "status": "pending",
-                "step_number": 0,
-                "description": "AI generates execution plan with human feedback",
-                "task": task[:100] + "..." if len(task) > 100 else task
-            }
-        ]
-        # No edges initially - steps connect after plan is created
-        self.edges = []
-
-        for node in self.nodes:
-            self.node_statuses[node["id"]] = "pending"
+        # Persist fixed-pipeline DAGs immediately
+        if not template.get("dynamic_steps"):
+            self._persist_dag_nodes_to_db()
 
         return {"nodes": self.nodes, "edges": self.edges, "levels": len(self.nodes)}
-
-    def _create_one_shot_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create DAG for one-shot mode."""
-        agent = config.get("agent", "engineer")
-        self.nodes = [
-            {"id": "init", "label": "Initialize", "type": "planning",
-             "status": "pending", "step_number": 0, "description": "Initialize agent"},
-            {"id": "execute", "label": f"Execute ({agent})", "type": "agent",
-             "agent": agent, "status": "pending", "step_number": 1, "description": "Execute task"},
-            {"id": "terminator", "label": "Completion", "type": "terminator",
-             "agent": "system", "status": "pending", "step_number": 2},
-        ]
-        self.edges = [
-            {"source": "init", "target": "execute"},
-            {"source": "execute", "target": "terminator"},
-        ]
-        for node in self.nodes:
-            self.node_statuses[node["id"]] = "pending"
-
-        self._persist_dag_nodes_to_db()
-
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 3}
-
-    def _create_ocr_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create DAG for OCR mode."""
-        self.nodes = [
-            {"id": "init", "label": "Initialize OCR", "type": "planning",
-             "status": "pending", "step_number": 0},
-            {"id": "process", "label": "Process PDFs", "type": "agent",
-             "agent": "ocr", "status": "pending", "step_number": 1},
-            {"id": "output", "label": "Save Output", "type": "agent",
-             "agent": "ocr", "status": "pending", "step_number": 2},
-            {"id": "terminator", "label": "Completion", "type": "terminator",
-             "agent": "system", "status": "pending", "step_number": 3},
-        ]
-        self.edges = [
-            {"source": "init", "target": "process"},
-            {"source": "process", "target": "output"},
-            {"source": "output", "target": "terminator"},
-        ]
-        for node in self.nodes:
-            self.node_statuses[node["id"]] = "pending"
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 4}
-
-    def _create_arxiv_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create DAG for arXiv filter mode."""
-        self.nodes = [
-            {"id": "init", "label": "Parse Text", "type": "planning",
-             "status": "pending", "step_number": 0},
-            {"id": "filter", "label": "Filter arXiv URLs", "type": "agent",
-             "agent": "arxiv", "status": "pending", "step_number": 1},
-            {"id": "download", "label": "Download Papers", "type": "agent",
-             "agent": "arxiv", "status": "pending", "step_number": 2},
-            {"id": "terminator", "label": "Completion", "type": "terminator",
-             "agent": "system", "status": "pending", "step_number": 3},
-        ]
-        self.edges = [
-            {"source": "init", "target": "filter"},
-            {"source": "filter", "target": "download"},
-            {"source": "download", "target": "terminator"},
-        ]
-        for node in self.nodes:
-            self.node_statuses[node["id"]] = "pending"
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 4}
-
-    def _create_enhance_input_dag(self, task: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Create DAG for enhance-input mode."""
-        self.nodes = [
-            {"id": "init", "label": "Initialize", "type": "planning",
-             "status": "pending", "step_number": 0},
-            {"id": "enhance", "label": "Enhance Input", "type": "agent",
-             "agent": "enhancer", "status": "pending", "step_number": 1},
-            {"id": "terminator", "label": "Completion", "type": "terminator",
-             "agent": "system", "status": "pending", "step_number": 2},
-        ]
-        self.edges = [
-            {"source": "init", "target": "enhance"},
-            {"source": "enhance", "target": "terminator"},
-        ]
-        for node in self.nodes:
-            self.node_statuses[node["id"]] = "pending"
-        return {"nodes": self.nodes, "edges": self.edges, "levels": 3}
 
     def _persist_dag_nodes_to_db(self):
         """Persist DAG nodes to database to satisfy foreign key constraints."""
@@ -373,26 +362,21 @@ class DAGTracker:
                     )
                     self.db_session.add(dag_edge)
 
-            self.db_session.commit()
+            _safe_commit(self.db_session, "dag_persist")
             logger.debug("dag_persisted", nodes=len(self.nodes), edges=len(self.edges))
 
         except Exception as e:
-            # Check if it's a transaction state error - if so, just log and skip
             error_msg = str(e).lower()
             if 'prepared' in error_msg or 'transaction' in error_msg or 'commit' in error_msg:
                 logger.debug("dag_persist_skipped_concurrent", error=str(e))
             else:
                 logger.error("dag_persist_failed", error=str(e), exc_info=True)
-            
-            # Only rollback if session is not already in a problematic state
+
             if self.db_session:
                 try:
-                    if hasattr(self.db_session, 'is_active') and self.db_session.is_active:
-                        self.db_session.rollback()
-                except Exception as rollback_error:
-                    # If rollback also fails due to state issues, just log it
-                    if 'prepared' not in str(rollback_error).lower():
-                        logger.warning("dag_persist_rollback_failed", error=str(rollback_error))
+                    self.db_session.rollback()
+                except Exception:
+                    pass
 
     async def add_step_nodes(self, steps: list):
         """Dynamically add step nodes after planning completes."""
@@ -449,6 +433,28 @@ class DAGTracker:
 
         # Add terminator node
         terminator_step = len(steps) + 1
+
+        # Check if template has synthesis_after_steps
+        template_key, _ = MODE_TO_TEMPLATE.get(self.mode, ("fixed-pipeline", {}))
+        template = DAG_TEMPLATES.get(template_key, {})
+        has_synthesis = template.get("synthesis_after_steps", False)
+
+        if has_synthesis:
+            # Insert synthesis node before terminator
+            synthesis_step = terminator_step
+            terminator_step = synthesis_step + 1
+
+            self.nodes.append({
+                "id": "synthesis",
+                "label": "Result Synthesis",
+                "type": "agent",
+                "agent": "researcher",
+                "status": "pending",
+                "step_number": synthesis_step,
+                "description": "Synthesizing results from all phases",
+            })
+            self.node_statuses["synthesis"] = "pending"
+
         self.nodes.append({
             "id": "terminator",
             "label": "Completion",
@@ -460,15 +466,23 @@ class DAGTracker:
         })
         self.node_statuses["terminator"] = "pending"
 
-        # Steps always connect directly from planning (no human_review node)
-        first_step_source = "planning"
-        self.edges = []
+        # Preserve pre-planning edges (e.g. literature_review → planning)
+        pre_planning_edges = [
+            e for e in self.edges
+            if e.get("target") != "step_1" and not e.get("source", "").startswith("step_")
+        ]
+        self.edges = list(pre_planning_edges)
 
-        # Create edges for steps: planning → step_1 → step_2 → ... → terminator
-        self.edges.append({"source": first_step_source, "target": "step_1"})
+        # Create edges for steps: planning → step_1 → step_2 → ... → [synthesis →] terminator
+        self.edges.append({"source": "planning", "target": "step_1"})
         for i in range(1, len(steps)):
             self.edges.append({"source": f"step_{i}", "target": f"step_{i+1}"})
-        self.edges.append({"source": f"step_{len(steps)}", "target": "terminator"})
+
+        if has_synthesis:
+            self.edges.append({"source": f"step_{len(steps)}", "target": "synthesis"})
+            self.edges.append({"source": "synthesis", "target": "terminator"})
+        else:
+            self.edges.append({"source": f"step_{len(steps)}", "target": "terminator"})
 
         # Emit dag_updated event
         try:
@@ -482,7 +496,8 @@ class DAGTracker:
                     "edges": self.edges,
                     "levels": len(steps) + 2
                 },
-                run_id=effective_run_id
+                run_id=effective_run_id,
+                session_id=self.session_id
             )
         except Exception as e:
             logger.warning("dag_updated_event_failed", error=str(e))
@@ -500,7 +515,8 @@ class DAGTracker:
                     "edges": self.edges,
                     "levels": len(set(n.get("step_number", 0) for n in self.nodes))
                 },
-                run_id=effective_run_id
+                run_id=effective_run_id,
+                session_id=self.session_id
             )
         except Exception as e:
             logger.warning("dag_created_event_failed", error=str(e))
@@ -607,7 +623,10 @@ class DAGTracker:
             except Exception as e:
                 logger.error("execution_event_creation_failed", node_id=node_id, error=str(e), exc_info=True)
                 if self.db_session:
-                    self.db_session.rollback()
+                    try:
+                        self.db_session.rollback()
+                    except Exception:
+                        pass
 
         # Send WebSocket event
         try:
@@ -623,7 +642,8 @@ class DAGTracker:
                 self.websocket,
                 "dag_node_status_changed",
                 data,
-                run_id=effective_run_id
+                run_id=effective_run_id,
+                session_id=self.session_id
             )
 
             await self.send_event(
@@ -634,7 +654,8 @@ class DAGTracker:
                     "nodes": self.nodes,
                     "edges": self.edges
                 },
-                run_id=effective_run_id
+                run_id=effective_run_id,
+                session_id=self.session_id
             )
         except Exception as e:
             logger.warning("dag_node_status_event_failed", error=str(e))
@@ -678,18 +699,30 @@ class DAGTracker:
         """Get the current step number."""
         return self.current_step_number
 
-    def track_files_in_work_dir(self, work_dir: str, node_id: str = None, step_id: str = None):
-        """Scan work directory and track generated files in the database."""
+    def track_files_in_work_dir(self, work_dir: str, node_id: str = None,
+                               step_id: str = None, generating_agent: str = None,
+                               workflow_phase: str = None):
+        """Scan work directory and track generated files using FileRepository.
+
+        Args:
+            work_dir: Root work directory to scan.
+            node_id: DAG node that produced the files.
+            step_id: Explicit workflow step ID.
+            generating_agent: Agent that generated the files.
+            workflow_phase: Explicit phase (overrides path guessing).
+        """
         if not self.db_session or not self.run_id:
-            return
+            return 0
 
         try:
-            from cmbagent.database.models import File, WorkflowStep
+            from cmbagent.database.file_repository import FileRepository
+            from cmbagent.database.models import WorkflowStep
 
+            file_repo = FileRepository(self.db_session, self.session_id)
             event_id = self.node_event_map.get(node_id) if node_id else None
 
+            # Resolve step_id from node_id or current state
             db_step_id = step_id
-            # Only associate with a step if we're in control phase and have a step node
             if not db_step_id and node_id and node_id.startswith("step_"):
                 try:
                     step_num = int(node_id.split("_")[1])
@@ -701,7 +734,6 @@ class DAGTracker:
                         db_step_id = step.id
                 except (ValueError, IndexError):
                     pass
-            # Also try to get step from current_step_number if available
             elif not db_step_id and self.current_step_number and self.current_phase == "control":
                 try:
                     step = self.db_session.query(WorkflowStep).filter(
@@ -713,7 +745,9 @@ class DAGTracker:
                 except Exception:
                     pass
 
-            # Extended directory list to track all output locations
+            # Use explicit phase instead of guessing from path
+            phase = workflow_phase or self.current_phase or "execution"
+
             output_dirs = [
                 "data", "codebase", "outputs", "chats", "cost", "time",
                 "planning", "control", "context", "docs", "summaries", "runs"
@@ -729,134 +763,69 @@ class DAGTracker:
                     continue
 
                 for root, dirs, files in os.walk(output_dir):
-                    # Skip hidden and cache directories
                     dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
 
                     for filename in files:
-                        # Skip hidden files
                         if filename.startswith('.'):
                             continue
 
                         file_path = os.path.join(root, filename)
                         rel_path = os.path.relpath(file_path, work_dir)
+                        file_type = self._classify_file_type(filename, rel_path)
 
-                        existing_file = self.db_session.query(File).filter(
-                            File.file_path == file_path,
-                            File.run_id == self.run_id
-                        ).first()
-
-                        if existing_file:
-                            if not existing_file.node_id and node_id:
-                                existing_file.node_id = node_id
-                            if not existing_file.step_id and db_step_id:
-                                existing_file.step_id = db_step_id
-                            continue
-
-                        # Classify file by extension and path
-                        file_ext = os.path.splitext(filename)[1].lower()
+                        # Determine workflow phase: explicit > directory-based > tracker state
                         rel_parts = rel_path.lower().split(os.sep)
-
-                        # Explicit pattern matching first
-                        if filename == 'final_plan.json' or filename.endswith('_plan.json'):
-                            file_type = "plan"
-                        elif filename.startswith('timing_report') or filename.startswith('cost_report'):
-                            file_type = "report"
-                        # Directory-based classification
-                        elif 'codebase' in rel_parts:
-                            file_type = "code"
-                        elif 'chats' in rel_parts:
-                            file_type = "chat"
-                        elif 'context' in rel_parts:
-                            file_type = "context"
-                        elif 'time' in rel_parts or 'cost' in rel_parts:
-                            file_type = "report"
-                        elif 'planning' in rel_parts and file_ext == '.json':
-                            file_type = "plan"
-                        # Extension-based classification
-                        elif file_ext in [".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".go", ".rs", ".rb", ".sh"]:
-                            file_type = "code"
-                        elif file_ext in [".csv", ".json", ".pkl", ".pickle", ".npz", ".npy", ".parquet", ".yaml", ".yml", ".h5", ".hdf5", ".fits"]:
-                            file_type = "data"
-                        elif file_ext in [".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg", ".eps", ".bmp", ".tiff"]:
-                            file_type = "plot"
-                        elif file_ext in [".txt", ".md", ".rst", ".html"]:
-                            file_type = "report"
-                        elif file_ext in [".log"]:
-                            file_type = "log"
-                        else:
-                            file_type = "other"
-
-                        # Determine workflow phase - use path first, then fall back to tracked phase
-                        workflow_phase = None
-                        if 'planning' in rel_parts:
-                            # Files in planning/ directory are always from planning phase
-                            workflow_phase = "planning"
+                        if workflow_phase:
+                            file_phase = workflow_phase
+                        elif 'planning' in rel_parts:
+                            file_phase = "planning"
                         elif 'control' in rel_parts:
-                            # Files in control/ directory are always from control phase
-                            workflow_phase = "control"
+                            file_phase = "control"
                         else:
-                            # For files in shared directories (data/, codebase/, etc.),
-                            # use the currently tracked phase from the DAGTracker
-                            workflow_phase = self.current_phase or "execution"
+                            file_phase = phase
 
-                        # Determine if this is a final output (primary deliverable)
-                        is_final_output = file_type in ["plot", "data", "code", "plan"]
+                        is_final_output = file_type in ("plot", "data", "code", "plan")
                         if 'context' in rel_parts or 'temp' in rel_parts:
                             is_final_output = False
 
-                        # Determine priority
-                        if is_final_output:
-                            priority = "primary"
-                        elif file_type in ["report", "chat"]:
-                            priority = "secondary"
-                        else:
-                            priority = "internal"
-
-                        try:
-                            file_size = os.path.getsize(file_path)
-                        except:
-                            file_size = 0
-
-                        file_record = File(
+                        file_repo.register_file(
                             run_id=self.run_id,
-                            event_id=event_id,
-                            node_id=node_id,
-                            step_id=db_step_id,
                             file_path=file_path,
                             file_type=file_type,
-                            size_bytes=file_size,
-                            workflow_phase=workflow_phase,
+                            node_id=node_id,
+                            step_id=db_step_id,
+                            event_id=event_id,
+                            workflow_phase=file_phase,
+                            generating_agent=generating_agent,
                             is_final_output=is_final_output,
-                            priority=priority
                         )
-                        self.db_session.add(file_record)
                         files_tracked += 1
 
-            self.db_session.commit()
+            _safe_commit(self.db_session, "file_tracking")
             if files_tracked > 0:
                 logger.debug("files_tracked", count=files_tracked)
 
                 try:
                     effective_run_id = self.run_id or self.task_id
-                    # Check if we're in an async context with a running event loop
+                    event_coro = self.send_event(
+                        self.websocket,
+                        "files_updated",
+                        {
+                            "run_id": effective_run_id,
+                            "node_id": node_id,
+                            "step_id": db_step_id,
+                            "files_tracked": files_tracked
+                        },
+                        run_id=effective_run_id,
+                        session_id=self.session_id
+                    )
                     try:
                         loop = asyncio.get_running_loop()
-                        # We have a running loop, create task
-                        asyncio.create_task(self.send_event(
-                            self.websocket,
-                            "files_updated",
-                            {
-                                "run_id": effective_run_id,
-                                "node_id": node_id,
-                                "step_id": db_step_id,
-                                "files_tracked": files_tracked
-                            },
-                            run_id=effective_run_id
-                        ))
+                        asyncio.create_task(event_coro)
                     except RuntimeError:
-                        # No running event loop, skip the websocket event
-                        # This is acceptable as file tracking is still saved to database
-                        pass
+                        # Called from sync thread - use stored event loop
+                        if self._event_loop:
+                            asyncio.run_coroutine_threadsafe(event_coro, self._event_loop)
                 except Exception as ws_err:
                     logger.debug("files_updated_event_failed", error=str(ws_err))
 
@@ -865,53 +834,89 @@ class DAGTracker:
         except Exception as e:
             logger.error("file_tracking_failed", error=str(e), exc_info=True)
             if self.db_session:
-                self.db_session.rollback()
+                try:
+                    self.db_session.rollback()
+                except Exception:
+                    pass
             return 0
 
+    @staticmethod
+    def _classify_file_type(filename: str, rel_path: str) -> str:
+        """Classify file type by name patterns, directory, and extension."""
+        file_ext = os.path.splitext(filename)[1].lower()
+        rel_parts = rel_path.lower().split(os.sep)
+
+        # Explicit pattern matching first
+        if filename == 'final_plan.json' or filename.endswith('_plan.json'):
+            return "plan"
+        if filename.startswith('timing_report') or filename.startswith('cost_report'):
+            return "report"
+        # Directory-based classification
+        if 'codebase' in rel_parts:
+            return "code"
+        if 'chats' in rel_parts:
+            return "chat"
+        if 'context' in rel_parts:
+            return "context"
+        if 'time' in rel_parts or 'cost' in rel_parts:
+            return "report"
+        if 'planning' in rel_parts and file_ext == '.json':
+            return "plan"
+        # Extension-based classification
+        if file_ext in (".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".go", ".rs", ".rb", ".sh"):
+            return "code"
+        if file_ext in (".csv", ".json", ".pkl", ".pickle", ".npz", ".npy", ".parquet", ".yaml", ".yml", ".h5", ".hdf5", ".fits"):
+            return "data"
+        if file_ext in (".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg", ".eps", ".bmp", ".tiff"):
+            return "plot"
+        if file_ext in (".txt", ".md", ".rst", ".html"):
+            return "report"
+        if file_ext == ".log":
+            return "log"
+        return "other"
+
     async def build_dag_from_plan(self, plan_output: Dict[str, Any]):
-        """Build DAG in database from plan output after planning phase completes."""
-        if not self.dag_builder or not self.run_id:
-            logger.info("using_inmemory_dag")
-            return await self._build_inmemory_dag_from_plan(plan_output)
+        """Build DAG from plan output after planning phase completes.
 
+        DEPRECATED: Use add_step_nodes() directly. Kept as thin wrapper
+        for backwards compatibility during migration.
+        """
+        number_of_steps = plan_output.get('number_of_steps_in_plan', 0)
+        steps = plan_output.get('steps', [])
+        if not steps and number_of_steps > 0:
+            steps = [{"task": f"Execute step {i+1}", "agent": "engineer"}
+                     for i in range(number_of_steps)]
+        await self.add_step_nodes(steps)
+        return {"nodes": self.nodes, "edges": self.edges, "levels": len(steps) + 2}
+
+    async def add_branch_point(self, step_id: str, branch_names: List[str]):
+        """Add a visual branch-point node to the DAG after a given step.
+
+        Creates a ``branch_point`` node connected to *step_id* with metadata
+        listing the branch names that were spawned.  This is purely for
+        visualization – actual branch execution happens in separate DAGTracker
+        instances.
+
+        Args:
+            step_id: The DAG node ID at which branching occurs (e.g. ``"step_2"``).
+            branch_names: Human-readable names of the branches that were created.
+        """
+        node_id = f"branch_at_{step_id}"
+        node = {
+            "id": node_id,
+            "type": "branch_point",
+            "label": "Branch Point",
+            "status": "completed",
+            "step_number": -1,
+            "description": f"Branches: {', '.join(branch_names)}",
+            "branches": branch_names,
+        }
+        self.nodes.append(node)
+        self.node_statuses[node_id] = "completed"
+        self.edges.append({"source": step_id, "target": node_id})
+
+        effective_run_id = self.run_id or self.task_id
         try:
-            import re
-
-            number_of_steps = plan_output.get('number_of_steps_in_plan', 0)
-            final_plan = plan_output.get('final_plan', '')
-
-            steps = []
-            if isinstance(final_plan, str):
-                step_matches = re.findall(
-                    r'(?:Step\s*)?(\d+)[.:]\s*(.+?)(?=(?:Step\s*)?\d+[.:]|$)',
-                    final_plan, re.IGNORECASE | re.DOTALL
-                )
-                for step_num, step_desc in step_matches:
-                    steps.append({
-                        "task": step_desc.strip(),
-                        "agent": "engineer",
-                        "depends_on": [f"step_{int(step_num)-1}"] if int(step_num) > 1 else ["planning"]
-                    })
-
-            if not steps and number_of_steps > 0:
-                for i in range(number_of_steps):
-                    steps.append({
-                        "task": f"Execute step {i+1}",
-                        "agent": "engineer",
-                        "depends_on": [f"step_{i-1}"] if i > 0 else ["planning"]
-                    })
-
-            plan_dict = {"steps": steps}
-
-            dag_nodes = self.dag_builder.build_from_plan(self.run_id, plan_dict)
-            dag_export = self.dag_visualizer.export_for_ui(self.run_id)
-
-            self.nodes = dag_export.get("nodes", [])
-            self.edges = dag_export.get("edges", [])
-            for node in self.nodes:
-                self.node_statuses[node["id"]] = node.get("status", "pending")
-
-            effective_run_id = self.run_id or self.task_id
             await self.send_event(
                 self.websocket,
                 "dag_updated",
@@ -919,46 +924,9 @@ class DAGTracker:
                     "run_id": effective_run_id,
                     "nodes": self.nodes,
                     "edges": self.edges,
-                    "levels": dag_export.get("levels", len(steps) + 2)
                 },
-                run_id=effective_run_id
+                run_id=effective_run_id,
+                session_id=self.session_id,
             )
-
-            logger.info("dag_built_from_plan", steps=len(steps))
-            return dag_export
-
         except Exception as e:
-            logger.error("dag_build_from_plan_failed", error=str(e), exc_info=True)
-            return await self._build_inmemory_dag_from_plan(plan_output)
-
-    async def _build_inmemory_dag_from_plan(self, plan_output: Dict[str, Any]):
-        """Fallback: Build in-memory DAG from plan output."""
-        import re
-
-        number_of_steps = plan_output.get('number_of_steps_in_plan', 1)
-        final_plan = plan_output.get('final_plan', '')
-
-        steps = []
-        if isinstance(final_plan, str):
-            step_matches = re.findall(
-                r'(?:Step\s*)?(\d+)[.:]\s*(.+?)(?=(?:Step\s*)?\d+[.:]|$)',
-                final_plan, re.IGNORECASE | re.DOTALL
-            )
-            for step_num, step_desc in step_matches:
-                steps.append({
-                    "title": f"Step {step_num}",
-                    "description": step_desc.strip()[:200],
-                    "task": step_desc.strip()
-                })
-
-        if not steps:
-            for i in range(1, number_of_steps + 1):
-                steps.append({
-                    "title": f"Step {i}",
-                    "description": f"Execute step {i}",
-                    "task": f"Step {i}"
-                })
-
-        await self.add_step_nodes(steps)
-
-        return {"nodes": self.nodes, "edges": self.edges, "levels": len(steps) + 2}
+            logger.warning("branch_point_event_failed", error=str(e))

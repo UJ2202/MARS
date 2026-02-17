@@ -281,13 +281,6 @@ class HITLControlPhase(Phase):
                     if redo_count > 0:
                         logger.info("step_redo_initiated", step_num=step_num, redo_count=redo_count)
 
-                        # Create redo branch in DAG
-                        manager.create_redo_branch(
-                            step_number=step_num,
-                            redo_number=redo_count,
-                            hypothesis=self._accumulated_feedback or f"Redo attempt {redo_count}"
-                        )
-
                     # Execute step (attempt loop)
                     success = False
                     attempt = 0
@@ -316,6 +309,7 @@ class HITLControlPhase(Phase):
                                 api_keys=api_keys,
                                 **manager.get_managed_cmbagent_kwargs()
                             )
+                            cmbagent._callbacks = context.callbacks
 
                             # Configure AG2 HITL handoffs (if enabled)
                             if self.config.use_ag2_handoffs:
@@ -547,7 +541,6 @@ class HITLControlPhase(Phase):
 
                 with open(context_path, 'wb') as f:
                     pickle.dump(filtered_context, f)
-                manager.track_file(context_path)
 
                 # Save chat history
                 chat_full_path = os.path.join(control_dir, "chats")
@@ -555,7 +548,6 @@ class HITLControlPhase(Phase):
                 chat_output_path = os.path.join(chat_full_path, f"chat_history_step_{step_num}.json")
                 with open(chat_output_path, 'w') as f:
                     json.dump(step_chat_history, f, indent=2)
-                manager.track_file(chat_output_path)
 
                 # Display cost
                 if cmbagent:
@@ -584,8 +576,6 @@ class HITLControlPhase(Phase):
 
             with open(context_file, 'wb') as f:
                 pickle.dump(filtered_final_context, f)
-
-            manager.track_file(context_file)
 
             # Build output
             output_data = {

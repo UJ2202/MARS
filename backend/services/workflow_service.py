@@ -85,11 +85,12 @@ class WorkflowService:
         mode: str = "one-shot",
         agent: str = "engineer",
         model: str = "gpt-4o",
-        config: Dict[str, Any] = None
+        config: Dict[str, Any] = None,
+        session_id: str = None
     ) -> Dict[str, Any]:
         """
         Create a new workflow run in the database.
-        
+
         Args:
             task_id: External task identifier (from WebSocket)
             task_description: The task to execute
@@ -97,7 +98,8 @@ class WorkflowService:
             agent: Primary agent to use
             model: LLM model to use
             config: Full configuration dictionary
-            
+            session_id: Session ID to associate with this run (uses default if None)
+
         Returns:
             Dict with run_id, session_id, and db_run_id
         """
@@ -116,9 +118,12 @@ class WorkflowService:
         try:
             db = get_db_session()
             try:
+                # Use provided session_id or fall back to default
+                effective_session_id = session_id or self._default_session_id
+
                 # Create workflow repository with session isolation
-                repo = WorkflowRepository(db, self._default_session_id)
-                
+                repo = WorkflowRepository(db, effective_session_id)
+
                 # Create the workflow run
                 run = repo.create_run(
                     task_description=task_description,
@@ -129,11 +134,11 @@ class WorkflowService:
                     started_at=datetime.now(timezone.utc),
                     meta=config or {}  # Store config in meta field
                 )
-                
+
                 run_info = {
                     "task_id": task_id,
                     "run_id": str(run.id),
-                    "session_id": self._default_session_id,
+                    "session_id": effective_session_id,
                     "db_run_id": str(run.id),
                     "status": run.status
                 }

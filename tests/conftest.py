@@ -54,7 +54,7 @@ def db_tables(db_engine):
         Session, SessionState, Project, WorkflowRun, WorkflowStep,
         DAGNode, DAGEdge, Checkpoint, Message, CostRecord,
         ApprovalRequest, ActiveConnection, Branch, WorkflowMetric,
-        File, StateHistory, ExecutionEvent,
+        File, StateHistory, ExecutionEvent, RacingGroup,
     )
     Base.metadata.create_all(db_engine)
     yield db_engine

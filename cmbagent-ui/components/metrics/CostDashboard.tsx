@@ -21,10 +21,10 @@ export function CostDashboard({
   previousRunCost,
 }: CostDashboardProps) {
   return (
-    <div className="space-y-6 p-6 h-full overflow-y-auto">
+    <div className="space-y-4 p-5 h-full overflow-y-auto">
       {/* Budget Warning */}
       {budget && budget.current_usage > budget.warning_threshold && (
-        <div className={`p-4 rounded-lg border ${
+        <div className={`px-4 py-3 rounded-lg border text-sm ${
           budget.current_usage > budget.limit_threshold
             ? 'bg-red-500/10 border-red-500/30 text-red-400'
             : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
@@ -34,13 +34,13 @@ export function CostDashboard({
               ? 'Budget limit exceeded!'
               : 'Approaching budget limit'}
           </span>
-          <span className="ml-2 text-sm">
+          <span className="ml-2 text-xs opacity-70">
             ${budget.current_usage.toFixed(4)} / ${budget.limit_threshold.toFixed(2)}
           </span>
         </div>
       )}
 
-      {/* Summary Cards */}
+      {/* Summary Header */}
       <CostSummaryCards
         totalCost={summary.total_cost}
         totalTokens={summary.total_tokens}
@@ -50,18 +50,18 @@ export function CostDashboard({
         budgetLimit={budget?.limit_threshold}
       />
 
-      {/* Chart */}
-      {timeSeries.length > 0 && (
-        <CostChart data={timeSeries} height={200} />
-      )}
-
-      {/* Breakdown */}
+      {/* Breakdown (primary) */}
       <CostBreakdown
         modelBreakdown={summary.model_breakdown}
         agentBreakdown={summary.agent_breakdown}
         stepBreakdown={summary.step_breakdown}
         totalCost={summary.total_cost}
       />
+
+      {/* Chart (only when there's time series data) */}
+      {timeSeries.length > 1 && (
+        <CostChart data={timeSeries} height={160} />
+      )}
     </div>
   );
 }

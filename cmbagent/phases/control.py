@@ -251,6 +251,7 @@ class ControlPhase(Phase):
                     api_keys=context.api_keys,
                     **manager.get_managed_cmbagent_kwargs()
                 )
+                cmbagent._callbacks = context.callbacks
                 init_time = time.time() - init_start
 
                 # Get agent for this step
@@ -345,7 +346,6 @@ class ControlPhase(Phase):
                 
                 with open(context_path, 'wb') as f:
                     pickle.dump(filtered_context, f)
-                manager.track_file(context_path)
 
                 # Save chat history
                 chat_full_path = os.path.join(control_dir, "chats")
@@ -353,7 +353,6 @@ class ControlPhase(Phase):
                 chat_output_path = os.path.join(chat_full_path, f"chat_history_step_{step}.json")
                 with open(chat_output_path, 'w') as f:
                     json.dump(cmbagent.chat_result.chat_history, f, indent=2)
-                manager.track_file(chat_output_path)
 
                 # Create dummy groupchat if needed
                 if not hasattr(cmbagent, 'groupchat'):

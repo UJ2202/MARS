@@ -42,6 +42,7 @@ class Session(Base):
     dag_nodes = relationship("DAGNode", back_populates="session", cascade="all, delete-orphan")
     cost_records = relationship("CostRecord", back_populates="session", cascade="all, delete-orphan")
     execution_events = relationship("ExecutionEvent", back_populates="session", cascade="all, delete-orphan")
+    files = relationship("File", back_populates="session", cascade="all, delete-orphan")
     approval_requests = relationship("ApprovalRequest", back_populates="session")
 
     __table_args__ = (
@@ -473,15 +474,44 @@ class Branch(Base):
     # Status: active, completed, merged, abandoned
     meta = Column(JSON, nullable=True)
 
+    # Racing branch fields
+    racing_group_id = Column(String(36), ForeignKey("racing_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+    racing_priority = Column(Integer, nullable=True)
+    racing_status = Column(String(20), nullable=True)  # racing, won, lost, cancelled
+
     # Relationships
     parent_run = relationship("WorkflowRun", foreign_keys=[parent_run_id], back_populates="parent_branches")
     parent_step = relationship("WorkflowStep", foreign_keys=[parent_step_id], back_populates="parent_branches")
     child_run = relationship("WorkflowRun", foreign_keys=[child_run_id], back_populates="child_branches")
+    racing_group = relationship("RacingGroup", foreign_keys=[racing_group_id], back_populates="branches")
 
     __table_args__ = (
         Index("idx_branches_parent_run", "parent_run_id"),
         Index("idx_branches_child_run", "child_run_id"),
+        Index("idx_branches_racing_group", "racing_group_id"),
     )
+
+
+class RacingGroup(Base):
+    """Group of racing branches competing to solve the same sub-problem."""
+    __tablename__ = "racing_groups"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    parent_run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_step_id = Column(String(36), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=False, index=True)
+    strategy = Column(String(50), nullable=False, default="first_complete")
+    # Strategies: first_complete, best_score
+    status = Column(String(20), nullable=False, default="racing")
+    # Status: racing, resolved, cancelled
+    winner_branch_id = Column(String(36), ForeignKey("branches.id", ondelete="SET NULL", use_alter=True), nullable=True)
+    created_at = Column(TIMESTAMP, nullable=False, default=lambda: datetime.now(timezone.utc))
+    resolved_at = Column(TIMESTAMP, nullable=True)
+    meta = Column(JSON, nullable=True)
+
+    # Relationships
+    parent_run = relationship("WorkflowRun", foreign_keys=[parent_run_id])
+    parent_step = relationship("WorkflowStep", foreign_keys=[parent_step_id])
+    branches = relationship("Branch", back_populates="racing_group", foreign_keys="Branch.racing_group_id")
 
 
 class WorkflowMetric(Base):
@@ -512,6 +542,7 @@ class File(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=True, index=True)
     step_id = Column(String(36), ForeignKey("workflow_steps.id", ondelete="CASCADE"), nullable=True, index=True)
     event_id = Column(String(36), ForeignKey("execution_events.id", ondelete="SET NULL"), nullable=True, index=True)
     node_id = Column(String(36), ForeignKey("dag_nodes.id", ondelete="CASCADE"), nullable=True, index=True)
@@ -535,6 +566,7 @@ class File(Base):
 
     # Relationships
     run = relationship("WorkflowRun", back_populates="files")
+    session = relationship("Session", back_populates="files")
     step = relationship("WorkflowStep", back_populates="files")
     event = relationship("ExecutionEvent", back_populates="files")
     node = relationship("DAGNode", back_populates="files")
@@ -546,6 +578,7 @@ class File(Base):
         Index("idx_files_node", "node_id"),
         Index("idx_files_phase", "run_id", "workflow_phase"),
         Index("idx_files_final_output", "run_id", "is_final_output"),
+        Index("idx_files_session", "session_id"),
     )
 
 

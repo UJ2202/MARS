@@ -2,7 +2,7 @@
 
 'use client';
 
-import { DollarSign, Hash, ArrowUpRight, ArrowDownRight, Zap } from 'lucide-react';
+import { DollarSign, ArrowUp, ArrowDown } from 'lucide-react';
 
 interface CostSummaryCardsProps {
   totalCost: number;
@@ -19,88 +19,68 @@ export function CostSummaryCards({
   inputTokens,
   outputTokens,
   previousCost,
-  budgetLimit,
 }: CostSummaryCardsProps) {
   const costChange = previousCost
     ? ((totalCost - previousCost) / previousCost) * 100
-    : 0;
-  const budgetUsage = budgetLimit ? (totalCost / budgetLimit) * 100 : 0;
-
-  const cards = [
-    {
-      title: 'Total Cost',
-      value: `$${totalCost.toFixed(4)}`,
-      icon: DollarSign,
-      color: 'blue',
-      change: costChange,
-      subtitle: previousCost ? 'vs. previous run' : undefined,
-    },
-    {
-      title: 'Total Tokens',
-      value: totalTokens.toLocaleString(),
-      icon: Hash,
-      color: 'purple',
-      subtitle: `${inputTokens.toLocaleString()} in / ${outputTokens.toLocaleString()} out`,
-    },
-    {
-      title: 'Avg Cost/Token',
-      value: totalTokens > 0 ? `$${(totalCost / totalTokens * 1000).toFixed(4)}` : '$0',
-      icon: Zap,
-      color: 'green',
-      subtitle: 'per 1K tokens',
-    },
-    {
-      title: 'Budget Usage',
-      value: budgetLimit ? `${budgetUsage.toFixed(1)}%` : 'N/A',
-      icon: DollarSign,
-      color: budgetUsage > 80 ? 'red' : budgetUsage > 50 ? 'yellow' : 'green',
-      subtitle: budgetLimit ? `of $${budgetLimit.toFixed(2)} limit` : 'No limit set',
-    },
-  ];
-
-  const colorClasses: Record<string, string> = {
-    blue: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    purple: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-    green: 'bg-green-500/20 text-green-400 border-green-500/30',
-    yellow: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-    red: 'bg-red-500/20 text-red-400 border-red-500/30',
-  };
+    : null;
+  const costPerKToken = totalTokens > 0 ? (totalCost / totalTokens) * 1000 : 0;
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      {cards.map((card) => (
-        <div
-          key={card.title}
-          className={`p-4 rounded-xl border ${colorClasses[card.color]}`}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs uppercase tracking-wider opacity-70">
-              {card.title}
-            </span>
-            <card.icon className="w-4 h-4" />
-          </div>
-          <div className="flex items-end justify-between">
-            <span className="text-2xl font-bold text-white">{card.value}</span>
-            {card.change !== undefined && card.change !== 0 && (
-              <div className={`flex items-center text-xs ${
-                card.change > 0 ? 'text-red-400' : 'text-green-400'
-              }`}>
-                {card.change > 0 ? (
-                  <ArrowUpRight className="w-3 h-3" />
-                ) : (
-                  <ArrowDownRight className="w-3 h-3" />
-                )}
-                <span>{Math.abs(card.change).toFixed(1)}%</span>
-              </div>
-            )}
-          </div>
-          {card.subtitle && (
-            <span className="text-xs text-gray-400 mt-1 block">
-              {card.subtitle}
+    <div className="flex items-stretch gap-4">
+      {/* Total Cost - Hero */}
+      <div className="flex-1 bg-gradient-to-br from-blue-500/15 to-blue-600/5 rounded-xl border border-blue-500/20 p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <DollarSign className="w-4 h-4 text-blue-400" />
+          <span className="text-xs font-medium text-blue-300/70 uppercase tracking-wider">Total Cost</span>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <span className="text-3xl font-bold text-white tabular-nums">${totalCost.toFixed(4)}</span>
+          {costChange !== null && costChange !== 0 && (
+            <span className={`flex items-center text-xs font-medium ${
+              costChange > 0 ? 'text-red-400' : 'text-emerald-400'
+            }`}>
+              {costChange > 0 ? <ArrowUp className="w-3 h-3 mr-0.5" /> : <ArrowDown className="w-3 h-3 mr-0.5" />}
+              {Math.abs(costChange).toFixed(1)}%
             </span>
           )}
         </div>
-      ))}
+        <span className="text-xs text-gray-500 mt-1">${costPerKToken.toFixed(4)} / 1K tokens</span>
+      </div>
+
+      {/* Token Summary */}
+      <div className="flex-1 bg-gray-800/40 rounded-xl border border-gray-700/50 p-5">
+        <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Tokens</span>
+        <div className="text-2xl font-bold text-white mt-1 tabular-nums">
+          {totalTokens.toLocaleString()}
+        </div>
+        <div className="flex items-center gap-3 mt-2">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-cyan-400" />
+            <span className="text-xs text-gray-400">
+              <span className="text-gray-300 font-medium tabular-nums">{inputTokens.toLocaleString()}</span> in
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-orange-400" />
+            <span className="text-xs text-gray-400">
+              <span className="text-gray-300 font-medium tabular-nums">{outputTokens.toLocaleString()}</span> out
+            </span>
+          </div>
+        </div>
+        {/* Token ratio bar */}
+        {totalTokens > 0 && (
+          <div className="flex h-1.5 mt-2 rounded-full overflow-hidden bg-gray-700/50">
+            <div
+              className="bg-cyan-400/70 rounded-l-full"
+              style={{ width: `${(inputTokens / totalTokens) * 100}%` }}
+            />
+            <div
+              className="bg-orange-400/70 rounded-r-full"
+              style={{ width: `${(outputTokens / totalTokens) * 100}%` }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

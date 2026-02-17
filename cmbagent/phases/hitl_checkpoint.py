@@ -15,6 +15,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
+from cmbagent.phases.execution_manager import PhaseExecutionManager
 
 
 class CheckpointType(Enum):
@@ -114,15 +115,18 @@ class HITLCheckpointPhase(Phase):
         Returns:
             PhaseResult with approval status
         """
+        manager = PhaseExecutionManager(context, self)
+        manager.start()
+
         self._status = PhaseStatus.WAITING_APPROVAL
-        context.started_at = time.time()
 
         if not self.config.require_approval:
             # Skip if approval not required
-            context.output_data = {
+            output_data = {
                 'approval_status': 'auto_approved',
                 'skipped': True,
             }
+            manager.complete(output_data)
             self._status = PhaseStatus.COMPLETED
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -143,10 +147,11 @@ class HITLCheckpointPhase(Phase):
             logger.info("%s", message)
             logger.info("=" * 60)
 
-            context.output_data = {
+            output_data = {
                 'approval_status': 'auto_approved',
                 'no_hitl_manager': True,
             }
+            manager.complete(output_data)
             self._status = PhaseStatus.COMPLETED
             return PhaseResult(
                 status=PhaseStatus.COMPLETED,
@@ -179,7 +184,7 @@ class HITLCheckpointPhase(Phase):
 
             # Handle result (accept both "rejected"/"reject" and "modified"/"modify")
             if resolved.resolution in ["rejected", "reject"]:
-                context.output_data = {
+                output_data = {
                     'approval_status': 'rejected',
                     'user_feedback': resolved.user_feedback,
                     'shared': {
@@ -187,6 +192,7 @@ class HITLCheckpointPhase(Phase):
                         'hitl_rejected': True,
                     }
                 }
+                manager.fail("Rejected by user")
                 self._status = PhaseStatus.FAILED
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
@@ -195,7 +201,7 @@ class HITLCheckpointPhase(Phase):
                 )
 
             elif resolved.resolution in ["modified", "modify"]:
-                context.output_data = {
+                output_data = {
                     'approval_status': 'modified',
                     'user_feedback': resolved.user_feedback,
                     'modifications': resolved.modifications,
@@ -207,7 +213,7 @@ class HITLCheckpointPhase(Phase):
                 }
 
             else:  # approved or approve
-                context.output_data = {
+                output_data = {
                     'approval_status': 'approved',
                     'user_feedback': resolved.user_feedback,
                     'shared': {
@@ -216,7 +222,7 @@ class HITLCheckpointPhase(Phase):
                     }
                 }
 
-            context.completed_at = time.time()
+            manager.complete(output_data)
             self._status = PhaseStatus.COMPLETED
 
             return PhaseResult(
@@ -228,9 +234,10 @@ class HITLCheckpointPhase(Phase):
             # Handle timeout
             if self.config.default_on_timeout == "approve":
                 logger.info("Approval timeout - auto-approving")
-                context.output_data = {
+                output_data = {
                     'approval_status': 'timeout_auto_approved',
                 }
+                manager.complete(output_data)
                 self._status = PhaseStatus.COMPLETED
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
@@ -238,6 +245,7 @@ class HITLCheckpointPhase(Phase):
                 )
             else:
                 logger.warning("Approval timeout - rejecting")
+                manager.fail("Approval timeout - defaulted to reject")
                 self._status = PhaseStatus.FAILED
                 return PhaseResult(
                     status=PhaseStatus.FAILED,
@@ -249,16 +257,18 @@ class HITLCheckpointPhase(Phase):
             # Handle other errors
             logger.error("Approval error: %s", e)
             if self.config.default_on_timeout == "approve":
-                context.output_data = {
+                output_data = {
                     'approval_status': 'error_auto_approved',
                     'error': str(e),
                 }
+                manager.complete(output_data)
                 self._status = PhaseStatus.COMPLETED
                 return PhaseResult(
                     status=PhaseStatus.COMPLETED,
                     context=context,
                 )
             else:
+                manager.fail(f"Approval error: {e}")
                 self._status = PhaseStatus.FAILED
                 return PhaseResult(
                     status=PhaseStatus.FAILED,

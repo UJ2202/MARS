@@ -14,6 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
+from cmbagent.phases.execution_manager import PhaseExecutionManager
 from cmbagent.utils import get_model_config, default_agents_llm_model
 
 
@@ -88,12 +89,10 @@ class IdeaGenerationPhase(Phase):
         """
         from cmbagent.cmbagent import CMBAgent
 
-        self._status = PhaseStatus.RUNNING
-        context.started_at = time.time()
+        manager = PhaseExecutionManager(context, self)
+        manager.start()
 
-        # Notify callbacks
-        if context.callbacks:
-            context.callbacks.invoke_phase_change("idea_generation", None)
+        self._status = PhaseStatus.RUNNING
 
         # Setup
         ideas_dir = os.path.join(context.work_dir, "ideas")
@@ -104,6 +103,8 @@ class IdeaGenerationPhase(Phase):
         hater_config = get_model_config(self.config.idea_hater_model, context.api_keys)
 
         try:
+            manager.raise_if_cancelled()
+
             # Initialize CMBAgent
             init_start = time.time()
             cmbagent = CMBAgent(
@@ -114,7 +115,9 @@ class IdeaGenerationPhase(Phase):
                     'idea_hater': hater_config,
                 },
                 api_keys=context.api_keys,
+                **manager.get_managed_cmbagent_kwargs()
             )
+            cmbagent._callbacks = context.callbacks
             init_time = time.time() - init_start
 
             # Execute idea generation
@@ -142,7 +145,7 @@ class IdeaGenerationPhase(Phase):
             logger.info("Idea generation took %.4f seconds", exec_time)
 
             # Build output
-            context.output_data = {
+            output_data = {
                 'ideas': cmbagent.final_context.get('ideas', []),
                 'reviews': cmbagent.final_context.get('reviews', []),
                 'selected_idea': cmbagent.final_context.get('selected_idea'),
@@ -153,7 +156,7 @@ class IdeaGenerationPhase(Phase):
                 }
             }
 
-            context.completed_at = time.time()
+            manager.complete(output_data)
             self._status = PhaseStatus.COMPLETED
 
             return PhaseResult(
@@ -169,6 +172,7 @@ class IdeaGenerationPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
+            manager.fail(str(e))
             logger.error("Idea generation phase failed: %s", e, exc_info=True)
             return PhaseResult(
                 status=PhaseStatus.FAILED,

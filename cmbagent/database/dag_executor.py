@@ -38,7 +38,8 @@ class DAGExecutor:
         session_id: str,
         max_parallel: int = 3,
         work_dir: Optional[str] = None,
-        config: Optional[ExecutionConfig] = None
+        config: Optional[ExecutionConfig] = None,
+        emit_event_callback: Optional[Callable] = None
     ):
         """
         Initialize DAG executor
@@ -49,11 +50,14 @@ class DAGExecutor:
             max_parallel: Maximum number of parallel executions (default: 3)
             work_dir: Base work directory for task execution
             config: Execution configuration (uses global config if None)
+            emit_event_callback: Optional callback for emitting DAG node events.
+                Signature: (run_id: str, node_id: str, old_status: str, new_status: str, error: Optional[str]) -> None
         """
         self.db = db_session
         self.session_id = session_id
         self.max_parallel = max_parallel
         self.work_dir = work_dir or "/tmp/cmbagent"
+        self._emit_event_callback = emit_event_callback
 
         # Load configuration
         self.config = config or get_config()
@@ -708,7 +712,7 @@ class DAGExecutor:
         error: Optional[str] = None
     ) -> None:
         """
-        Emit DAG node status change event via WebSocket
+        Emit DAG node status change event via callback.
 
         Args:
             run_id: Workflow run ID
@@ -717,40 +721,10 @@ class DAGExecutor:
             new_status: New status
             error: Optional error message
         """
+        if not self._emit_event_callback:
+            return
         try:
-            from backend.websocket_events import create_dag_node_status_changed_event
-            from backend.event_queue import event_queue
-
-            # Create event
-            event = create_dag_node_status_changed_event(
-                run_id=run_id,
-                node_id=node_id,
-                old_status=old_status,
-                new_status=new_status,
-                error=error
-            )
-
-            # Queue event for delivery
-            event_queue.push(run_id, event)
-
-            # Try to send immediately via WebSocket if available
-            try:
-                import asyncio
-                from services.connection_manager import connection_manager
-
-                # Try to get the event loop
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Schedule coroutine on the running loop
-                        asyncio.create_task(connection_manager.send_event(run_id, event))
-                except RuntimeError:
-                    # No event loop running (sync context), event is queued for later
-                    pass
-            except ImportError:
-                # Connection manager not available, event is queued
-                pass
-
+            self._emit_event_callback(run_id, node_id, old_status, new_status, error)
         except Exception as e:
-            # Don't fail DAG execution if WebSocket emission fails
+            # Don't fail DAG execution if event emission fails
             logger.warning(f"Failed to emit DAG node event for {node_id}: {e}")

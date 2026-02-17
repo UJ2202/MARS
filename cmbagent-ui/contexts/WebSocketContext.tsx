@@ -160,11 +160,23 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     setPendingApproval(null);
   }, []);
 
+  // Session-aware console output: skip session-scoped messages from main console
+  const sessionFilteredAddConsole = useCallback((output: string) => {
+    // _sessionScoped flag is set by the event handler when an event has _session_id
+    // This check is done via a ref to avoid stale closure issues
+    if (!sessionScopedEventRef.current) {
+      addConsoleOutput(output);
+    }
+  }, [addConsoleOutput]);
+
+  // Ref to track whether current event being processed is session-scoped
+  const sessionScopedEventRef = useRef(false);
+
   // Event handler
   const { handleEvent } = useEventHandler({
     onWorkflowStarted: (data) => {
       setWorkflowStatus('executing');
-      addConsoleOutput(`🚀 Workflow started: ${data.task_description}`);
+      sessionFilteredAddConsole(`🚀 Workflow started: ${data.task_description}`);
       // Reset cost tracking for new workflow
       setCostSummary({
         total_cost: 0,
@@ -182,31 +194,31 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     },
     onWorkflowPaused: () => {
       setWorkflowStatus('paused');
-      addConsoleOutput('⏸️ Workflow paused');
+      sessionFilteredAddConsole('⏸️ Workflow paused');
     },
     onWorkflowResumed: () => {
       setWorkflowStatus('executing');
-      addConsoleOutput('▶️ Workflow resumed');
+      sessionFilteredAddConsole('▶️ Workflow resumed');
     },
     onWorkflowCompleted: () => {
       setWorkflowStatus('completed');
       setIsRunning(false);
       shouldReconnect.current = false; // Stop reconnection on completion
-      addConsoleOutput('✅ Workflow completed');
+      sessionFilteredAddConsole('✅ Workflow completed');
     },
     onWorkflowFailed: (error) => {
       setWorkflowStatus('failed');
       setIsRunning(false);
       shouldReconnect.current = false; // Stop reconnection on failure
-      addConsoleOutput(`❌ Workflow failed: ${error}`);
+      sessionFilteredAddConsole(`❌ Workflow failed: ${error}`);
     },
     onDAGCreated: (data: DAGCreatedData) => {
       setDAGData({ run_id: data.run_id, nodes: data.nodes, edges: data.edges });
-      addConsoleOutput(`📊 DAG created with ${data.nodes.length} nodes`);
+      sessionFilteredAddConsole(`📊 DAG created with ${data.nodes.length} nodes`);
     },
     onDAGUpdated: (data: DAGCreatedData) => {
       setDAGData({ run_id: data.run_id, nodes: data.nodes, edges: data.edges });
-      addConsoleOutput(`📊 DAG updated: ${data.nodes.length} nodes`);
+      sessionFilteredAddConsole(`📊 DAG updated: ${data.nodes.length} nodes`);
     },
     onDAGNodeStatusChanged: (data: DAGNodeStatusChangedData) => {
       updateDAGNode(data.node_id, data.new_status);
@@ -214,12 +226,12 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     onApprovalRequested: (data: ApprovalRequestedData) => {
       console.log('[WebSocket] Approval requested event received:', data);
       setPendingApproval(data);
-      addConsoleOutput(`⏸️ Approval requested: ${data.description || data.message}`);
+      sessionFilteredAddConsole(`⏸️ Approval requested: ${data.description || data.message}`);
     },
     onApprovalReceived: () => {
       clearApproval();
     },
-    onOutput: addConsoleOutput,
+    onOutput: sessionFilteredAddConsole,
     onResult: (result: any) => {
       setResults(result);
       // Store session_id for continuation (works for ALL modes)
@@ -231,14 +243,14 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       setWorkflowStatus('completed');
       setIsRunning(false);
       shouldReconnect.current = false; // Stop reconnection on completion
-      addConsoleOutput('✅ Task execution completed');
+      sessionFilteredAddConsole('✅ Task execution completed');
     },
     onError: (data) => {
-      addConsoleOutput(`❌ ${data.error_type}: ${data.message}`);
+      sessionFilteredAddConsole(`❌ ${data.error_type}: ${data.message}`);
     },
     onStatus: (status: any) => {
       const message = typeof status === 'string' ? status : status?.message || String(status);
-      addConsoleOutput(`📊 ${message}`);
+      sessionFilteredAddConsole(`📊 ${message}`);
       // Capture session_id from initial status event (Stages 10-11)
       if (typeof status === 'object' && status?.session_id) {
         setCopilotSessionId(status.session_id);
@@ -247,7 +259,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     onFilesUpdated: (data: FilesUpdatedData) => {
       // Increment counter to trigger file refresh in DAGFilesView
       setFilesUpdatedCounter(prev => prev + 1);
-      addConsoleOutput(`📁 ${data.files_tracked} file(s) tracked for node ${data.node_id || 'unknown'}`);
+      sessionFilteredAddConsole(`📁 ${data.files_tracked} file(s) tracked for node ${data.node_id || 'unknown'}`);
     },
     onAgentMessage: (data: AgentMessageData) => {
       // Store agent messages for copilot chat view
@@ -267,9 +279,9 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
       // Update cost summary
       setCostSummary(prev => {
-        // Use provided input/output tokens if available, otherwise estimate
-        const inputTokens = data.input_tokens || (data.tokens > 0 ? Math.floor(data.tokens * 0.7) : 0);
-        const outputTokens = data.output_tokens || (data.tokens > 0 ? data.tokens - inputTokens : 0);
+        // CostCollector always provides actual token counts from JSON
+        const inputTokens = data.input_tokens || 0;
+        const outputTokens = data.output_tokens || 0;
 
         // Update model breakdown
         const newModelBreakdown = [...prev.model_breakdown];
@@ -297,28 +309,29 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
           });
         }
 
-        // Update agent breakdown (extract agent from step_id)
+        // Update agent breakdown using agent name from CostCollector
         const newAgentBreakdown = [...prev.agent_breakdown];
-        // step_id format is "AgentName_step" e.g., "engineer_step", "planner_step"
-        // Extract the agent name by removing "_step" suffix
-        const agentName = data.step_id 
-          ? data.step_id.replace(/_step$/, '') 
-          : 'unknown';
-        
+        const agentName = data.agent || data.step_id?.replace(/_step$/, '') || 'unknown';
+
         const agentIndex = newAgentBreakdown.findIndex(a => a.agent === agentName);
-        
+
         if (agentIndex >= 0) {
           newAgentBreakdown[agentIndex] = {
             ...newAgentBreakdown[agentIndex],
             cost: newAgentBreakdown[agentIndex].cost + data.cost_usd,
             tokens: newAgentBreakdown[agentIndex].tokens + data.tokens,
+            input_tokens: newAgentBreakdown[agentIndex].input_tokens + inputTokens,
+            output_tokens: newAgentBreakdown[agentIndex].output_tokens + outputTokens,
             call_count: newAgentBreakdown[agentIndex].call_count + 1,
           };
         } else {
           newAgentBreakdown.push({
             agent: agentName,
+            model: data.model,
             cost: data.cost_usd,
             tokens: data.tokens,
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
             call_count: 1,
           });
         }
@@ -348,18 +361,22 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         }
 
         console.log('📊 Updated Cost Summary:', {
-          total_cost: data.total_cost_usd,
           model_breakdown_count: newModelBreakdown.length,
           agent_breakdown_count: newAgentBreakdown.length,
           models: newModelBreakdown.map(m => m.model)
         });
 
-        // Use the total_cost_usd from the event as the authoritative total
+        // Derive totals from model breakdown so they always match the displayed data
+        const newTotalCost = newModelBreakdown.reduce((sum, m) => sum + m.cost, 0);
+        const newTotalTokens = newModelBreakdown.reduce((sum, m) => sum + m.tokens, 0);
+        const newInputTokens = newModelBreakdown.reduce((sum, m) => sum + m.input_tokens, 0);
+        const newOutputTokens = newModelBreakdown.reduce((sum, m) => sum + m.output_tokens, 0);
+
         return {
-          total_cost: data.total_cost_usd,
-          total_tokens: prev.total_tokens + data.tokens,
-          input_tokens: prev.input_tokens + inputTokens,
-          output_tokens: prev.output_tokens + outputTokens,
+          total_cost: newTotalCost,
+          total_tokens: newTotalTokens,
+          input_tokens: newInputTokens,
+          output_tokens: newOutputTokens,
           model_breakdown: newModelBreakdown,
           agent_breakdown: newAgentBreakdown,
           step_breakdown: newStepBreakdown,
@@ -460,7 +477,17 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
               return;
             }
 
+            // If the event is session-scoped, inject session_id into data
+            // so downstream handlers can detect it, and skip main console output
+            if (message.session_id) {
+              message.data = { ...message.data, _session_id: message.session_id };
+              sessionScopedEventRef.current = true;
+            } else {
+              sessionScopedEventRef.current = false;
+            }
+
             handleEvent(message);
+            sessionScopedEventRef.current = false;
           } catch (error) {
             console.error('[WebSocket] Error parsing message:', error);
             setLastError('Error parsing message from server');

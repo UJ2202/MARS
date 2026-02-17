@@ -39,6 +39,7 @@ def one_shot(
     evaluate_plots=False,
     max_n_plot_evals=1,
     inject_wrong_plot: bool | str = False,
+    callbacks=None,
 ):
     """
     Execute a single-shot task with a specified agent.
@@ -65,6 +66,7 @@ def one_shot(
         evaluate_plots: Whether to evaluate plots
         max_n_plot_evals: Maximum plot evaluations
         inject_wrong_plot: Whether to inject wrong plots for testing
+        callbacks: Optional WorkflowCallbacks for tracking
 
     Returns:
         Dictionary with chat_history, final_context, and timing info
@@ -112,6 +114,7 @@ def one_shot(
         task=task,
         work_dir=work_dir,
         api_keys=api_keys,
+        callbacks=callbacks,
     )
 
     # Run workflow

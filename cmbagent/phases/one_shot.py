@@ -16,6 +16,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
+from cmbagent.phases.execution_manager import PhaseExecutionManager
 from cmbagent.utils import (
     get_model_config,
     default_agents_llm_model,
@@ -116,12 +117,10 @@ class OneShotPhase(Phase):
         """
         from cmbagent.cmbagent import CMBAgent
 
-        self._status = PhaseStatus.RUNNING
-        context.started_at = time.time()
+        manager = PhaseExecutionManager(context, self)
+        manager.start()
 
-        # Notify callbacks
-        if context.callbacks:
-            context.callbacks.invoke_phase_change("one_shot", None)
+        self._status = PhaseStatus.RUNNING
 
         # Get model configs
         engineer_config = get_model_config(self.config.engineer_model, context.api_keys)
@@ -131,6 +130,8 @@ class OneShotPhase(Phase):
         camb_context_config = get_model_config(self.config.camb_context_model, context.api_keys)
 
         try:
+            manager.raise_if_cancelled()
+
             # Initialize CMBAgent
             init_start = time.time()
             cmbagent = CMBAgent(
@@ -148,7 +149,9 @@ class OneShotPhase(Phase):
                 api_keys=context.api_keys,
                 default_llm_model=self.config.default_llm_model,
                 default_formatter_model=self.config.default_formatter_model,
+                **manager.get_managed_cmbagent_kwargs()
             )
+            cmbagent._callbacks = context.callbacks
             init_time = time.time() - init_start
 
             # Build shared context
@@ -199,7 +202,7 @@ class OneShotPhase(Phase):
             logger.info("Task took %.4f seconds", exec_time)
 
             # Build output
-            context.output_data = {
+            output_data = {
                 'result': cmbagent.final_context,
                 'agent_objects': {
                     'engineer': cmbagent.get_agent_object_from_name('engineer'),
@@ -211,7 +214,7 @@ class OneShotPhase(Phase):
                 }
             }
 
-            context.completed_at = time.time()
+            manager.complete(output_data)
             self._status = PhaseStatus.COMPLETED
 
             return PhaseResult(
@@ -227,6 +230,7 @@ class OneShotPhase(Phase):
 
         except Exception as e:
             self._status = PhaseStatus.FAILED
+            manager.fail(str(e))
             logger.error("One-shot execution failed: %s", e, exc_info=True)
             return PhaseResult(
                 status=PhaseStatus.FAILED,

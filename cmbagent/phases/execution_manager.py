@@ -6,11 +6,13 @@ concerns for phase execution:
 
 1. **Callbacks**: Automatic invocation of workflow callbacks
 2. **Database Logging**: WorkflowRun creation, event tracking
-3. **DAG Management**: Node creation and status updates
-4. **Output Tracking**: File tracking and output collection
-5. **Pause/Cancel**: Workflow control checks
-6. **Error Handling**: Consistent error handling and recovery
-7. **Timing**: Automatic timing of phase execution
+3. **Pause/Cancel**: Workflow control checks
+4. **Error Handling**: Consistent error handling and recovery
+5. **Timing**: Automatic timing of phase execution
+
+File tracking is handled by DAGTracker → FileRepository (Stage 4).
+DAG management is handled by DAGTracker in the app layer.
+PhaseExecutionManager delegates DAG concerns via callbacks.
 
 Usage:
     class MyPhase(Phase):
@@ -27,8 +29,6 @@ Adding a New Phase:
     3. The manager automatically handles:
        - Callback invocations (phase_change, step_start, etc.)
        - Database event logging
-       - DAG node updates
-       - File tracking
        - Pause/cancel checks
        - Error handling
 """
@@ -64,7 +64,6 @@ class PhaseEventType(Enum):
     AGENT_MESSAGE = "agent_message"
     CODE_EXECUTION = "code_execution"
     TOOL_CALL = "tool_call"
-    FILE_CREATED = "file_created"
     CHECKPOINT = "checkpoint"
     CUSTOM = "custom"
 
@@ -73,20 +72,14 @@ class PhaseEventType(Enum):
 class PhaseExecutionConfig:
     """
     Configuration for phase execution behavior.
-    
+
     Attributes:
         enable_callbacks: Whether to invoke workflow callbacks
-        enable_database: Whether to log to database
-        enable_dag: Whether to update DAG nodes
-        enable_file_tracking: Whether to track output files
         enable_pause_check: Whether to check for pause/cancel
         auto_checkpoint: Whether to auto-save checkpoints
         checkpoint_interval: Seconds between auto-checkpoints
     """
     enable_callbacks: bool = True
-    enable_database: bool = True
-    enable_dag: bool = True
-    enable_file_tracking: bool = True
     enable_pause_check: bool = True
     auto_checkpoint: bool = False
     checkpoint_interval: int = 300  # 5 minutes
@@ -95,18 +88,19 @@ class PhaseExecutionConfig:
 class PhaseExecutionManager:
     """
     Manages the execution lifecycle of a phase.
-    
+
     Provides a unified interface for:
     - Invoking callbacks at appropriate times
     - Logging events to database
-    - Updating DAG node status
-    - Tracking output files
     - Handling pause/cancel requests
     - Managing checkpoints
-    
+
+    File tracking is handled by DAGTracker → FileRepository.
+    DAG node management is handled by DAGTracker via callbacks.
+
     Can be used as a context manager for automatic cleanup.
     """
-    
+
     def __init__(
         self,
         context: 'PhaseContext',
@@ -115,7 +109,7 @@ class PhaseExecutionManager:
     ):
         """
         Initialize the execution manager.
-        
+
         Args:
             context: The phase context
             phase: The phase being executed
@@ -124,26 +118,20 @@ class PhaseExecutionManager:
         self.context = context
         self.phase = phase
         self.config = config or PhaseExecutionConfig()
-        
+
         # Timing
         self.start_time: Optional[float] = None
         self.end_time: Optional[float] = None
-        
+
         # State tracking
         self.current_step: Optional[int] = None
         self.events: List[Dict[str, Any]] = []
-        self.files_created: List[str] = []
         self.is_cancelled = False
-        
+
         # Database session (if available)
         self._db_session = None
         self._workflow_repo = None
         self._event_repo = None
-        self._dag_repo = None
-        
-        # DAG node tracking
-        self._current_dag_node_id: Optional[str] = None
-        self._step_dag_node_ids: Dict[int, str] = {}  # step_number -> node_id
 
         # Event capture manager
         self._event_capture: Optional['EventCaptureManager'] = None
@@ -151,7 +139,7 @@ class PhaseExecutionManager:
         # Extract database objects from context if available
         self._setup_database()
         self._setup_event_capture()
-    
+
     def _setup_database(self) -> None:
         """Set up database connections from context."""
         shared = self.context.shared_state or {}
@@ -160,7 +148,6 @@ class PhaseExecutionManager:
         self._db_session = shared.get('_db_session')
         self._workflow_repo = shared.get('_workflow_repo')
         self._event_repo = shared.get('_event_repo')
-        self._dag_repo = shared.get('_dag_repo')
 
     def _setup_event_capture(self) -> None:
         """
@@ -169,8 +156,8 @@ class PhaseExecutionManager:
         """
         shared = self.context.shared_state or {}
 
-        # Check if event capture is disabled
-        if not self.config.enable_database or not self._db_session:
+        # Check if DB session is available for event capture
+        if not self._db_session:
             return
 
         try:
@@ -186,10 +173,10 @@ class PhaseExecutionManager:
                 websocket=None  # TODO: Add websocket if available in context
             )
 
-            # Set context for this phase
+            # Set context for this phase (node_id managed by DAGTracker)
             self._event_capture.set_context(
-                node_id=self._current_dag_node_id,
-                step_id=None  # Will be set per-step
+                node_id=None,
+                step_id=None
             )
 
             # Set as global event captor
@@ -212,9 +199,8 @@ class PhaseExecutionManager:
             step_id: Current step ID (None for phase-level events)
         """
         if self._event_capture:
-            node_id = self._step_dag_node_ids.get(self.current_step) if self.current_step else self._current_dag_node_id
             self._event_capture.set_context(
-                node_id=node_id,
+                node_id=step_id,
                 step_id=step_id
             )
 
@@ -251,121 +237,54 @@ class PhaseExecutionManager:
     # =========================================================================
     # Context Manager Interface
     # =========================================================================
-    
+
     def __enter__(self) -> 'PhaseExecutionManager':
         """Start phase execution."""
         self.start()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         """
         End phase execution.
-        
+
         If an exception occurred, logs it as a failure.
         Returns False to propagate exceptions.
         """
         if exc_type is not None:
             self.fail(str(exc_val), traceback.format_exc())
         return False  # Don't suppress exceptions
-    
+
     # =========================================================================
     # Lifecycle Methods
     # =========================================================================
-    
+
     def start(self) -> None:
         """
         Start phase execution.
-        
+
         - Records start time
         - Invokes phase_change callback
-        - Creates DAG node if enabled
         - Logs phase_start event
         """
         self.start_time = time.time()
         self.context.started_at = self.start_time
-        
+
         # Invoke callback
         if self.config.enable_callbacks and self.context.callbacks:
             self.context.callbacks.invoke_phase_change(
                 self.phase.phase_type,
                 self.current_step
             )
-        
-        # Create DAG node with rich metadata for UI display
-        if self.config.enable_dag and self._dag_repo:
-            try:
-                # Build metadata for UI display
-                phase_label = f"{self.phase.display_name} Phase"
 
-                # Create phase-specific descriptions
-                phase_descriptions = {
-                    "planning": "Analyzing task and creating execution plan",
-                    "control": "Executing planned steps with agent coordination",
-                    "hitl_planning": "Planning with human review and approval",
-                    "hitl_control": "Executing steps with human-in-the-loop oversight",
-                    "hitl_checkpoint": "Waiting for human approval to proceed",
-                    "one_shot": "Single agent execution of task",
-                    "idea_generation": "Generating and exploring creative ideas",
-                    "copilot": "Interactive copilot session"
-                }
-
-                phase_description = phase_descriptions.get(
-                    self.phase.phase_type,
-                    f"Executing {self.phase.display_name} phase"
-                )
-
-                # Truncate task for display
-                task_display = self.context.task
-                if len(task_display) > 100:
-                    task_display = task_display[:100] + "..."
-
-                node = self._dag_repo.create_node(
-                    run_id=self.context.run_id,
-                    node_type=self.phase.phase_type,
-                    agent=self.phase.phase_type,
-                    order_index=0,
-                    status="running",
-                    meta={
-                        "label": phase_label,
-                        "description": phase_description,
-                        "task": task_display,
-                        "step_number": 0,
-                        "phase_name": self.phase.display_name,
-                        "phase_id": self.context.phase_id
-                    }
-                )
-                self._current_dag_node_id = node.id
-            except Exception as e:
-                logger.error("DAG node creation failed: %s", e)
-        
         # Log event
         self._log_event(PhaseEventType.PHASE_START, {
             'phase_type': self.phase.phase_type,
             'phase_id': self.context.phase_id,
         })
-        
+
         logger.info("=" * 60)
         logger.info("PHASE: %s", self.phase.display_name)
         logger.info("=" * 60)
-
-    def update_current_node_metadata(self, metadata_update: Dict[str, Any]) -> None:
-        """
-        Update the metadata of the current phase's DAG node.
-
-        Args:
-            metadata_update: Dictionary of metadata fields to add/update.
-                            Will be merged with existing metadata.
-        """
-        if self.config.enable_dag and self._dag_repo and self._current_dag_node_id:
-            try:
-                self._dag_repo.update_node_status(
-                    node_id=self._current_dag_node_id,
-                    status="running",  # Keep current status
-                    meta=metadata_update
-                )
-                logger.debug("Updated phase node metadata with: %s", list(metadata_update.keys()))
-            except Exception as e:
-                logger.error("Failed to update phase node metadata: %s", e)
 
     def complete(
         self,
@@ -374,44 +293,29 @@ class PhaseExecutionManager:
     ) -> 'PhaseResult':
         """
         Complete phase execution successfully.
-        
+
         Args:
             output_data: Data to pass to next phase
             chat_history: Conversation history from agents
-            
+
         Returns:
             PhaseResult with success status
         """
         from cmbagent.phases.base import PhaseResult, PhaseStatus
-        
+
         self.end_time = time.time()
         self.context.completed_at = self.end_time
-        
+
         if output_data:
             self.context.output_data = output_data
-        
-        # Update DAG node
-        if self.config.enable_dag and self._dag_repo and self._current_dag_node_id:
-            try:
-                self._dag_repo.update_node_status(
-                    self._current_dag_node_id,
-                    status="completed"
-                )
-            except Exception as e:
-                logger.error("DAG node update failed on complete: %s", e)
-        
-        # Track files
-        if self.config.enable_file_tracking:
-            self._track_output_files()
-        
+
         # Log completion event
         execution_time = self.end_time - (self.start_time or self.end_time)
         self._log_event(PhaseEventType.PHASE_COMPLETE, {
             'phase_type': self.phase.phase_type,
             'execution_time': execution_time,
-            'files_created': self.files_created,
         })
-        
+
         logger.info("=" * 60)
         logger.info("PHASE COMPLETE: %s", self.phase.display_name)
         logger.info("Execution time: %.2fs", execution_time)
@@ -432,7 +336,7 @@ class PhaseExecutionManager:
         self._flush_event_capture()
 
         return result
-    
+
     def fail(
         self,
         error: str,
@@ -440,40 +344,30 @@ class PhaseExecutionManager:
     ) -> 'PhaseResult':
         """
         Mark phase execution as failed.
-        
+
         Args:
             error: Error message
             traceback_str: Optional full traceback
-            
+
         Returns:
             PhaseResult with failed status
         """
         from cmbagent.phases.base import PhaseResult, PhaseStatus
-        
+
         self.end_time = time.time()
         self.context.completed_at = self.end_time
-        
-        # Update DAG node
-        if self.config.enable_dag and self._dag_repo and self._current_dag_node_id:
-            try:
-                self._dag_repo.update_node_status(
-                    self._current_dag_node_id,
-                    status="failed"
-                )
-            except Exception as e:
-                logger.error("DAG node update failed on fail: %s", e)
-        
+
         # Log failure event
         self._log_event(PhaseEventType.PHASE_FAILED, {
             'phase_type': self.phase.phase_type,
             'error': error,
             'traceback': traceback_str,
         })
-        
+
         # Invoke workflow failed callback
         if self.config.enable_callbacks and self.context.callbacks:
             self.context.callbacks.invoke_workflow_failed(error, self.current_step)
-        
+
         logger.error("=" * 60)
         logger.error("PHASE FAILED: %s", self.phase.display_name)
         logger.error("Error: %s", error)
@@ -494,11 +388,11 @@ class PhaseExecutionManager:
         self._flush_event_capture()
 
         return result
-    
+
     # =========================================================================
     # Step Management (for multi-step phases like Control)
     # =========================================================================
-    
+
     def start_step(self, step_number: int, description: str = "") -> None:
         """
         Start a new step within the phase.
@@ -511,61 +405,7 @@ class PhaseExecutionManager:
 
         self.current_step = step_number
 
-        # Update or create DAG node for this step
-        if self.config.enable_dag and self._dag_repo:
-            try:
-                # Check if node already exists from add_plan_step_nodes()
-                existing_node_id = self._step_dag_node_ids.get(step_number)
-
-                if existing_node_id:
-                    # Update existing node to running status
-                    # Preserve existing metadata (agent, label, description from planning)
-                    self._dag_repo.update_node_status(
-                        existing_node_id,
-                        status="running",
-                        meta={
-                            "started_at": time.time(),
-                            "phase_type": self.phase.phase_type,
-                            "phase_name": self.phase.display_name
-                        }
-                    )
-                    logger.debug("Updated existing DAG node for step %d", step_number)
-                else:
-                    # Create new node if it doesn't exist (fallback for phases without planning)
-                    # Build step label
-                    step_label = f"Step {step_number}"
-                    if description:
-                        truncated_desc = description[:50] + "..." if len(description) > 50 else description
-                        step_label = f"{step_label}: {truncated_desc}"
-
-                    # Prepare task display (for consistency with phase nodes)
-                    task_display = description or self.context.task
-                    if len(task_display) > 200:
-                        task_display = task_display[:200] + "..."
-
-                    # Use generic step identifier for consistency
-                    node = self._dag_repo.create_node(
-                        run_id=self.context.run_id,
-                        node_type="agent",
-                        agent=f"step_{step_number}",  # Generic identifier for step nodes
-                        order_index=step_number,
-                        status="running",
-                        meta={
-                            "step_number": step_number,
-                            "description": description,
-                            "label": step_label,
-                            "task": task_display,
-                            "phase_type": self.phase.phase_type,
-                            "phase_name": self.phase.display_name,
-                            "started_at": time.time()
-                        }
-                    )
-                    self._step_dag_node_ids[step_number] = node.id
-                    logger.debug("Created new DAG node for step %d", step_number)
-            except Exception as e:
-                logger.error("Step DAG node update/creation failed: %s", e)
-
-        # Invoke callback
+        # Invoke callback (DAGTracker handles node updates via callback chain)
         if self.config.enable_callbacks and self.context.callbacks:
             self.context.callbacks.invoke_phase_change(
                 self.phase.phase_type,
@@ -591,7 +431,7 @@ class PhaseExecutionManager:
         self._update_event_capture_context(step_id=f"step_{step_number}")
 
         logger.info("--- Step %d: %s ---", step_number, description)
-    
+
     def complete_step(
         self,
         step_number: int,
@@ -608,27 +448,7 @@ class PhaseExecutionManager:
         """
         from cmbagent.callbacks import StepInfo, StepStatus
 
-        # Update DAG node status for this step
-        if self.config.enable_dag and self._dag_repo:
-            step_node_id = self._step_dag_node_ids.get(step_number)
-            if step_node_id:
-                try:
-                    # Merge summary and completion time with existing metadata
-                    meta_update = {
-                        "completed_at": time.time()
-                    }
-                    if summary:
-                        meta_update["summary"] = summary
-
-                    self._dag_repo.update_node_status(
-                        step_node_id,
-                        status="completed",
-                        meta=meta_update
-                    )
-                except Exception as e:
-                    logger.error("Step DAG node update failed on complete: %s", e)
-
-        # Invoke callback
+        # Invoke callback (DAGTracker handles node updates via callback chain)
         if self.config.enable_callbacks and self.context.callbacks:
             step_info = StepInfo(
                 step_number=step_number,
@@ -648,7 +468,7 @@ class PhaseExecutionManager:
         })
 
         logger.info("--- Step %d Complete ---", step_number)
-    
+
     def fail_step(
         self,
         step_number: int,
@@ -663,24 +483,7 @@ class PhaseExecutionManager:
         """
         from cmbagent.callbacks import StepInfo, StepStatus
 
-        # Update DAG node status for this step
-        if self.config.enable_dag and self._dag_repo:
-            step_node_id = self._step_dag_node_ids.get(step_number)
-            if step_node_id:
-                try:
-                    # Merge error and failed time with existing metadata
-                    self._dag_repo.update_node_status(
-                        step_node_id,
-                        status="failed",
-                        meta={
-                            "error": error,
-                            "failed_at": time.time()
-                        }
-                    )
-                except Exception as e:
-                    logger.error("Step DAG node update failed on fail: %s", e)
-
-        # Invoke callback
+        # Invoke callback (DAGTracker handles node updates via callback chain)
         if self.config.enable_callbacks and self.context.callbacks:
             step_info = StepInfo(
                 step_number=step_number,
@@ -698,230 +501,10 @@ class PhaseExecutionManager:
             'error': error,
         })
 
-    def add_plan_step_nodes(
-        self,
-        plan_steps: List[Dict[str, Any]],
-        source_node: Optional[str] = None
-    ) -> None:
-        """
-        Add DAG nodes for plan steps after planning completes.
-
-        This method creates DAG nodes for each step in a plan, enabling
-        dynamic DAG expansion after planning phase generates the plan.
-
-        Args:
-            plan_steps: List of step dictionaries with keys like:
-                - sub_task or task: Step description
-                - sub_task_agent or agent: Agent to execute
-                - goal, summary, bullet_points: Optional metadata
-            source_node: The node ID (UUID) that these steps connect from.
-                        If None, steps won't be connected to a source node.
-                        Pass manager._current_dag_node_id to connect to the planning phase.
-        """
-        if not plan_steps:
-            return
-
-        logger.info("Adding %d plan step nodes to DAG", len(plan_steps))
-
-        # Create DAG nodes in database
-        if self.config.enable_dag and self._dag_repo:
-            try:
-                previous_node_id = None
-
-                for i, step in enumerate(plan_steps, 1):
-                    # Extract step info from various formats (handles both standard and HITL formats)
-                    description = step.get('sub_task') or step.get('task') or step.get('description') or f"Step {i}"
-                    step_agent = step.get('sub_task_agent') or step.get('agent') or 'engineer'
-                    goal = step.get('goal') or step.get('summary') or description
-                    summary = step.get('summary', '')
-                    bullet_points = step.get('bullet_points', [])
-
-                    # Create truncated label
-                    label = f"Step {i}: {description[:50]}..." if len(description) > 50 else f"Step {i}: {description}"
-
-                    # Create the node with complete metadata
-                    node = self._dag_repo.create_node(
-                        run_id=self.context.run_id,
-                        node_type="agent",
-                        agent=step_agent,  # Use actual agent name for better display
-                        order_index=i,
-                        status="pending",
-                        meta={
-                            "step_number": i,
-                            "description": description,
-                            "task": description,  # Duplicate for compatibility
-                            "goal": goal,
-                            "label": label,
-                            "summary": summary,
-                            "bullet_points": bullet_points,
-                            "executing_agent": step_agent,
-                            "agent": step_agent,  # Duplicate for compatibility
-                        }
-                    )
-                    self._step_dag_node_ids[i] = node.id
-                    logger.debug("Created step %d node: %s, agent: %s, desc: %s...", i, node.id, step_agent, description[:50])
-
-                    # Create edge from previous node
-                    if previous_node_id:
-                        try:
-                            self._dag_repo.create_edge(
-                                from_node_id=previous_node_id,
-                                to_node_id=node.id,
-                                dependency_type="sequential"
-                            )
-                        except Exception as e:
-                            logger.error("Edge creation failed: %s", e)
-                    elif i == 1 and source_node:
-                        # First step connects from source node (e.g., planning phase)
-                        # source_node is already the UUID, use it directly
-                        try:
-                            self._dag_repo.create_edge(
-                                from_node_id=source_node,
-                                to_node_id=node.id,
-                                dependency_type="sequential"
-                            )
-                            logger.debug("Connected first step to source node")
-                        except Exception as e:
-                            logger.error("Source edge creation failed: %s", e, exc_info=True)
-
-                    previous_node_id = node.id
-
-                # Create terminator node
-                terminator = self._dag_repo.create_node(
-                    run_id=self.context.run_id,
-                    node_type="terminator",
-                    agent="system",
-                    order_index=len(plan_steps) + 1,
-                    status="pending",
-                    meta={
-                        "label": "Completion",
-                        "description": "Workflow completed"
-                    }
-                )
-
-                # Connect last step to terminator
-                if previous_node_id:
-                    try:
-                        self._dag_repo.create_edge(
-                            from_node_id=previous_node_id,
-                            to_node_id=terminator.id,
-                            dependency_type="sequential"
-                        )
-                    except Exception as e:
-                        logger.error("Terminator edge creation failed: %s", e)
-
-                logger.info("Created %d step nodes + terminator in database", len(plan_steps))
-
-            except Exception as e:
-                logger.error("Plan step nodes creation failed: %s", e, exc_info=True)
-
-        # NOTE: Do NOT call invoke_planning_complete here!
-        # The phase itself (planning.py or hitl_planning.py) is responsible for
-        # calling invoke_planning_complete at the correct time after plan approval.
-
-        # Log event
-        self._log_event(PhaseEventType.PLAN_GENERATED, {
-            'num_steps': len(plan_steps),
-            'steps': [
-                {
-                    'step_number': i + 1,
-                    'agent': s.get('sub_task_agent') or s.get('agent', 'engineer'),
-                    'description': (s.get('sub_task') or s.get('task', ''))[:100]
-                }
-                for i, s in enumerate(plan_steps)
-            ]
-        })
-
-    def create_redo_branch(
-        self,
-        step_number: int,
-        redo_number: int,
-        hypothesis: Optional[str] = None
-    ) -> Optional[str]:
-        """
-        Create a redo branch for a failed step.
-
-        Args:
-            step_number: Step being redone
-            redo_number: Redo attempt number (1, 2, 3...)
-            hypothesis: Hypothesis for why this redo will succeed
-
-        Returns:
-            Branch node ID if created, None on error
-        """
-        if not self.config.enable_dag or not self._dag_repo:
-            return None
-
-        try:
-            step_node_id = self._step_dag_node_ids.get(step_number)
-            if not step_node_id:
-                logger.warning("Cannot create redo branch: step %d node not found", step_number)
-                return None
-
-            # Create branch node
-            branch_name = f"redo_{redo_number}"
-            branch_node = self._dag_repo.create_branch_node(
-                source_node_id=step_node_id,
-                branch_name=branch_name,
-                hypothesis=hypothesis or f"Retry attempt {redo_number}"
-            )
-
-            logger.info("Created redo branch: step %d, redo %d", step_number, redo_number)
-            return branch_node.id
-
-        except Exception as e:
-            logger.error("Failed to create redo branch: %s", e)
-            return None
-
-    def record_sub_agent_call(
-        self,
-        step_number: int,
-        agent_name: str,
-        action: str,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Optional[str]:
-        """
-        Record a sub-agent call within a step.
-
-        Args:
-            step_number: Current step number
-            agent_name: Name of sub-agent
-            action: Action being performed
-            metadata: Additional metadata
-
-        Returns:
-            Sub-node ID if created, None on error
-        """
-        if not self.config.enable_dag or not self._dag_repo:
-            return None
-
-        try:
-            step_node_id = self._step_dag_node_ids.get(step_number)
-            if not step_node_id:
-                return None
-
-            # Create sub-node
-            sub_node = self._dag_repo.create_sub_node(
-                parent_node_id=step_node_id,
-                node_type="sub_agent",
-                agent=agent_name,
-                status="running",
-                meta={
-                    "action": action,
-                    **(metadata or {})
-                }
-            )
-
-            return sub_node.id
-
-        except Exception as e:
-            logger.error("Failed to record sub-agent call: %s", e)
-            return None
-
     # =========================================================================
     # Event Logging
     # =========================================================================
-    
+
     def log_agent_message(
         self,
         agent: str,
@@ -931,7 +514,7 @@ class PhaseExecutionManager:
     ) -> None:
         """
         Log an agent message.
-        
+
         Args:
             agent: Agent name
             role: Message role (user, assistant, etc.)
@@ -942,14 +525,14 @@ class PhaseExecutionManager:
             self.context.callbacks.invoke_agent_message(
                 agent, role, content, metadata or {}
             )
-        
+
         self._log_event(PhaseEventType.AGENT_MESSAGE, {
             'agent': agent,
             'role': role,
             'content': content[:500] if content else "",
             'metadata': metadata,
         })
-    
+
     def log_code_execution(
         self,
         agent: str,
@@ -959,7 +542,7 @@ class PhaseExecutionManager:
     ) -> None:
         """
         Log code execution.
-        
+
         Args:
             agent: Agent that executed the code
             code: The code that was executed
@@ -970,14 +553,14 @@ class PhaseExecutionManager:
             self.context.callbacks.invoke_code_execution(
                 agent, code, language, result
             )
-        
+
         self._log_event(PhaseEventType.CODE_EXECUTION, {
             'agent': agent,
             'language': language,
             'code': code[:1000] if code else "",
             'result': result[:500] if result else None,
         })
-    
+
     def log_tool_call(
         self,
         agent: str,
@@ -987,7 +570,7 @@ class PhaseExecutionManager:
     ) -> None:
         """
         Log a tool/function call.
-        
+
         Args:
             agent: Agent that called the tool
             tool_name: Name of the tool
@@ -998,14 +581,14 @@ class PhaseExecutionManager:
             self.context.callbacks.invoke_tool_call(
                 agent, tool_name, arguments, result
             )
-        
+
         self._log_event(PhaseEventType.TOOL_CALL, {
             'agent': agent,
             'tool_name': tool_name,
             'arguments': str(arguments)[:500],
             'result': str(result)[:500] if result else None,
         })
-    
+
     def log_event(
         self,
         event_type: str,
@@ -1013,7 +596,7 @@ class PhaseExecutionManager:
     ) -> None:
         """
         Log a custom event.
-        
+
         Args:
             event_type: Custom event type name
             data: Event data
@@ -1022,7 +605,7 @@ class PhaseExecutionManager:
             'custom_type': event_type,
             **data
         })
-    
+
     def _log_event(
         self,
         event_type: PhaseEventType,
@@ -1037,15 +620,15 @@ class PhaseExecutionManager:
             'step': self.current_step,
             **data
         }
-        
+
         self.events.append(event)
-        
+
         # Persist to database if available
-        if self.config.enable_database and self._event_repo:
+        if self._event_repo:
             try:
                 self._event_repo.create_event(
                     run_id=self.context.run_id,
-                    node_id=self._current_dag_node_id,
+                    node_id=None,
                     event_type=event_type.value,
                     execution_order=len(self.events),
                     agent_name=data.get('agent'),
@@ -1055,72 +638,41 @@ class PhaseExecutionManager:
                 )
             except Exception as e:
                 logger.error("Event logging failed: %s", e)
-    
-    # =========================================================================
-    # File Tracking
-    # =========================================================================
-    
-    def track_file(self, file_path: str) -> None:
-        """
-        Track a file created during phase execution.
-        
-        Args:
-            file_path: Path to the created file
-        """
-        if os.path.exists(file_path):
-            self.files_created.append(file_path)
-    
-    def _track_output_files(self) -> None:
-        """Scan work directory for new files created during phase."""
-        if not os.path.exists(self.context.work_dir):
-            return
-        
-        for root, _, files in os.walk(self.context.work_dir):
-            for f in files:
-                file_path = os.path.join(root, f)
-                if file_path not in self.files_created:
-                    # Check if file was created after phase started
-                    try:
-                        mtime = os.path.getmtime(file_path)
-                        if self.start_time and mtime >= self.start_time:
-                            self.files_created.append(file_path)
-                    except OSError:
-                        pass
-    
+
     # =========================================================================
     # Pause/Cancel Handling
     # =========================================================================
-    
+
     def check_should_continue(self) -> bool:
         """
         Check if phase execution should continue.
-        
+
         Returns:
             True if execution should continue, False if cancelled
         """
         if not self.config.enable_pause_check:
             return True
-        
+
         if self.context.callbacks:
             # Invoke pause check (may block if paused)
             self.context.callbacks.invoke_pause_check()
-            
+
             # Check if should continue
             if not self.context.callbacks.check_should_continue():
                 self.is_cancelled = True
                 return False
-        
+
         return True
-    
+
     def raise_if_cancelled(self) -> None:
         """Raise an exception if workflow is cancelled."""
         if self.is_cancelled or not self.check_should_continue():
             raise WorkflowCancelledException("Workflow cancelled by user")
-    
+
     # =========================================================================
     # Checkpoint Support
     # =========================================================================
-    
+
     def save_checkpoint(
         self,
         checkpoint_id: str,
@@ -1128,24 +680,24 @@ class PhaseExecutionManager:
     ) -> str:
         """
         Save a checkpoint for recovery.
-        
+
         Args:
             checkpoint_id: Unique identifier for this checkpoint
             data: Checkpoint data to save
-            
+
         Returns:
             Path to saved checkpoint file
         """
         import pickle
-        
+
         checkpoint_dir = os.path.join(self.context.work_dir, "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
-        
+
         checkpoint_path = os.path.join(
             checkpoint_dir,
             f"{self.phase.phase_type}_{checkpoint_id}.pkl"
         )
-        
+
         checkpoint_data = {
             'phase_type': self.phase.phase_type,
             'phase_id': self.context.phase_id,
@@ -1153,39 +705,39 @@ class PhaseExecutionManager:
             'step': self.current_step,
             'data': data,
         }
-        
+
         with open(checkpoint_path, 'wb') as f:
             pickle.dump(checkpoint_data, f)
-        
+
         self._log_event(PhaseEventType.CHECKPOINT, {
             'checkpoint_id': checkpoint_id,
             'path': checkpoint_path,
         })
-        
+
         return checkpoint_path
-    
+
     def load_checkpoint(self, checkpoint_id: str) -> Optional[Dict[str, Any]]:
         """
         Load a checkpoint.
-        
+
         Args:
             checkpoint_id: Checkpoint identifier
-            
+
         Returns:
             Checkpoint data if found, None otherwise
         """
         import pickle
-        
+
         checkpoint_path = os.path.join(
             self.context.work_dir,
             "checkpoints",
             f"{self.phase.phase_type}_{checkpoint_id}.pkl"
         )
-        
+
         if os.path.exists(checkpoint_path):
             with open(checkpoint_path, 'rb') as f:
                 return pickle.load(f)
-        
+
         return None
 
 
@@ -1201,7 +753,7 @@ class WorkflowCancelledException(Exception):
 def managed_phase_execution(func: Callable) -> Callable:
     """
     Decorator that wraps phase execute method with PhaseExecutionManager.
-    
+
     Usage:
         class MyPhase(Phase):
             @managed_phase_execution
@@ -1211,12 +763,12 @@ def managed_phase_execution(func: Callable) -> Callable:
     """
     import functools
     import asyncio
-    
+
     @functools.wraps(func)
     async def wrapper(self, context: 'PhaseContext') -> 'PhaseResult':
         manager = PhaseExecutionManager(context, self)
         self._manager = manager
-        
+
         try:
             manager.start()
             result = await func(self, context)
@@ -1225,5 +777,5 @@ def managed_phase_execution(func: Callable) -> Callable:
             return manager.fail("Workflow cancelled by user")
         except Exception as e:
             return manager.fail(str(e), traceback.format_exc())
-    
+
     return wrapper

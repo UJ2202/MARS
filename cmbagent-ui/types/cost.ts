@@ -21,8 +21,11 @@ export interface ModelCost {
 
 export interface AgentCost {
   agent: string;
+  model: string;
   cost: number;
   tokens: number;
+  input_tokens: number;
+  output_tokens: number;
   call_count: number;
 }
 

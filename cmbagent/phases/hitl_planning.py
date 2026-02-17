@@ -186,6 +186,7 @@ class HITLPlanningPhase(Phase):
                 api_keys=api_keys,
                 **manager.get_managed_cmbagent_kwargs()
             )
+            cmbagent._callbacks = context.callbacks
 
             # Configure AG2 HITL handoffs (if enabled)
             if self.config.use_ag2_handoffs:
@@ -279,7 +280,6 @@ class HITLPlanningPhase(Phase):
                 try:
                     plan_file = save_final_plan(planning_context, planning_dir)
                     logger.debug("Iteration %d: plan_file = %s", iteration, plan_file)
-                    manager.track_file(plan_file)
                 except (KeyError, TypeError) as e:
                     raise RuntimeError(f"Failed to generate plan: {e}")
 
@@ -425,22 +425,7 @@ class HITLPlanningPhase(Phase):
             with open(final_plan_file, 'w') as f:
                 json.dump(final_plan, f, indent=2)
 
-            manager.track_file(final_plan_file)
-
-            # Update the planning phase node with the plan content BEFORE sending events
-            manager.update_current_node_metadata({
-                "plan": final_plan,
-                "num_steps": len(final_plan),
-                "steps_summary": [s.get('sub_task', s.get('task', '')) for s in final_plan],
-                "iterations": iteration,
-                "approved": True
-            })
-
-            # Add plan step nodes to DAG for visualization BEFORE sending WebSocket events
-            # Pass the current phase node ID so steps connect to the planning phase
-            manager.add_plan_step_nodes(final_plan, source_node=manager._current_dag_node_id)
-
-            # NOW invoke planning complete callback to send WebSocket events (after DB nodes created)
+            # NOW invoke planning complete callback to send WebSocket events
             if context.callbacks:
                 from cmbagent.callbacks import PlanInfo
                 plan_info = PlanInfo(

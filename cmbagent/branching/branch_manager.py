@@ -210,20 +210,28 @@ class BranchManager:
             )
             self.db.add(child_step)
 
-        # Copy DAG nodes
+        # Copy DAG nodes, preserving status for nodes at or before branch point
         parent_nodes = self.db.query(DAGNode).filter(
             DAGNode.run_id == parent_run_id
         ).all()
 
         node_id_mapping = {}  # parent_id -> child_id
+        branch_order = up_to_step.step_number
 
         for parent_node in parent_nodes:
+            # Nodes at or before the branch point keep their completed status;
+            # nodes after are reset to pending for re-execution.
+            if parent_node.order_index <= branch_order:
+                status = parent_node.status or "completed"
+            else:
+                status = "pending"
+
             child_node = DAGNode(
                 run_id=child_run_id,
                 session_id=parent_node.session_id,
                 node_type=parent_node.node_type,
                 agent=parent_node.agent,
-                status="pending",  # Reset status for re-execution
+                status=status,
                 order_index=parent_node.order_index,
                 meta=parent_node.meta
             )

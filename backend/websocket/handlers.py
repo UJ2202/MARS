@@ -128,7 +128,8 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str, execute_task_fu
                 mode=mode,
                 agent=agent,
                 model=model,
-                config=config
+                config=config,
+                session_id=session_id
             )
             logger.info("Created workflow run: %s", run_result)
 

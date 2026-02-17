@@ -556,6 +556,25 @@ COPILOT_SIMPLE_WORKFLOW = WorkflowDefinition(
     is_system=True,
 )
 
+# Sample extensibility workflow: 4-phase deep research
+# Demonstrates that a new workflow requires ZERO tracking code.
+DEEP_RESEARCH_EXTENDED_WORKFLOW = WorkflowDefinition(
+    id="deep_research_extended",
+    name="Extended Deep Research",
+    description=(
+        "4-phase research workflow: literature review, planning, "
+        "multi-step execution, and synthesis. Demonstrates extensibility – "
+        "ZERO tracking code needed."
+    ),
+    phases=[
+        {"type": "literature_review", "config": {"max_rounds": 50}},
+        {"type": "planning", "config": {"max_plan_steps": 5, "n_plan_reviews": 1}},
+        {"type": "control", "config": {"execute_all_steps": True}},
+        {"type": "synthesis", "config": {"max_rounds": 50}},
+    ],
+    is_system=True,
+)
+
 
 # Default workflows available
 SYSTEM_WORKFLOWS: Dict[str, WorkflowDefinition] = {
@@ -578,6 +597,8 @@ SYSTEM_WORKFLOWS: Dict[str, WorkflowDefinition] = {
         COPILOT_WORKFLOW,
         COPILOT_CONTINUOUS_WORKFLOW,
         COPILOT_SIMPLE_WORKFLOW,
+        # Extended research
+        DEEP_RESEARCH_EXTENDED_WORKFLOW,
     ]
 }
 

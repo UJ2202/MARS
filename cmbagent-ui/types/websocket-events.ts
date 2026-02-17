@@ -191,6 +191,7 @@ export interface ApprovalReceivedData {
 
 export interface CostUpdateData {
   run_id: string;
+  agent?: string;
   step_id?: string;
   model: string;
   tokens: number;

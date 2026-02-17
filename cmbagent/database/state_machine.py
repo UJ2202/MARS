@@ -63,7 +63,8 @@ class StateMachine:
         self,
         db_session: Session,
         entity_type: str,
-        event_emitter: Optional[EventEmitter] = None
+        event_emitter: Optional[EventEmitter] = None,
+        emit_ws_callback: Optional[Callable] = None
     ):
         """
         Initialize state machine.
@@ -72,10 +73,13 @@ class StateMachine:
             db_session: SQLAlchemy session
             entity_type: "workflow_run" or "workflow_step"
             event_emitter: Optional event emitter for broadcasting state changes
+            emit_ws_callback: Optional callback for emitting WebSocket events.
+                Signature: (entity_type: str, entity_id: str, from_state: str, to_state: str, reason: str, entity: Any) -> None
         """
         self.db = db_session
         self.entity_type = entity_type
         self.event_emitter = event_emitter or EventEmitter()
+        self._emit_ws_callback = emit_ws_callback
 
         if entity_type == "workflow_run":
             self.model_class = WorkflowRun
@@ -328,7 +332,7 @@ class StateMachine:
         reason: Optional[str]
     ) -> None:
         """
-        Emit WebSocket event for state transition.
+        Emit WebSocket event for state transition via callback.
 
         Args:
             entity: The workflow_run or workflow_step entity
@@ -337,55 +341,17 @@ class StateMachine:
             to_state: New state
             reason: Transition reason
         """
+        if not self._emit_ws_callback:
+            return
         try:
-            from backend.websocket_events import WebSocketEvent, WebSocketEventType
-            from backend.event_queue import event_queue
-            from datetime import datetime
-
-            # Determine run_id based on entity type
-            if self.entity_type == "workflow_run":
-                run_id = str(entity.id)
-                event_type = self._get_workflow_event_type(to_state)
-            else:  # workflow_step
-                run_id = str(entity.run_id)
-                event_type = self._get_step_event_type(to_state)
-
-            # Create event
-            event = WebSocketEvent(
-                event_type=event_type,
-                timestamp=datetime.utcnow(),
-                run_id=run_id,
-                session_id=str(entity.session_id),
-                data={
-                    "entity_type": self.entity_type,
-                    "entity_id": str(entity_id),
-                    "from_state": from_state,
-                    "to_state": to_state,
-                    "reason": reason
-                }
+            self._emit_ws_callback(
+                self.entity_type,
+                str(entity_id),
+                from_state,
+                to_state,
+                reason,
+                entity
             )
-
-            # Queue event for delivery
-            event_queue.push(run_id, event)
-
-            # Try to send immediately via WebSocket if available
-            try:
-                import asyncio
-                from services.connection_manager import connection_manager
-
-                # Try to get the event loop
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Schedule coroutine on the running loop
-                        asyncio.create_task(connection_manager.send_event(run_id, event))
-                except RuntimeError:
-                    # No event loop running (sync context), event is queued for later
-                    pass
-            except ImportError:
-                # Connection manager not available, event is queued
-                pass
-
         except Exception as e:
             # Don't fail the state transition if WebSocket emission fails
             import logging
@@ -393,43 +359,3 @@ class StateMachine:
                 "Failed to emit WebSocket event for %s %s: %s",
                 self.entity_type, entity_id, e
             )
-
-    def _get_workflow_event_type(self, state: str) -> str:
-        """Map workflow state to WebSocket event type."""
-        try:
-            from backend.websocket_events import WebSocketEventType
-
-            state_event_map = {
-                "pending": WebSocketEventType.WORKFLOW_STARTED,
-                "planning": WebSocketEventType.WORKFLOW_STATE_CHANGED,
-                "executing": WebSocketEventType.WORKFLOW_STATE_CHANGED,
-                "paused": WebSocketEventType.WORKFLOW_PAUSED,
-                "resuming": WebSocketEventType.WORKFLOW_RESUMED,
-                "completed": WebSocketEventType.WORKFLOW_COMPLETED,
-                "failed": WebSocketEventType.WORKFLOW_FAILED,
-                "cancelled": WebSocketEventType.WORKFLOW_STATE_CHANGED,
-            }
-
-            return state_event_map.get(state, WebSocketEventType.WORKFLOW_STATE_CHANGED)
-        except ImportError:
-            return "workflow_state_changed"
-
-    def _get_step_event_type(self, state: str) -> str:
-        """Map step state to WebSocket event type."""
-        try:
-            from backend.websocket_events import WebSocketEventType
-
-            state_event_map = {
-                "pending": WebSocketEventType.STEP_STARTED,
-                "running": WebSocketEventType.STEP_STARTED,
-                "waiting_approval": WebSocketEventType.APPROVAL_REQUESTED,
-                "paused": WebSocketEventType.STEP_PROGRESS,
-                "completed": WebSocketEventType.STEP_COMPLETED,
-                "failed": WebSocketEventType.STEP_FAILED,
-                "skipped": WebSocketEventType.STEP_COMPLETED,
-                "retrying": WebSocketEventType.STEP_PROGRESS,
-            }
-
-            return state_event_map.get(state, WebSocketEventType.STEP_PROGRESS)
-        except ImportError:
-            return "step_progress"

@@ -187,12 +187,13 @@ class SessionManager:
 
         return False
 
-    def load_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def load_session_state(self, session_id: str, include_completed: bool = False) -> Optional[Dict[str, Any]]:
         """
-        Load session state for resumption.
+        Load session state for resumption or viewing.
 
         Args:
             session_id: Session identifier
+            include_completed: If True, also return completed/expired sessions (for viewing)
 
         Returns:
             Dictionary with session state, or None if not found
@@ -201,10 +202,15 @@ class SessionManager:
 
         db = self.db_factory()
         try:
-            state = db.query(SessionState).filter(
-                SessionState.session_id == session_id,
-                SessionState.status.in_(["active", "suspended"])
-            ).first()
+            if include_completed:
+                state = db.query(SessionState).filter(
+                    SessionState.session_id == session_id,
+                ).first()
+            else:
+                state = db.query(SessionState).filter(
+                    SessionState.session_id == session_id,
+                    SessionState.status.in_(["active", "suspended"])
+                ).first()
 
             if not state:
                 logger.warning("No resumable session found for %s", session_id)
