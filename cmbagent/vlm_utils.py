@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import structlog
 import autogen
 from typing import Literal
 from openai import OpenAI
@@ -13,7 +14,7 @@ from .vlm_injections import scientific_context, get_injection_by_name
 from .cmbagent_utils import cmbagent_debug
 _last_executed_code = None
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # VLM model configuration
 # TODO: when refactoring, make a one_shot dictionary argument for all of this

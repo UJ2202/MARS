@@ -5,9 +5,10 @@ Planning and control workflow implementations using phase-based architecture.
 import os
 import uuid
 import logging
+import structlog
 from typing import Dict, Any, Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 from cmbagent.utils import (
     work_dir_default,

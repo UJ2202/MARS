@@ -6,11 +6,12 @@ fix suggestions based on common error types.
 """
 
 import logging
+import structlog
 import re
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ErrorAnalyzer:

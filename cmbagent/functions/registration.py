@@ -1,6 +1,7 @@
 """Main coordinator for registering all functions to agents."""
 
 import logging
+import structlog
 from ..cmbagent_utils import cmbagent_disable_display
 from .ideas import setup_idea_functions
 from .keywords import setup_keyword_functions
@@ -9,7 +10,7 @@ from .execution_control import setup_execution_control_functions
 from .status import setup_status_functions
 from .copilot import setup_copilot_functions
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def register_functions_to_agents(cmbagent_instance):

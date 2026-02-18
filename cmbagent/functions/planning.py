@@ -1,12 +1,13 @@
 """Planning workflow functionality."""
 
 import logging
+import structlog
 from typing import Literal, List
 from autogen import register_function
 from autogen.agentchat.group import ContextVariables, AgentTarget, ReplyResult, TerminateTarget
 from IPython.display import Markdown, display
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def record_improved_task(improved_main_task: str, context_variables: ContextVariables, cmbagent_instance, cmbagent_disable_display: bool) -> ReplyResult:

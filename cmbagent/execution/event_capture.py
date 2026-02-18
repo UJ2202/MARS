@@ -12,6 +12,7 @@ Automatically captures all execution events from AG2 agents including:
 
 import contextvars
 import logging
+import structlog
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
@@ -20,7 +21,7 @@ import threading
 import time
 import asyncio
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 from cmbagent.database import EventRepository, ExecutionEvent
 from cmbagent.database.models import File, Message

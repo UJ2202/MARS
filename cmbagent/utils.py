@@ -3,6 +3,7 @@ import os
 import autogen
 import pickle
 import logging
+import structlog
 from ruamel.yaml import YAML
 from .cmbagent_utils import cmbagent_debug
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format='[%(name)s] %(message)s')
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 # Get the path of the current file

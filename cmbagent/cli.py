@@ -2,10 +2,11 @@ import os
 import subprocess
 import sys
 import logging
+import structlog
 from importlib.util import find_spec
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 def run_streamlit_gui(deploy: bool):
     """Run the Streamlit GUI"""

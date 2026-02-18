@@ -6,9 +6,10 @@ and topological sorting for parallel execution planning.
 """
 
 import logging
+import structlog
 from typing import Dict, List, Set, Any, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class CircularDependencyError(Exception):

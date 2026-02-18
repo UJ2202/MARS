@@ -5,6 +5,7 @@ This module provides functions to parse formatted content and collect markdown f
 """
 
 import logging
+import structlog
 import os
 import re
 import glob
@@ -13,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def parse_formatted_content(content: str) -> Optional[Dict[str, Any]]:

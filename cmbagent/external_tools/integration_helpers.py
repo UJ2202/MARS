@@ -7,6 +7,7 @@ and control workflow.
 """
 
 import logging
+import structlog
 from typing import List, Optional
 from autogen import register_function
 from cmbagent.external_tools import (
@@ -16,7 +17,7 @@ from cmbagent.external_tools import (
     get_global_registry
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def register_external_tools_with_agents(

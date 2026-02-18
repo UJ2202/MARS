@@ -1,9 +1,10 @@
 import os
 import logging
+import structlog
 from cmbagent.base_agent import BaseAgent
 from autogen.agentchat.contrib.web_surfer import WebSurferAgent as AG2WebSurfer
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 class WebSurferAgent(BaseAgent):
     """
@@ -26,9 +27,9 @@ class WebSurferAgent(BaseAgent):
                 llm_config=self.llm_config,
                 **kwargs
             )
-            logger.info("web_surfer_agent_created", agent_name=self.name)
+            logger.info("web_surfer_agent_created: %s", self.name)
         except Exception as e:
-            logger.warning("web_surfer_agent_fallback", error=str(e), agent_name=self.name)
+            logger.warning("web_surfer_agent_fallback: %s error=%s", self.name, e)
             # Make sure we have instructions in self.info for fallback
             if 'instructions' not in self.info:
                 self.info['instructions'] = self.system_message

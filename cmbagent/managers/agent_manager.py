@@ -5,6 +5,7 @@ This module provides agent initialization, lookup, and management functionality.
 """
 
 import logging
+import structlog
 import os
 import sys
 import copy
@@ -16,7 +17,7 @@ from cmbagent.utils import default_formatter_model as default_formatter_model_de
 from cmbagent.rag_utils import import_rag_agents
 from cmbagent.cmbagent_utils import cmbagent_debug
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def import_non_rag_agents() -> Dict[str, Dict[str, Any]]:

@@ -1,9 +1,10 @@
 import os
 import subprocess
 import logging
+import structlog
 from .cmbagent_utils import cmbagent_debug
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Base URL for the repository containing the data
 REPO_URL = "https://github.com/CMBAgents/cmbagent_data.git"

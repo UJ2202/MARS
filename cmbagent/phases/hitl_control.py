@@ -24,12 +24,13 @@ import json
 import pickle
 import re
 import logging
+import structlog
 
 from cmbagent.phases.base import Phase, PhaseConfig, PhaseContext, PhaseResult, PhaseStatus
 from cmbagent.phases.execution_manager import PhaseExecutionManager
 from cmbagent.utils import get_model_config, default_agents_llm_model
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass

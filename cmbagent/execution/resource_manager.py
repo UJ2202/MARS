@@ -7,10 +7,11 @@ monitoring and limiting memory, CPU, and disk usage.
 
 import asyncio
 import logging
+import structlog
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ResourceExhaustedError(Exception):

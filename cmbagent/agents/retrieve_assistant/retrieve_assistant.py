@@ -1,9 +1,10 @@
 import os
 import logging
+import structlog
 from cmbagent.base_agent import BaseAgent
 from autogen.agentchat.contrib.retrieve_assistant_agent import RetrieveAssistantAgent as AG2RetrieveAssistant
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 class RetrieveAssistantAgent(BaseAgent):
     """
@@ -26,9 +27,9 @@ class RetrieveAssistantAgent(BaseAgent):
                 llm_config=self.llm_config,
                 **kwargs
             )
-            logger.info("retrieve_assistant_agent_created", agent_name=self.name)
+            logger.info("retrieve_assistant_agent_created: %s", self.name)
         except Exception as e:
-            logger.warning("retrieve_assistant_agent_fallback", error=str(e), agent_name=self.name)
+            logger.warning("retrieve_assistant_agent_fallback: %s error=%s", self.name, e)
             # Make sure we have instructions in self.info for fallback
             if 'instructions' not in self.info:
                 self.info['instructions'] = self.system_message

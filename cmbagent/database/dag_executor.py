@@ -10,6 +10,7 @@ of independent nodes with advanced features:
 """
 
 import logging
+import structlog
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Callable, Any, Optional
 from sqlalchemy.orm import Session
@@ -26,7 +27,7 @@ from cmbagent.execution.work_directory_manager import WorkDirectoryManager
 from cmbagent.execution.resource_manager import ResourceManager
 from cmbagent.execution.config import ExecutionConfig, get_config
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class DAGExecutor:

@@ -7,10 +7,11 @@ planning, and control phases.
 
 import os
 import logging
+import structlog
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass

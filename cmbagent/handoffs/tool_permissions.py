@@ -15,10 +15,11 @@ Tool Categories:
 
 import re
 import logging
+import structlog
 from dataclasses import dataclass, field
 from typing import Set, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Tool categories ordered by risk level
 TOOL_CATEGORIES = {

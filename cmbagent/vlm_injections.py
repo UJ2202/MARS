@@ -1,4 +1,5 @@
 import logging
+import structlog
 import os
 import base64
 import tempfile
@@ -6,7 +7,7 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Literal
 from math import pi
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Default plot type for VLM injection
 vlm_injection_plot_type: str = "wrong_scalar_amplitude"

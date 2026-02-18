@@ -5,10 +5,11 @@ This module provides access to CrewAI's free tools that don't require API keys.
 """
 
 import logging
+import structlog
 from typing import List
 from .tool_adapter import AG2ToolAdapter, convert_crewai_tool_to_ag2
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def get_crewai_free_tools() -> List[AG2ToolAdapter]:

@@ -1,6 +1,7 @@
 # CMBAGENT_GUI.py
 
 import logging
+import structlog
 import streamlit as st
 import os
 import re
@@ -27,7 +28,7 @@ import unicodedata
 import time
 from collections import deque
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 os.environ["CMBAGENT_DEBUG"] = "false"
 os.environ["CMBAGENT_DISABLE_DISPLAY"] = "true"

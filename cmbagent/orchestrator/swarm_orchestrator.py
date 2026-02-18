@@ -26,6 +26,7 @@ with a truly unified swarm where phases are tools agents can invoke.
 
 import asyncio
 import logging
+import structlog
 import uuid
 import time
 import json
@@ -33,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Callable, Union
 from enum import Enum
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 from cmbagent.phases import (
     Phase,

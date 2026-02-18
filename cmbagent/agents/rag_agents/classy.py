@@ -1,9 +1,10 @@
 import os
 import logging
+import structlog
 from cmbagent.base_agent import BaseAgent
 from cmbagent.utils import cmbagent_debug
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class ClassyAgent(BaseAgent):

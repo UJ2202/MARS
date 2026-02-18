@@ -8,6 +8,7 @@ import os
 import pickle
 import json
 import logging
+import structlog
 from pathlib import Path
 from typing import Any, Dict, Optional
 from datetime import datetime
@@ -19,7 +20,7 @@ from cmbagent.database.repository import (
     CheckpointRepository,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class DualPersistenceManager:

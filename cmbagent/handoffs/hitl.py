@@ -7,12 +7,13 @@ Includes WebSocket integration for UI-based approval.
 
 import asyncio
 import logging
+import structlog
 from typing import Dict, List, Optional, Any
 from autogen.agentchat.group import AgentTarget, OnCondition, StringLLMCondition
 from .debug import debug_print
 from .agent_retrieval import get_all_agents
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 # ============================================================================

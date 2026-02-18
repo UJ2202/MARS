@@ -6,12 +6,13 @@ previous attempts, analyzing errors, and formatting retry prompts.
 """
 
 import logging
+import structlog
 import re
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 from cmbagent.retry.retry_context import RetryContext, RetryAttempt
 from cmbagent.retry.error_analyzer import ErrorAnalyzer

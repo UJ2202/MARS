@@ -5,6 +5,7 @@ This module provides functions to summarize single documents and batches of docu
 """
 
 import logging
+import structlog
 import os
 import json
 import time
@@ -21,7 +22,7 @@ from cmbagent.processing.content_parser import (
     process_single_markdown_with_error_handling,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def summarize_document(

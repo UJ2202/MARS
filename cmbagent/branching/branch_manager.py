@@ -5,6 +5,7 @@ Branch manager for creating and managing workflow branches.
 import os
 import shutil
 import logging
+import structlog
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
@@ -13,7 +14,7 @@ from cmbagent.database.models import (
     Branch, Checkpoint
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class BranchManager:

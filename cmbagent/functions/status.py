@@ -2,6 +2,7 @@
 
 import os
 import logging
+import structlog
 from typing import Literal
 from autogen import register_function
 from autogen.agentchat.group import ContextVariables, AgentTarget, ReplyResult
@@ -9,7 +10,7 @@ from IPython.display import Image as IPImage, display as ip_display
 from ..cmbagent_utils import IMG_WIDTH, cmbagent_disable_display, cmbagent_debug
 from .utils import load_docstrings, load_plots
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def record_status(

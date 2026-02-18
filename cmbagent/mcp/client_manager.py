@@ -8,6 +8,7 @@ and executing tool calls.
 import asyncio
 import os
 import logging
+import structlog
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 import yaml
@@ -15,7 +16,7 @@ import yaml
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class MCPClientManager:

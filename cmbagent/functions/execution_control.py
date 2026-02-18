@@ -4,13 +4,14 @@ import os
 import json
 import base64
 import logging
+import structlog
 from typing import Literal, Optional
 from autogen import register_function
 from autogen.agentchat.group import ContextVariables, AgentTarget, ReplyResult, TerminateTarget
 from ..vlm_utils import account_for_external_api_calls, send_image_to_vlm, create_vlm_prompt, call_external_plot_debugger
 from .utils import load_plots
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def terminate_session(context_variables: ContextVariables) -> ReplyResult:

@@ -5,6 +5,7 @@ Generates execution summaries for DAG nodes from execution events.
 """
 
 import logging
+import structlog
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from datetime import datetime, timezone
 from cmbagent.database.models import DAGNode, ExecutionEvent, File, Message
 from cmbagent.database.repository import EventRepository
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class DAGMetadataEnricher:

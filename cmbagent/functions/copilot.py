@@ -1,6 +1,7 @@
 """Copilot routing functionality - intelligent task analysis and agent selection."""
 
 import logging
+import structlog
 from typing import List, Optional
 from autogen import register_function
 from autogen.agentchat.group import ContextVariables, AgentTarget, ReplyResult, TerminateTarget
@@ -9,7 +10,7 @@ from IPython.display import Markdown, display
 from cmbagent.structured_output import CopilotRoutingDecision
 from cmbagent.functions.copilot_tools import COPILOT_TOOLS, get_copilot_tools_description
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def analyze_task_for_routing(

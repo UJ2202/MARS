@@ -5,9 +5,10 @@ Provides debug printing and logging functionality.
 """
 
 import logging
+import structlog
 from ..cmbagent_utils import cmbagent_debug
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def is_debug_enabled() -> bool:

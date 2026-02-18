@@ -13,12 +13,13 @@ Key features:
 """
 
 import logging
+import structlog
 from typing import Callable, Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
 import time
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Circuit breaker threshold: disable a callback after this many consecutive failures
 _CIRCUIT_BREAKER_THRESHOLD = 5

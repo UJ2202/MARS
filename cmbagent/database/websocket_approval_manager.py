@@ -14,11 +14,12 @@ import threading
 import time
 import uuid
 import logging
+import structlog
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Callable
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass

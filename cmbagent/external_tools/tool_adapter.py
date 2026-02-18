@@ -6,12 +6,13 @@ Uses AG2's native Interoperability module for robust cross-framework tool conver
 """
 
 import logging
+import structlog
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
 from functools import wraps
 import json
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 try:
     from autogen.interop import Interoperability

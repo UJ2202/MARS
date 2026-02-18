@@ -1,5 +1,6 @@
 import os
 import logging
+import structlog
 import importlib
 import requests
 import autogen
@@ -47,7 +48,7 @@ from autogen.agentchat import initiate_group_chat
 from cmbagent.context import shared_context as shared_context_default
 import shutil
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 class CMBAgent:
 
@@ -166,7 +167,7 @@ class CMBAgent:
 
         self.vector_store_ids = None
 
-        self.logger = logging.getLogger(__name__)
+        self.logger = structlog.get_logger(__name__)
 
         # self.non_rag_agents = ['engineer', 'planner', 'executor', 'admin', 'summarizer', 'rag_software_formatter']
 

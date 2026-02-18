@@ -9,13 +9,14 @@ This module provides the preprocess_task function that:
 """
 
 import logging
+import structlog
 import os
 from typing import Optional
 
 from cmbagent.utils import work_dir_default, default_agents_llm_model
 from cmbagent.workflows.utils import clean_work_dir
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def preprocess_task(

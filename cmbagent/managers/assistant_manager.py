@@ -6,13 +6,14 @@ for RAG agents.
 """
 
 import logging
+import structlog
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
 
 from cmbagent.utils import path_to_assistants, update_yaml_preserving_format
 from cmbagent.cmbagent_utils import cmbagent_debug
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class AssistantManager:

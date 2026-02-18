@@ -13,10 +13,11 @@ Free Tools Available:
 """
 
 import logging
+import structlog
 from typing import List, Dict, Any, Optional
 import warnings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 try:
     from autogen.interop import Interoperability

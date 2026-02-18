@@ -147,6 +147,10 @@ def configure_logging(
         root_logger.addHandler(file_handler)
         print(f"[CONFIGURE_LOGGING] File handler added successfully, total handlers: {len(root_logger.handlers)}", file=sys.stderr)
 
+    # Reset any global logging disable (e.g. cmbagent's class-level
+    # logging.disable(logging.CRITICAL) that runs at import time)
+    logging.disable(logging.NOTSET)
+
     # Suppress noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)

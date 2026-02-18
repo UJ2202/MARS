@@ -5,10 +5,11 @@ Tracks retry statistics and generates reports for workflow runs.
 """
 
 import logging
+import structlog
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class RetryMetrics:

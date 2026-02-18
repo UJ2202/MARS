@@ -7,10 +7,11 @@ resource limits, and execution modes.
 
 import os
 import logging
+import structlog
 from typing import Optional
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 @dataclass
