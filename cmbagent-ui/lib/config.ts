@@ -1,5 +1,5 @@
 /**
- * Configuration for the CMBAgent UI
+ * Configuration for MARS UI
  * Uses environment variables with fallbacks for local development
  */
 

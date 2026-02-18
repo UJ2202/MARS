@@ -779,7 +779,7 @@ export default function ResultDisplay({ results }: ResultDisplayProps) {
               <p className="text-xs text-gray-500">
                 {costLoadAttempts > 1 
                   ? `This may take a moment. Retrying (attempt ${costLoadAttempts}/5)...`
-                  : 'Fetching cost data from CMBAgent files...'
+                  : 'Fetching cost data from MARS files...'
                 }
               </p>
             </div>

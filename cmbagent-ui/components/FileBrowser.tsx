@@ -3,18 +3,12 @@
 import { useState, useEffect } from 'react'
 import {
   Folder,
-  File,
-  Image,
-  FileText,
-  Code,
-  BarChart3,
-  Clock,
-  MessageSquare,
   ArrowLeft,
   RotateCcw,
   Download,
   Eye
 } from 'lucide-react'
+import { FilePreview, getFileIconConfig, isImageFile } from '@/components/files'
 
 interface FileItem {
   name: string
@@ -47,13 +41,13 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
   const loadDirectory = async (path: string) => {
     setLoading(true)
     setError(null)
-    
+
     try {
       const response = await fetch(`/api/files/list?path=${encodeURIComponent(path)}`)
       if (!response.ok) {
         throw new Error(`Failed to load directory: ${response.statusText}`)
       }
-      
+
       const data: DirectoryListing = await response.json()
       setListing(data)
       setCurrentPath(data.path)
@@ -67,14 +61,11 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
   const loadFileContent = async (file: FileItem) => {
     if (file.type !== 'file') return
 
-    // Check if it's an image file
-    const isImage = file.mime_type?.startsWith('image/') ||
-                   /\.(png|jpg|jpeg|gif|bmp|svg|webp|tiff|tif)$/i.test(file.name)
+    const isImage = isImageFile(file.name, file.mime_type)
 
     if (isImage) {
-      // For images, just set the selected file without loading content
       setSelectedFile(file)
-      setFileContent(null) // Clear text content for images
+      setFileContent(null)
 
       if (onFileSelect) {
         onFileSelect(file)
@@ -82,7 +73,6 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
       return
     }
 
-    // For text files, load content as before
     try {
       const response = await fetch(`/api/files/content?path=${encodeURIComponent(file.path)}`)
       if (!response.ok) {
@@ -105,46 +95,21 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
     loadDirectory(currentPath)
   }, [currentPath])
 
-  const getFileIcon = (item: FileItem) => {
-    if (item.type === 'directory') {
-      // Special icons for CMBAgent directories
-      switch (item.name) {
-        case 'chats': return <MessageSquare className="w-4 h-4 text-blue-400" />
-        case 'codebase': return <Code className="w-4 h-4 text-green-400" />
-        case 'cost': return <BarChart3 className="w-4 h-4 text-yellow-400" />
-        case 'data': return <Folder className="w-4 h-4 text-purple-400" />
-        case 'time': return <Clock className="w-4 h-4 text-orange-400" />
-        default: return <Folder className="w-4 h-4 text-blue-400" />
-      }
-    }
-    
-    // File icons based on extension or mime type
-    const ext = item.name.split('.').pop()?.toLowerCase()
-    const mimeType = item.mime_type
-    
-    if (mimeType?.startsWith('image/')) {
-      return <Image className="w-4 h-4 text-green-400" />
-    } else if (ext === 'py' || ext === 'js' || ext === 'ts' || ext === 'jsx' || ext === 'tsx') {
-      return <Code className="w-4 h-4 text-blue-400" />
-    } else if (ext === 'json' || ext === 'csv' || ext === 'txt' || ext === 'md') {
-      return <FileText className="w-4 h-4 text-gray-400" />
-    } else {
-      return <File className="w-4 h-4 text-gray-400" />
-    }
+  const renderFileIcon = (item: FileItem) => {
+    const config = getFileIconConfig(item.name, item.type === 'directory')
+    const IconComponent = config.icon
+    return <IconComponent className="w-4 h-4" style={{ color: config.color }} />
   }
 
   const formatFileSize = (bytes?: number) => {
     if (!bytes) return ''
-    
     const units = ['B', 'KB', 'MB', 'GB']
     let size = bytes
     let unitIndex = 0
-    
     while (size >= 1024 && unitIndex < units.length - 1) {
       size /= 1024
       unitIndex++
     }
-    
     return `${size.toFixed(1)} ${units[unitIndex]}`
   }
 
@@ -165,39 +130,84 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
     }
   }
 
+  const handleDownload = () => {
+    if (!selectedFile) return
+
+    const isImage = isImageFile(selectedFile.name, selectedFile.mime_type)
+    if (isImage) {
+      const link = document.createElement('a')
+      link.href = `/api/files/serve-image?path=${encodeURIComponent(selectedFile.path)}`
+      link.download = selectedFile.name
+      link.click()
+    } else {
+      const blob = new Blob([fileContent || ''], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = selectedFile.name
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+  }
+
   return (
-    <div className="h-full flex flex-col bg-black/20 rounded-lg border border-white/10">
+    <div
+      className="h-full flex flex-col rounded-mars-lg border overflow-hidden"
+      style={{
+        backgroundColor: 'var(--mars-color-surface)',
+        borderColor: 'var(--mars-color-border)',
+      }}
+    >
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-white/10">
+      <div
+        className="flex items-center justify-between p-4 border-b"
+        style={{ borderColor: 'var(--mars-color-border)' }}
+      >
         <div className="flex items-center space-x-2">
-          <Folder className="w-5 h-5 text-blue-400" />
-          <h3 className="text-white font-medium">File Browser</h3>
-        </div>
-        
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => loadDirectory(currentPath)}
-            disabled={loading}
-            className="p-2 text-gray-400 hover:text-white transition-colors"
-            title="Refresh"
+          <Folder className="w-5 h-5" style={{ color: '#3B82F6' }} />
+          <h3
+            className="font-medium"
+            style={{ color: 'var(--mars-color-text)' }}
           >
-            <RotateCcw className="w-4 h-4" />
-          </button>
+            File Browser
+          </h3>
         </div>
+
+        <button
+          onClick={() => loadDirectory(currentPath)}
+          disabled={loading}
+          className="p-2 rounded-mars-md hover:bg-[var(--mars-color-bg-hover)] transition-colors disabled:opacity-50"
+          style={{ color: 'var(--mars-color-text-secondary)' }}
+          title="Refresh"
+          aria-label="Refresh directory listing"
+        >
+          <RotateCcw className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Navigation */}
-      <div className="flex items-center p-3 bg-black/30 border-b border-white/10">
+      <div
+        className="flex items-center p-3 border-b"
+        style={{
+          backgroundColor: 'var(--mars-color-surface-overlay)',
+          borderColor: 'var(--mars-color-border)',
+        }}
+      >
         <button
           onClick={navigateUp}
           disabled={!listing?.parent || loading}
-          className="p-1 text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed mr-2"
+          className="p-1 rounded-mars-sm hover:bg-[var(--mars-color-bg-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed mr-2"
+          style={{ color: 'var(--mars-color-text-secondary)' }}
           title="Go up"
+          aria-label="Navigate to parent directory"
         >
           <ArrowLeft className="w-4 h-4" />
         </button>
-        
-        <span className="text-sm text-gray-300 font-mono truncate">
+
+        <span
+          className="text-sm font-mono truncate"
+          style={{ color: 'var(--mars-color-text-secondary)' }}
+        >
           {currentPath}
         </span>
       </div>
@@ -206,25 +216,32 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
       <div className="flex-1 overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400"></div>
+            <div
+              className="w-8 h-8 border-2 rounded-full animate-spin"
+              style={{ borderColor: 'var(--mars-color-border)', borderTopColor: 'var(--mars-color-primary)' }}
+            />
           </div>
         ) : error ? (
-          <div className="flex items-center justify-center h-full text-red-400">
+          <div className="flex items-center justify-center h-full" style={{ color: 'var(--mars-color-danger)' }}>
             <p>{error}</p>
           </div>
         ) : (
           <div className="h-full overflow-y-auto">
             {listing?.items.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-gray-500">
+              <div className="flex items-center justify-center h-full" style={{ color: 'var(--mars-color-text-tertiary)' }}>
                 <p>Directory is empty</p>
               </div>
             ) : (
-              <div className="p-2">
+              <div className="p-2" role="listbox" aria-label="Files and directories">
                 {listing?.items.map((item, index) => (
                   <div
                     key={index}
-                    className={`flex items-center p-2 rounded hover:bg-white/10 cursor-pointer transition-colors ${
-                      selectedFile?.path === item.path ? 'bg-blue-600/20' : ''
+                    role="option"
+                    aria-selected={selectedFile?.path === item.path}
+                    className={`flex items-center p-2 rounded-mars-md cursor-pointer transition-colors ${
+                      selectedFile?.path === item.path
+                        ? 'bg-[var(--mars-color-primary-subtle)]'
+                        : 'hover:bg-[var(--mars-color-bg-hover)]'
                     }`}
                     onClick={() => {
                       if (item.type === 'directory') {
@@ -233,15 +250,29 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
                         loadFileContent(item)
                       }
                     }}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        if (item.type === 'directory') {
+                          navigateToDirectory(item)
+                        } else {
+                          loadFileContent(item)
+                        }
+                      }
+                    }}
                   >
                     <div className="flex items-center flex-1 min-w-0">
-                      {getFileIcon(item)}
-                      <span className="ml-2 text-sm text-white truncate">
+                      {renderFileIcon(item)}
+                      <span
+                        className="ml-2 text-sm truncate"
+                        style={{ color: 'var(--mars-color-text)' }}
+                      >
                         {item.name}
                       </span>
                     </div>
-                    
-                    <div className="flex items-center space-x-4 text-xs text-gray-400">
+
+                    <div className="flex items-center space-x-4 text-xs" style={{ color: 'var(--mars-color-text-tertiary)' }}>
                       {item.type === 'file' && (
                         <span>{formatFileSize(item.size)}</span>
                       )}
@@ -255,96 +286,63 @@ export default function FileBrowser({ workDir, onFileSelect }: FileBrowserProps)
         )}
       </div>
 
-      {/* File Content Preview */}
+      {/* File Content Preview — using FilePreview component */}
       {selectedFile && (
-        <div className="border-t border-white/10 p-4">
+        <div
+          className="border-t p-4"
+          style={{ borderColor: 'var(--mars-color-border)' }}
+        >
           <div className="flex items-center justify-between mb-3">
             <div>
-              <h4 className="text-sm font-medium text-white">{selectedFile.name}</h4>
-              <p className="text-xs text-gray-400">
-                {selectedFile.mime_type} • {formatFileSize(selectedFile.size)}
+              <h4 className="text-sm font-medium" style={{ color: 'var(--mars-color-text)' }}>{selectedFile.name}</h4>
+              <p className="text-xs" style={{ color: 'var(--mars-color-text-tertiary)' }}>
+                {selectedFile.mime_type} {selectedFile.size ? `\u2022 ${formatFileSize(selectedFile.size)}` : ''}
               </p>
             </div>
             <div className="flex items-center space-x-2">
               <button
-                onClick={() => {
-                  const isImage = selectedFile.mime_type?.startsWith('image/') ||
-                                 /\.(png|jpg|jpeg|gif|bmp|svg|webp|tiff|tif)$/i.test(selectedFile.name)
-
-                  if (isImage) {
-                    // For images, download directly from the serve-image endpoint
-                    const link = document.createElement('a')
-                    link.href = `/api/files/serve-image?path=${encodeURIComponent(selectedFile.path)}`
-                    link.download = selectedFile.name
-                    link.click()
-                  } else {
-                    // For text files, create blob from content
-                    const blob = new Blob([fileContent || ''], { type: 'text/plain' })
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = selectedFile.name
-                    a.click()
-                    URL.revokeObjectURL(url)
-                  }
-                }}
-                className="p-1 text-gray-400 hover:text-white transition-colors"
+                onClick={handleDownload}
+                className="p-1 rounded-mars-sm hover:bg-[var(--mars-color-bg-hover)] transition-colors"
+                style={{ color: 'var(--mars-color-text-secondary)' }}
                 title="Download"
+                aria-label={`Download ${selectedFile.name}`}
               >
                 <Download className="w-3 h-3" />
               </button>
-              <button
-                onClick={() => {
-                  const isImage = selectedFile.mime_type?.startsWith('image/') ||
-                                 /\.(png|jpg|jpeg|gif|bmp|svg|webp|tiff|tif)$/i.test(selectedFile.name)
-
-                  if (isImage) {
+              {isImageFile(selectedFile.name, selectedFile.mime_type) && (
+                <button
+                  onClick={() => {
                     window.open(`/api/files/serve-image?path=${encodeURIComponent(selectedFile.path)}`, '_blank')
-                  }
-                }}
-                className="p-1 text-gray-400 hover:text-white transition-colors"
-                title="View in new tab"
-              >
-                <Eye className="w-3 h-3" />
-              </button>
+                  }}
+                  className="p-1 rounded-mars-sm hover:bg-[var(--mars-color-bg-hover)] transition-colors"
+                  style={{ color: 'var(--mars-color-text-secondary)' }}
+                  title="View in new tab"
+                  aria-label={`Open ${selectedFile.name} in new tab`}
+                >
+                  <Eye className="w-3 h-3" />
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Image Preview */}
-          {selectedFile.mime_type?.startsWith('image/') || /\.(png|jpg|jpeg|gif|bmp|svg|webp|tiff|tif)$/i.test(selectedFile.name) ? (
-            <div className="bg-white rounded-lg p-3">
-              <img
-                src={`/api/files/serve-image?path=${encodeURIComponent(selectedFile.path)}`}
-                alt={selectedFile.name}
-                className="w-full h-auto max-h-96 object-contain rounded cursor-pointer hover:opacity-90 transition-opacity"
-                onClick={() => {
-                  window.open(`/api/files/serve-image?path=${encodeURIComponent(selectedFile.path)}`, '_blank')
-                }}
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement
-                  target.style.display = 'none'
-                  const errorDiv = document.createElement('div')
-                  errorDiv.className = 'text-center text-red-400 py-8'
-                  errorDiv.textContent = 'Failed to load image'
-                  target.parentNode?.appendChild(errorDiv)
-                }}
-              />
-            </div>
-          ) : fileContent ? (
-            /* Text File Preview */
-            <div className="max-h-64 overflow-y-auto">
-              <pre className="text-xs text-gray-300 bg-black/30 p-3 rounded overflow-x-auto">
-                {fileContent}
-              </pre>
-            </div>
-          ) : (
-            /* File type not supported for preview */
-            <div className="text-center text-gray-500 py-8">
-              <File className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>Preview not available for this file type</p>
-              <p className="text-xs text-gray-600 mt-1">Use download or view buttons above</p>
-            </div>
-          )}
+          <div className="max-h-64 overflow-hidden">
+            <FilePreview
+              fileName={selectedFile.name}
+              filePath={selectedFile.path}
+              content={fileContent}
+              mimeType={selectedFile.mime_type}
+              sizeBytes={selectedFile.size}
+              imageUrl={isImageFile(selectedFile.name, selectedFile.mime_type)
+                ? `/api/files/serve-image?path=${encodeURIComponent(selectedFile.path)}`
+                : undefined
+              }
+              onOpenExternal={isImageFile(selectedFile.name, selectedFile.mime_type)
+                ? () => window.open(`/api/files/serve-image?path=${encodeURIComponent(selectedFile.path)}`, '_blank')
+                : undefined
+              }
+              maxCodeLines={30}
+            />
+          </div>
         </div>
       )}
     </div>

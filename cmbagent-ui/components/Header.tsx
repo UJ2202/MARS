@@ -13,8 +13,8 @@ export default function Header() {
         <div className="flex items-center justify-between">
           <div className="flex items-center">
             <div>
-              <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Jersey 10, cursive' }}>CMBAGENT</h1>
-              <p className="text-sm text-gray-300">Autonomous Research Backend </p>
+              <h1 className="text-2xl font-bold text-white">MARS</h1>
+              <p className="text-sm text-gray-300">Autonomous Research Platform</p>
             </div>
           </div>
 

@@ -1,0 +1,14 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Write Python code to parametrize the Möbius strip in 3D.",
+                "Use numpy to generate the coordinates for the strip.",
+                "Use matplotlib's 3D plotting capabilities to visualize the Möbius strip.",
+                "Display the resulting 3D plot."
+            ],
+            "sub_task": "Generate and plot a 3D Möbius strip using matplotlib",
+            "sub_task_agent": "engineer"
+        }
+    ]
+}

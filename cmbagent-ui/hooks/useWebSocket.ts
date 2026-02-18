@@ -44,7 +44,7 @@ export function useWebSocket({
       ws.onopen = () => {
         setIsConnected(true)
         setIsConnecting(false)
-        onStatusChange('Connected to CMBAgent backend')
+        onStatusChange('Connected to MARS backend')
         
         // Send task data
         ws.send(JSON.stringify({ task, config }))
@@ -111,13 +111,13 @@ export function useWebSocket({
         setIsConnecting(false)
         
         if (event.code !== 1000) { // Not a normal closure
-          onError('Connection lost to CMBAgent backend')
+          onError('Connection lost to MARS backend')
         }
       }
 
     } catch (error) {
       console.error('Error creating WebSocket:', error)
-      onError('Failed to connect to CMBAgent backend')
+      onError('Failed to connect to MARS backend')
       setIsConnecting(false)
     }
   }, [onOutput, onResult, onError, onComplete, onStatusChange])

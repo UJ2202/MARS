@@ -2,12 +2,13 @@ import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import { Providers } from './providers'
+import AppShell from '@/components/layout/AppShell'
 
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'CMBAGENT',
-  description: 'Interactive UI for CMBAgent - Autonomous Research Backend ',
+  title: 'MARS',
+  description: 'MARS - Autonomous Research Platform',
 }
 
 export default function RootLayout({
@@ -16,15 +17,12 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
-      <head>
-        <link href="https://fonts.googleapis.com/css2?family=Jersey+10&display=swap" rel="stylesheet" />
-      </head>
+    <html lang="en" data-theme="dark">
       <body className={inter.className}>
         <Providers>
-          <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900">
+          <AppShell>
             {children}
-          </div>
+          </AppShell>
         </Providers>
       </body>
     </html>

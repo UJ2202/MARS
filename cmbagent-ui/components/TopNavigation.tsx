@@ -16,8 +16,8 @@ export default function TopNavigation() {
         <div className="flex items-center justify-between">
           {/* Logo */}
           <div className="py-4">
-            <h1 className="text-2xl font-bold text-white" style={{ fontFamily: 'Jersey 10, cursive' }}>
-              CMBAGENT
+            <h1 className="text-2xl font-bold text-white">
+              MARS
             </h1>
           </div>
 

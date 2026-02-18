@@ -68,6 +68,12 @@ interface WebSocketContextValue {
   // Session management (Stage 11)
   resumeSession: (sessionId: string, additionalContext?: string) => Promise<void>;
   loadSessionHistory: (sessionId: string) => Promise<any>;
+
+  // State restoration (for tab switching)
+  setConsoleOutputDirect: (output: string[]) => void;
+  setDagDataDirect: (data: { run_id?: string; nodes: DAGNodeData[]; edges: DAGEdgeData[] } | null) => void;
+  setCostSummaryDirect: (summary: CostSummary) => void;
+  setCostTimeSeriesDirect: (series: CostTimeSeries[]) => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextValue | undefined>(undefined);
@@ -651,6 +657,23 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     return response.json();
   }, []);
 
+  // State restoration setters (for tab switching)
+  const setConsoleOutputDirect = useCallback((output: string[]) => {
+    setConsoleOutput(output);
+  }, []);
+
+  const setDagDataDirect = useCallback((data: { run_id?: string; nodes: DAGNodeData[]; edges: DAGEdgeData[] } | null) => {
+    setDAGData(data);
+  }, []);
+
+  const setCostSummaryDirect = useCallback((summary: CostSummary) => {
+    setCostSummary(summary);
+  }, []);
+
+  const setCostTimeSeriesDirect = useCallback((series: CostTimeSeries[]) => {
+    setCostTimeSeries(series);
+  }, []);
+
   const value: WebSocketContextValue = {
     connected,
     reconnectAttempt,
@@ -684,6 +707,10 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     clearAgentMessages,
     resumeSession,
     loadSessionHistory,
+    setConsoleOutputDirect,
+    setDagDataDirect,
+    setCostSummaryDirect,
+    setCostTimeSeriesDirect,
   };
 
   return (

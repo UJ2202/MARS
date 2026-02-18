@@ -29,12 +29,13 @@ interface TaskInputProps {
   isRunning: boolean
   isConnecting?: boolean
   onOpenDirectory?: (path: string) => void
+  defaultMode?: string
 }
 
-export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = false, onOpenDirectory }: TaskInputProps) {
+export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = false, onOpenDirectory, defaultMode }: TaskInputProps) {
   const [task, setTask] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [mode, setMode] = useState<'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive' | 'copilot'>('one-shot')
+  const [mode, setMode] = useState<'one-shot' | 'planning-control' | 'idea-generation' | 'ocr' | 'arxiv' | 'enhance-input' | 'hitl-interactive' | 'copilot'>((defaultMode as any) || 'one-shot')
   const [showOcrDropdown, setShowOcrDropdown] = useState(false)
   const [showCredentialsModal, setShowCredentialsModal] = useState(false)
   const [showOpenAIError, setShowOpenAIError] = useState(false)
@@ -53,7 +54,36 @@ export default function TaskInput({ onSubmit, onStop, isRunning, isConnecting = 
       document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [])
-  
+
+  // Sync mode when defaultMode prop changes
+  useEffect(() => {
+    if (defaultMode) {
+      setMode(defaultMode as any)
+      const modeDefaults: Record<string, any> = {
+        'planning-control': {
+          maxPlanSteps: 2,
+          planInstructions: getDefaultPlanInstructions('planning-control'),
+        },
+        'idea-generation': {
+          maxPlanSteps: 6,
+          planInstructions: getDefaultPlanInstructions('idea-generation'),
+        },
+        'hitl-interactive': {
+          maxPlanSteps: 5,
+          maxHumanIterations: 3,
+          approvalMode: 'both',
+        },
+        'copilot': {
+          enablePlanning: true,
+          availableAgents: ['engineer', 'researcher'],
+          approvalMode: 'after_step',
+          autoApproveSimple: true,
+        },
+      }
+      setConfig(prev => ({ ...prev, mode: defaultMode as any, ...(modeDefaults[defaultMode] || {}) }))
+    }
+  }, [defaultMode])
+
   // Use credentials hook
   const { 
     refreshKey, 
@@ -210,9 +240,9 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
 
   return (
     <div className="h-full flex flex-col">
-      {/* Mode Selection Header */}
+      {/* Mode Selection Header - hidden when launched from gallery */}
       <div className="flex items-center justify-between mb-3 px-4 pt-4">
-        <div className="flex items-center space-x-1">
+        {!defaultMode && <div className="flex items-center space-x-1">
           <Tooltip text="Task is broken into steps by a planner, then executed step-by-step" position="bottom">
             <button
               onClick={() => {
@@ -234,7 +264,7 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
               📋 Deep Research
             </button>
           </Tooltip>
-          <Tooltip text="Direct execution - CMBAgent executes your task immediately without planning" position="bottom">
+          <Tooltip text="Direct execution - MARS executes your task immediately without planning" position="bottom">
             <button
               onClick={() => {
                 setMode('one-shot')
@@ -399,7 +429,7 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
               </div>
             )}
           </div>
-        </div>
+        </div>}
         <button
           onClick={() => setShowAdvanced(!showAdvanced)}
           className="p-1 text-gray-400 hover:text-white transition-colors"

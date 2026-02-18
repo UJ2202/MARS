@@ -1,12 +1,172 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { Terminal, Copy, Trash2, ArrowDown } from 'lucide-react'
+import { useEffect, useRef, useState, ReactNode } from 'react'
+import {
+  Terminal,
+  Copy,
+  Trash2,
+  ArrowDown,
+  XCircle,
+  AlertTriangle,
+  CheckCircle,
+  Info,
+  Wrench,
+  FileText,
+  Code,
+  Target,
+  BarChart3,
+  FolderOpen,
+  Plug,
+  StopCircle,
+  Pause,
+  Play,
+  GitBranch,
+  Eye,
+  Search as SearchIcon,
+} from 'lucide-react'
 
 interface ConsoleOutputProps {
   output: string[]
   isRunning: boolean
   onClear?: () => void
+}
+
+// Icon config for different log line types
+interface LineConfig {
+  icon: ReactNode
+  className: string
+}
+
+function getLineConfig(line: string): LineConfig {
+  const lower = line.toLowerCase()
+
+  if (lower.includes('error') || lower.includes('failed') || lower.includes('exception')) {
+    return {
+      icon: <XCircle className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-danger)' }} />,
+      className: 'text-console-error',
+    }
+  }
+  if (lower.includes('warning') || lower.includes('warn')) {
+    return {
+      icon: <AlertTriangle className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-warning)' }} />,
+      className: 'text-console-warning',
+    }
+  }
+  if (lower.includes('success') || lower.includes('completed') || line.includes('\u2713')) {
+    return {
+      icon: <CheckCircle className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-success)' }} />,
+      className: 'text-console-success',
+    }
+  }
+  if (lower.includes('info')) {
+    return {
+      icon: <Info className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-info)' }} />,
+      className: 'text-console-info',
+    }
+  }
+  if (line.startsWith('>>>') || line.startsWith('$')) {
+    return {
+      icon: <Wrench className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#60A5FA' }} />,
+      className: 'text-blue-400',
+    }
+  }
+  if (lower.includes('code explanation:')) {
+    return {
+      icon: <FileText className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#FBBF24' }} />,
+      className: 'text-yellow-400 font-semibold',
+    }
+  }
+  if (lower.includes('python code:')) {
+    return {
+      icon: <Code className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#34D399' }} />,
+      className: 'text-green-400 font-semibold',
+    }
+  }
+  if (lower.includes('final result:')) {
+    return {
+      icon: <Target className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#A78BFA' }} />,
+      className: 'text-purple-400 font-bold',
+    }
+  }
+  if (lower.includes('dag created') || lower.includes('dag updated')) {
+    return {
+      icon: <BarChart3 className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#60A5FA' }} />,
+      className: 'text-console-info',
+    }
+  }
+  if (lower.includes('file(s) tracked')) {
+    return {
+      icon: <FolderOpen className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#60A5FA' }} />,
+      className: 'text-console-info',
+    }
+  }
+  if (lower.includes('websocket connected') || lower.includes('websocket disconnected') || lower.includes('websocket reconnected')) {
+    return {
+      icon: <Plug className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#60A5FA' }} />,
+      className: 'text-console-info',
+    }
+  }
+  if (lower.includes('stopped by user')) {
+    return {
+      icon: <StopCircle className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-danger)' }} />,
+      className: 'text-console-error',
+    }
+  }
+  if (lower.includes('workflow paused') || lower.includes('pause request')) {
+    return {
+      icon: <Pause className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-warning)' }} />,
+      className: 'text-console-warning',
+    }
+  }
+  if (lower.includes('workflow resumed') || lower.includes('resume request')) {
+    return {
+      icon: <Play className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-success)' }} />,
+      className: 'text-console-success',
+    }
+  }
+  if (lower.includes('workflow started')) {
+    return {
+      icon: <Play className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-success)' }} />,
+      className: 'text-console-success',
+    }
+  }
+  if (lower.includes('branch') || lower.includes('switched to branch')) {
+    return {
+      icon: <GitBranch className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#A78BFA' }} />,
+      className: 'text-purple-400',
+    }
+  }
+  if (lower.includes('viewing')) {
+    return {
+      icon: <Eye className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#60A5FA' }} />,
+      className: 'text-blue-400',
+    }
+  }
+  if (lower.includes('comparing')) {
+    return {
+      icon: <SearchIcon className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: '#60A5FA' }} />,
+      className: 'text-blue-400',
+    }
+  }
+  if (lower.includes('approval')) {
+    return {
+      icon: <Pause className="w-3.5 h-3.5 inline-block mr-1.5 flex-shrink-0" style={{ color: 'var(--mars-color-warning)' }} />,
+      className: 'text-console-warning',
+    }
+  }
+
+  // Default: no prefix icon
+  return {
+    icon: null,
+    className: 'text-console-text',
+  }
+}
+
+// Strip emoji prefixes from text that the backend sends
+function stripEmojiPrefix(line: string): string {
+  // Remove leading emoji characters and variation selectors followed by optional space
+  // Matches common emoji ranges used in console output
+  return line.replace(/^[\u2139\u231B\u23F8\u23F9\u25B6\u26A0\u2705\u274C\u2B06\uD83C-\uDBFF][\uDC00-\uDFFF]?\uFE0F?\s*/g, '')
 }
 
 export default function ConsoleOutput({ output, isRunning, onClear }: ConsoleOutputProps) {
@@ -18,12 +178,10 @@ export default function ConsoleOutput({ output, isRunning, onClear }: ConsoleOut
   useEffect(() => {
     const scrollToBottom = () => {
       if (consoleRef.current) {
-        // Always scroll to bottom when new output arrives
         consoleRef.current.scrollTop = consoleRef.current.scrollHeight
       }
     }
 
-    // Use setTimeout to ensure DOM is updated
     const timeoutId = setTimeout(scrollToBottom, 50)
     return () => clearTimeout(timeoutId)
   }, [output])
@@ -70,43 +228,16 @@ export default function ConsoleOutput({ output, isRunning, onClear }: ConsoleOut
   }
 
   const formatOutput = (line: string, index: number) => {
-    // Detect different types of output and apply appropriate styling
-    let className = 'text-console-text'
-    let prefix = ''
-
-    if (line.includes('ERROR') || line.includes('Error') || line.includes('error')) {
-      className = 'text-console-error'
-      prefix = '❌ '
-    } else if (line.includes('WARNING') || line.includes('Warning') || line.includes('warning')) {
-      className = 'text-console-warning'
-      prefix = '⚠️ '
-    } else if (line.includes('SUCCESS') || line.includes('Success') || line.includes('✓')) {
-      className = 'text-console-success'
-      prefix = '✅ '
-    } else if (line.includes('INFO') || line.includes('Info')) {
-      className = 'text-console-info'
-      prefix = 'ℹ️ '
-    } else if (line.startsWith('>>>') || line.startsWith('$')) {
-      className = 'text-blue-400'
-      prefix = '🔧 '
-    } else if (line.includes('Code Explanation:')) {
-      className = 'text-yellow-400 font-semibold'
-      prefix = '📝 '
-    } else if (line.includes('Python Code:')) {
-      className = 'text-green-400 font-semibold'
-      prefix = '🐍 '
-    } else if (line.includes('FINAL RESULT:')) {
-      className = 'text-purple-400 font-bold'
-      prefix = '🎯 '
-    }
+    const cleanedLine = stripEmojiPrefix(line)
+    const config = getLineConfig(cleanedLine)
 
     return (
-      <div key={index} className={`${className} font-mono text-xs leading-tight`}>
-        <span className="text-gray-500 select-none mr-2">
+      <div key={index} className={`${config.className} font-mono text-xs leading-tight flex items-start`}>
+        <span className="text-gray-500 select-none mr-2 flex-shrink-0">
           {String(index + 1).padStart(3, '0')}
         </span>
-        <span className="select-none mr-1">{prefix}</span>
-        <span className="whitespace-pre-wrap">{line}</span>
+        {config.icon && <span className="select-none flex-shrink-0 mt-px">{config.icon}</span>}
+        <span className="whitespace-pre-wrap break-all">{cleanedLine}</span>
       </div>
     )
   }
@@ -117,7 +248,6 @@ export default function ConsoleOutput({ output, isRunning, onClear }: ConsoleOut
       <div className="flex items-center justify-between px-3 py-2 bg-black/40 border-b border-white/10">
         <div className="flex items-center space-x-2">
           <Terminal className="w-5 h-5 text-green-400" />
-          {/* <h3 className="text-white font-medium text-sm">Console Output</h3> */}
           {isRunning && (
             <div className="flex items-center space-x-1">
               <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
@@ -125,7 +255,7 @@ export default function ConsoleOutput({ output, isRunning, onClear }: ConsoleOut
             </div>
           )}
         </div>
-        
+
         <div className="flex items-center space-x-2">
           <button
             onClick={scrollToBottom}
@@ -194,7 +324,7 @@ export default function ConsoleOutput({ output, isRunning, onClear }: ConsoleOut
       <div className="px-3 py-1.5 bg-black/40 border-t border-white/10">
         <div className="flex items-center justify-between text-xs text-gray-400">
           <span>{output.length} lines</span>
-          <span>CMBAgent Console v1.0</span>
+          <span>MARS Console v1.0</span>
         </div>
       </div>
     </div>

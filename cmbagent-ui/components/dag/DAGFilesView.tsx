@@ -2,16 +2,9 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { 
-  FileText, 
-  Code, 
-  Image, 
-  Database, 
-  File, 
-  Download,
-  Eye,
+import {
+  FileText,
   Search,
-  Filter,
   Folder,
   FolderOpen,
   ChevronRight,
@@ -20,10 +13,11 @@ import {
   X
 } from 'lucide-react';
 import { getApiUrl } from '@/lib/config';
+import { FilePreview, getFileIconConfig } from '@/components/files';
 
 interface DAGFilesViewProps {
   runId: string;
-  refreshTrigger?: number;  // Increment this to trigger a refresh
+  refreshTrigger?: number;
 }
 
 interface FileNode {
@@ -52,14 +46,13 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
   const [viewMode, setViewMode] = useState<'list' | 'tree'>('list');
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
 
-  // Fetch files on mount, when runId changes, or when refreshTrigger changes
   useEffect(() => {
     fetchFiles();
   }, [runId, refreshTrigger]);
 
   const fetchFiles = async () => {
     if (!runId) return;
-    
+
     setLoading(true);
     setError(null);
     try {
@@ -77,55 +70,42 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
     }
   };
 
-  // Filter files
   const filteredFiles = useMemo(() => {
     return files.filter(file => {
-      const matchesSearch = searchQuery === '' || 
+      const matchesSearch = searchQuery === '' ||
         file.file_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         file.file_path.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      const matchesType = fileTypeFilter === 'all' || 
+
+      const matchesType = fileTypeFilter === 'all' ||
         (fileTypeFilter === 'code' && file.file_name.match(/\.(py|js|ts|tsx|jsx|json|yaml|yml)$/)) ||
         (fileTypeFilter === 'data' && file.file_name.match(/\.(csv|txt|md|json)$/)) ||
         (fileTypeFilter === 'images' && file.file_name.match(/\.(png|jpg|jpeg|gif|svg)$/)) ||
         (fileTypeFilter === 'logs' && file.file_name.match(/\.(log|txt)$/));
-      
+
       return matchesSearch && matchesType;
     });
   }, [files, searchQuery, fileTypeFilter]);
 
-  // Build file tree structure
   const fileTree = useMemo(() => {
     const tree: any = {};
-    
+
     filteredFiles.forEach(file => {
       const parts = file.file_path.split('/');
       let current = tree;
-      
+
       parts.forEach((part, index) => {
         if (index === parts.length - 1) {
-          // It's a file
           if (!current._files) current._files = [];
           current._files.push(file);
         } else {
-          // It's a directory
           if (!current[part]) current[part] = {};
           current = current[part];
         }
       });
     });
-    
+
     return tree;
   }, [filteredFiles]);
-
-  const getFileIcon = (fileName: string) => {
-    if (fileName.endsWith('.py')) return <Code className="w-4 h-4 text-blue-400" />;
-    if (fileName.endsWith('.json') || fileName.endsWith('.yaml')) return <Code className="w-4 h-4 text-yellow-400" />;
-    if (fileName.match(/\.(png|jpg|jpeg|gif|svg)$/)) return <Image className="w-4 h-4 text-purple-400" />;
-    if (fileName.match(/\.(csv|txt|md)$/)) return <FileText className="w-4 h-4 text-green-400" />;
-    if (fileName.match(/\.(db|sql)$/)) return <Database className="w-4 h-4 text-orange-400" />;
-    return <File className="w-4 h-4 text-gray-400" />;
-  };
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
@@ -135,8 +115,7 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
 
   const handleFileClick = async (file: FileNode) => {
     setSelectedFile(file);
-    
-    // Fetch file content if not already loaded and it's a text file
+
     if (!file.file_content) {
       setLoadingContent(true);
       try {
@@ -144,9 +123,8 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
         if (response.ok) {
           const data = await response.json();
           if (data.content) {
-            // Store content along with metadata
-            setSelectedFile({ 
-              ...file, 
+            setSelectedFile({
+              ...file,
               file_content: data.content,
               content_type: data.content_type,
               encoding: data.encoding,
@@ -156,11 +134,9 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
             setSelectedFile({ ...file, file_content: `[Binary file - ${formatFileSize(data.size || file.size_bytes)}]\n\nThis file cannot be displayed as text.` });
           }
         } else {
-          console.error('Failed to fetch file content:', response.status, response.statusText);
           setSelectedFile({ ...file, file_content: `Error: ${response.status} ${response.statusText}` });
         }
       } catch (error) {
-        console.error('Error fetching file content:', error);
         setSelectedFile({ ...file, file_content: 'Error loading file content' });
       } finally {
         setLoadingContent(false);
@@ -190,7 +166,12 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
     });
   };
 
-  // Render tree recursively
+  const renderFileIcon = (fileName: string, isDir = false) => {
+    const config = getFileIconConfig(fileName, isDir);
+    const IconComponent = config.icon;
+    return <IconComponent className="w-4 h-4" style={{ color: config.color }} />;
+  };
+
   const renderTree = (tree: any, path: string = '') => {
     const entries = Object.entries(tree).filter(([key]) => key !== '_files');
     const treeFiles = tree._files || [];
@@ -205,21 +186,23 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
             <div key={fullPath}>
               <button
                 onClick={() => toggleDirectory(fullPath)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-gray-800 rounded transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition-colors
+                  hover:bg-[var(--mars-color-bg-hover)]"
+                aria-expanded={isExpanded}
               >
                 {isExpanded ? (
-                  <ChevronDown className="w-4 h-4 text-gray-400" />
+                  <ChevronDown className="w-4 h-4" style={{ color: 'var(--mars-color-text-tertiary)' }} />
                 ) : (
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
+                  <ChevronRight className="w-4 h-4" style={{ color: 'var(--mars-color-text-tertiary)' }} />
                 )}
                 {isExpanded ? (
-                  <FolderOpen className="w-4 h-4 text-blue-400" />
+                  <FolderOpen className="w-4 h-4" style={{ color: '#3B82F6' }} />
                 ) : (
-                  <Folder className="w-4 h-4 text-blue-400" />
+                  <Folder className="w-4 h-4" style={{ color: '#3B82F6' }} />
                 )}
-                <span className="text-white">{dirName}</span>
+                <span style={{ color: 'var(--mars-color-text)' }}>{dirName}</span>
               </button>
-              
+
               {isExpanded && (
                 <div className="ml-6">
                   {renderTree(subtree, fullPath)}
@@ -228,21 +211,22 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
             </div>
           );
         })}
-        
+
         {treeFiles.map((file: FileNode) => (
           <button
             key={file.id}
             onClick={() => handleFileClick(file)}
             className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded transition-colors ${
               selectedFile?.id === file.id
-                ? 'bg-blue-900/30 border-l-2 border-blue-500'
-                : 'hover:bg-gray-800'
+                ? 'bg-[var(--mars-color-primary-subtle)] border-l-2'
+                : 'hover:bg-[var(--mars-color-bg-hover)]'
             }`}
+            style={selectedFile?.id === file.id ? { borderLeftColor: 'var(--mars-color-primary)' } : undefined}
           >
-            <div className="w-4" /> {/* Spacer for alignment */}
-            {getFileIcon(file.file_name)}
-            <span className="text-white truncate flex-1">{file.file_name}</span>
-            <span className="text-xs text-gray-500">{formatFileSize(file.size_bytes)}</span>
+            <div className="w-4" />
+            {renderFileIcon(file.file_name)}
+            <span className="truncate flex-1 text-left" style={{ color: 'var(--mars-color-text)' }}>{file.file_name}</span>
+            <span className="text-xs" style={{ color: 'var(--mars-color-text-tertiary)' }}>{formatFileSize(file.size_bytes)}</span>
           </button>
         ))}
       </>
@@ -259,10 +243,13 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center bg-gray-900">
+      <div className="h-full flex items-center justify-center" style={{ backgroundColor: 'var(--mars-color-surface)' }}>
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-400">Loading files...</p>
+          <div
+            className="w-10 h-10 border-2 rounded-full animate-spin mx-auto mb-4"
+            style={{ borderColor: 'var(--mars-color-border)', borderTopColor: 'var(--mars-color-primary)' }}
+          />
+          <p style={{ color: 'var(--mars-color-text-tertiary)' }}>Loading files...</p>
         </div>
       </div>
     );
@@ -270,9 +257,9 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center bg-gray-900">
-        <div className="text-center text-red-400">
-          <AlertCircle className="w-12 h-12 mx-auto mb-4" />
+      <div className="h-full flex items-center justify-center" style={{ backgroundColor: 'var(--mars-color-surface)' }}>
+        <div className="text-center" style={{ color: 'var(--mars-color-danger)' }}>
+          <AlertCircle className="w-10 h-10 mx-auto mb-3" />
           <p>{error}</p>
         </div>
       </div>
@@ -280,45 +267,70 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
   }
 
   return (
-    <div className="h-full flex bg-gray-900">
+    <div className="h-full flex" style={{ backgroundColor: 'var(--mars-color-surface)' }}>
       {/* Files List/Tree */}
-      <div className="flex-1 overflow-auto border-r border-gray-700">
+      <div className="flex-1 overflow-auto border-r" style={{ borderColor: 'var(--mars-color-border)' }}>
         <div className="p-4">
           <div className="flex items-center gap-2 mb-4">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: 'var(--mars-color-text-tertiary)' }} />
               <input
-                type="text"
+                type="search"
                 placeholder="Search files..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-3 py-2 text-sm bg-gray-800 border border-gray-700 rounded text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-10 pr-3 py-2 text-sm rounded-mars-md border outline-none"
+                style={{
+                  backgroundColor: 'var(--mars-color-surface-raised)',
+                  borderColor: 'var(--mars-color-border)',
+                  color: 'var(--mars-color-text)',
+                }}
+                aria-label="Search files"
               />
             </div>
 
             <select
               value={fileTypeFilter}
               onChange={(e) => setFileTypeFilter(e.target.value)}
-              className="px-3 py-2 text-sm bg-gray-800 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-3 py-2 text-sm rounded-mars-md border"
+              style={{
+                backgroundColor: 'var(--mars-color-surface-raised)',
+                borderColor: 'var(--mars-color-border)',
+                color: 'var(--mars-color-text)',
+              }}
+              aria-label="Filter by file type"
             >
               {fileTypes.map(type => (
                 <option key={type.value} value={type.value}>{type.label}</option>
               ))}
             </select>
 
-            <div className="flex gap-1 p-1 bg-gray-800 rounded">
+            <div
+              className="flex gap-1 p-1 rounded-mars-md"
+              style={{ backgroundColor: 'var(--mars-color-surface-overlay)' }}
+              role="radiogroup"
+              aria-label="View mode"
+            >
               <button
                 onClick={() => setViewMode('list')}
-                className={`px-2 py-1 text-xs rounded ${
-                  viewMode === 'list' ? 'bg-blue-500 text-white' : 'text-gray-400'
+                role="radio"
+                aria-checked={viewMode === 'list'}
+                className={`px-2 py-1 text-xs rounded-mars-sm transition-colors ${
+                  viewMode === 'list'
+                    ? 'bg-[var(--mars-color-primary)] text-white'
+                    : 'text-[var(--mars-color-text-secondary)]'
                 }`}
               >
                 List
               </button>
               <button
                 onClick={() => setViewMode('tree')}
-                className={`px-2 py-1 text-xs rounded ${
-                  viewMode === 'tree' ? 'bg-blue-500 text-white' : 'text-gray-400'
+                role="radio"
+                aria-checked={viewMode === 'tree'}
+                className={`px-2 py-1 text-xs rounded-mars-sm transition-colors ${
+                  viewMode === 'tree'
+                    ? 'bg-[var(--mars-color-primary)] text-white'
+                    : 'text-[var(--mars-color-text-secondary)]'
                 }`}
               >
                 Tree
@@ -328,8 +340,8 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
 
           {filteredFiles.length === 0 ? (
             <div className="text-center py-12">
-              <FileText className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-              <p className="text-gray-400">No files generated yet</p>
+              <FileText className="w-10 h-10 mx-auto mb-3 opacity-40" style={{ color: 'var(--mars-color-text-tertiary)' }} />
+              <p style={{ color: 'var(--mars-color-text-tertiary)' }}>No files generated yet</p>
             </div>
           ) : (
             <div className="space-y-0.5">
@@ -340,27 +352,27 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
                   <button
                     key={file.id}
                     onClick={() => handleFileClick(file)}
-                    className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors border ${
+                    className={`w-full flex items-center gap-3 p-3 rounded-mars-md transition-colors border ${
                       selectedFile?.id === file.id
-                        ? 'bg-blue-900/30 border-blue-700'
-                        : 'hover:bg-gray-800 border-gray-700 hover:border-gray-600'
+                        ? 'bg-[var(--mars-color-primary-subtle)] border-[var(--mars-color-primary)]'
+                        : 'hover:bg-[var(--mars-color-bg-hover)] border-[var(--mars-color-border)]'
                     }`}
                   >
-                    {getFileIcon(file.file_name)}
+                    {renderFileIcon(file.file_name)}
                     <div className="flex-1 min-w-0 text-left">
-                      <p className="text-sm font-medium text-white truncate">
+                      <p className="text-sm font-medium truncate" style={{ color: 'var(--mars-color-text)' }}>
                         {file.file_name}
                       </p>
-                      <p className="text-xs text-gray-400 truncate">
+                      <p className="text-xs truncate" style={{ color: 'var(--mars-color-text-tertiary)' }}>
                         {file.file_path}
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs text-gray-400">
+                      <p className="text-xs" style={{ color: 'var(--mars-color-text-tertiary)' }}>
                         {formatFileSize(file.size_bytes)}
                       </p>
                       {file.agent_name && (
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs" style={{ color: 'var(--mars-color-text-disabled)' }}>
                           {file.agent_name}
                         </p>
                       )}
@@ -373,88 +385,52 @@ export function DAGFilesView({ runId, refreshTrigger }: DAGFilesViewProps) {
         </div>
       </div>
 
-      {/* File Preview/Details */}
+      {/* File Preview — now uses unified FilePreview component */}
       {selectedFile && (
-        <div className="w-2/3 overflow-auto bg-gray-800/50">
-          <div className="sticky top-0 z-10 p-4 bg-gray-800 border-b border-gray-700">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3">
-                {getFileIcon(selectedFile.file_name)}
-                <div>
-                  <h4 className="text-lg font-semibold text-white">{selectedFile.file_name}</h4>
-                  <p className="text-sm text-gray-400">{selectedFile.file_path}</p>
+        <div className="w-2/3 overflow-auto" style={{ backgroundColor: 'var(--mars-color-surface-raised)' }}>
+          <div
+            className="sticky top-0 p-4 border-b flex items-center justify-between"
+            style={{
+              backgroundColor: 'var(--mars-color-surface-raised)',
+              borderColor: 'var(--mars-color-border)',
+              zIndex: 10,
+            }}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              {renderFileIcon(selectedFile.file_name)}
+              <div className="min-w-0">
+                <h4 className="text-base font-semibold truncate" style={{ color: 'var(--mars-color-text)' }}>{selectedFile.file_name}</h4>
+                <div className="flex items-center gap-3 text-xs" style={{ color: 'var(--mars-color-text-tertiary)' }}>
+                  <span>{formatFileSize(selectedFile.size_bytes)}</span>
+                  <span>Node: {selectedFile.node_id}</span>
+                  {selectedFile.agent_name && <span>Agent: {selectedFile.agent_name}</span>}
+                  <span>{new Date(selectedFile.created_at).toLocaleString()}</span>
                 </div>
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setSelectedFile(null)}
-                  className="p-2 text-gray-400 hover:text-white transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-                {selectedFile.file_content && (
-                  <button
-                    onClick={() => handleDownload(selectedFile)}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
-                  >
-                    <Download className="w-4 h-4" />
-                    Download
-                  </button>
-                )}
-              </div>
             </div>
-
-            <div className="flex items-center gap-4 text-xs text-gray-400">
-              <span>Size: {formatFileSize(selectedFile.size_bytes)}</span>
-              <span>•</span>
-              <span>Node: {selectedFile.node_id}</span>
-              {selectedFile.agent_name && (
-                <>
-                  <span>•</span>
-                  <span>Agent: {selectedFile.agent_name}</span>
-                </>
-              )}
-              <span>•</span>
-              <span>{new Date(selectedFile.created_at).toLocaleString()}</span>
-            </div>
+            <button
+              onClick={() => setSelectedFile(null)}
+              className="p-2 rounded-mars-md hover:bg-[var(--mars-color-bg-hover)] transition-colors"
+              style={{ color: 'var(--mars-color-text-tertiary)' }}
+              aria-label="Close preview"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
-          <div className="p-6">
-            {loadingContent ? (
-              <div className="text-center py-12">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-                <p className="text-gray-400">Loading file content...</p>
-              </div>
-            ) : selectedFile.file_content ? (
-              <div className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
-                <div className="px-4 py-2 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
-                  <span className="text-xs text-gray-400 font-mono">
-                    {selectedFile.file_name}
-                  </span>
-                  <Eye className="w-4 h-4 text-gray-400" />
-                </div>
-                {selectedFile.content_type === 'image' && selectedFile.encoding === 'base64' ? (
-                  <div className="p-4 flex items-center justify-center bg-gray-950">
-                    <img 
-                      src={`data:${selectedFile.mime_type};base64,${selectedFile.file_content}`}
-                      alt={selectedFile.file_name}
-                      className="max-w-full max-h-[calc(100vh-300px)] object-contain"
-                    />
-                  </div>
-                ) : (
-                  <pre className="p-4 text-sm text-gray-300 overflow-auto max-h-[calc(100vh-300px)] font-mono whitespace-pre-wrap break-words">
-                    {selectedFile.file_content}
-                  </pre>
-                )}
-              </div>
-            ) : (
-              <div className="text-center py-12 text-gray-400">
-                <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>File content not available</p>
-                <p className="text-xs mt-2">Content may be too large or binary</p>
-              </div>
-            )}
+          <div className="p-4">
+            <FilePreview
+              fileName={selectedFile.file_name}
+              filePath={selectedFile.file_path}
+              content={selectedFile.file_content}
+              mimeType={selectedFile.mime_type}
+              contentType={selectedFile.content_type}
+              encoding={selectedFile.encoding}
+              sizeBytes={selectedFile.size_bytes}
+              base64Content={selectedFile.content_type === 'image' && selectedFile.encoding === 'base64' ? selectedFile.file_content || undefined : undefined}
+              loading={loadingContent}
+              onDownload={selectedFile.file_content ? () => handleDownload(selectedFile) : undefined}
+            />
           </div>
         </div>
       )}

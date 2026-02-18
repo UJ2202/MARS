@@ -1,0 +1,55 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Brainstorm 5 distinct research project ideas leveraging bank customer data from the covid-19 period",
+                "Ensure ideas cover a range of topics (e.g., behavioral changes, financial resilience, digital adoption, etc.)",
+                "Briefly describe each idea in 1-2 sentences"
+            ],
+            "sub_task": "Generate 5 new research project ideas related to bank customer data during covid-19",
+            "sub_task_agent": "idea_maker"
+        },
+        {
+            "bullet_points": [
+                "Review each of the 5 ideas for feasibility, originality, and potential impact",
+                "Point out weaknesses, redundancies, or limitations in each idea",
+                "Suggest possible improvements or reasons to discard certain ideas"
+            ],
+            "sub_task": "Critique the 5 research project ideas",
+            "sub_task_agent": "idea_hater"
+        },
+        {
+            "bullet_points": [
+                "Choose the 2 most promising ideas, considering the critiques",
+                "Refine and improve these 2 ideas to address the weaknesses identified",
+                "Provide a revised description for each improved idea"
+            ],
+            "sub_task": "Select and improve 2 out of the 5 research project ideas based on critiques",
+            "sub_task_agent": "idea_maker"
+        },
+        {
+            "bullet_points": [
+                "Evaluate the 2 improved ideas for clarity, significance, and feasibility",
+                "Offer constructive criticism and suggest any final improvements"
+            ],
+            "sub_task": "Critique the 2 improved research project ideas",
+            "sub_task_agent": "idea_hater"
+        },
+        {
+            "bullet_points": [
+                "Choose the single best research project idea based on the latest critiques",
+                "Justify the selection briefly"
+            ],
+            "sub_task": "Select the best idea out of the 2 improved ideas",
+            "sub_task_agent": "idea_maker"
+        },
+        {
+            "bullet_points": [
+                "Create a compelling scientific paper title for the chosen idea",
+                "Write a concise 5-sentence summary describing the research project, its aims, and significance"
+            ],
+            "sub_task": "Report the best idea as a scientific paper title with a 5-sentence description",
+            "sub_task_agent": "idea_maker"
+        }
+    ]
+}

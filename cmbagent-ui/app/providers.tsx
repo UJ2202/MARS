@@ -2,6 +2,9 @@
 
 import { ReactNode } from 'react'
 import { WebSocketProvider } from '@/contexts/WebSocketContext'
+import { ThemeProvider } from '@/contexts/ThemeContext'
+import { ParallelSessionsProvider } from '@/contexts/ParallelSessionsContext'
+import { ToastProvider } from '@/components/core/ToastContainer'
 
 interface ProvidersProps {
   children: ReactNode
@@ -9,8 +12,14 @@ interface ProvidersProps {
 
 export function Providers({ children }: ProvidersProps) {
   return (
-    <WebSocketProvider>
-      {children}
-    </WebSocketProvider>
+    <ThemeProvider>
+      <WebSocketProvider>
+        <ParallelSessionsProvider>
+          <ToastProvider>
+            {children}
+          </ToastProvider>
+        </ParallelSessionsProvider>
+      </WebSocketProvider>
+    </ThemeProvider>
   )
 }

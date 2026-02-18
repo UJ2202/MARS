@@ -157,7 +157,7 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
 
         <div className="p-6 space-y-6">
           <div className="text-sm text-gray-600">
-            Configure your API credentials for CMBAgent. These are stored in memory only and are not persisted.
+            Configure your API credentials for MARS. These are stored in memory only and are not persisted.
           </div>
 
           {/* OpenAI */}
