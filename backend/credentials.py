@@ -20,15 +20,38 @@ class CredentialStorage(BaseModel):
     openai_key: Optional[str] = None
     anthropic_key: Optional[str] = None
     vertex_json: Optional[str] = None  # JSON string for Vertex AI
+    azure_openai_key: Optional[str] = None
+    azure_openai_endpoint: Optional[str] = None
+    azure_openai_deployment: Optional[str] = None
+    azure_openai_api_version: Optional[str] = None
 
 
 async def test_openai_credentials(api_key: str) -> CredentialTest:
     """Test OpenAI API credentials"""
-    if not api_key or not api_key.startswith('sk-'):
+    # Skip standard format check when using Azure key as OPENAI_API_KEY
+    azure_mode = os.getenv('OPENAI_API_TYPE', '').lower() == 'azure' or os.getenv('AZURE_OPENAI_API_KEY')
+    
+    if not api_key:
+        return CredentialTest(
+            provider="openai",
+            status="not_configured",
+            message="OPENAI_API_KEY not set in environment"
+        )
+    
+    # If in Azure mode, don't test OpenAI endpoint (use Azure test instead)
+    if azure_mode:
+        return CredentialTest(
+            provider="openai",
+            status="valid",
+            message="Using Azure OpenAI (configured via OPENAI_API_TYPE=azure)"
+        )
+    
+    # Standard OpenAI key format check
+    if not api_key.startswith('sk-'):
         return CredentialTest(
             provider="openai",
             status="invalid",
-            message="Invalid API key format"
+            message="Invalid OpenAI API key format (should start with 'sk-')"
         )
     
     try:
@@ -229,6 +252,22 @@ async def test_all_credentials() -> Dict[str, CredentialTest]:
             message="OPENAI_API_KEY not set in environment"
         )
     
+    # Test Azure OpenAI
+    azure_key = os.getenv('AZURE_OPENAI_API_KEY')
+    azure_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+    if azure_key and azure_endpoint:
+        azure_deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', '')
+        azure_api_version = os.getenv('AZURE_OPENAI_API_VERSION', '2024-12-01-preview')
+        results['azure_openai'] = await test_azure_openai_credentials(
+            azure_key, azure_endpoint, azure_deployment, azure_api_version
+        )
+    else:
+        results['azure_openai'] = CredentialTest(
+            provider="azure_openai",
+            status="not_configured",
+            message="AZURE_OPENAI_API_KEY or AZURE_OPENAI_ENDPOINT not set"
+        )
+    
     # Test Anthropic
     anthropic_key = os.getenv('ANTHROPIC_API_KEY')
     if anthropic_key:
@@ -264,6 +303,83 @@ async def test_all_credentials() -> Dict[str, CredentialTest]:
     return results
 
 
+async def test_azure_openai_credentials(
+    api_key: str,
+    endpoint: str,
+    deployment: str = "",
+    api_version: str = "2024-12-01-preview"
+) -> CredentialTest:
+    """Test Azure OpenAI API credentials"""
+    if not api_key:
+        return CredentialTest(
+            provider="azure_openai",
+            status="invalid",
+            message="Azure OpenAI API key is empty"
+        )
+    if not endpoint:
+        return CredentialTest(
+            provider="azure_openai",
+            status="invalid",
+            message="Azure OpenAI endpoint is empty"
+        )
+    if not deployment:
+        # If no deployment specified, try to get from env
+        deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt4o')
+
+    try:
+        # Test by making a minimal completion request
+        base = endpoint.rstrip('/')
+        url = f"{base}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+        headers = {
+            "api-key": api_key,
+            "Content-Type": "application/json"
+        }
+        data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 1
+        }
+
+        verify_ssl = os.getenv('AZURE_OPENAI_VERIFY_SSL', 'true').lower() != 'false'
+        connector = aiohttp.TCPConnector(ssl=verify_ssl)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.post(url, headers=headers, json=data) as response:
+                if response.status == 200:
+                    return CredentialTest(
+                        provider="azure_openai",
+                        status="valid",
+                        message="Azure OpenAI credentials are valid"
+                    )
+                elif response.status == 401:
+                    return CredentialTest(
+                        provider="azure_openai",
+                        status="invalid",
+                        message="Invalid Azure OpenAI API key"
+                    )
+                elif response.status == 404:
+                    return CredentialTest(
+                        provider="azure_openai",
+                        status="error",
+                        message=f"Azure OpenAI deployment '{deployment}' not found. Check your deployment name.",
+                        error_details=f"HTTP 404: {await response.text()}"
+                    )
+                else:
+                    error_text = await response.text()
+                    return CredentialTest(
+                        provider="azure_openai",
+                        status="error",
+                        message="Error testing Azure OpenAI credentials",
+                        error_details=f"HTTP {response.status}: {error_text}"
+                    )
+
+    except Exception as e:
+        return CredentialTest(
+            provider="azure_openai",
+            status="error",
+            message="Error connecting to Azure OpenAI API",
+            error_details=str(e)
+        )
+
+
 def store_credentials_in_env(credentials: CredentialStorage) -> Dict[str, str]:
     """Store credentials in environment variables (session only)"""
     updates = {}
@@ -288,4 +404,34 @@ def store_credentials_in_env(credentials: CredentialStorage) -> Dict[str, str]:
         except Exception as e:
             updates['GOOGLE_APPLICATION_CREDENTIALS'] = f'Error: {str(e)}'
     
+    if credentials.azure_openai_key:
+        os.environ['AZURE_OPENAI_API_KEY'] = credentials.azure_openai_key
+        os.environ['OPENAI_API_KEY'] = credentials.azure_openai_key
+        os.environ['OPENAI_API_TYPE'] = 'azure'
+        # ChromaDB environment variables for Azure embeddings
+        os.environ['CHROMA_OPENAI_API_KEY'] = credentials.azure_openai_key
+        os.environ['CHROMA_OPENAI_API_TYPE'] = 'azure'
+        updates['AZURE_OPENAI_API_KEY'] = 'Updated'
+        updates['OPENAI_API_TYPE'] = 'azure'
+
+    if credentials.azure_openai_endpoint:
+        os.environ['AZURE_OPENAI_ENDPOINT'] = credentials.azure_openai_endpoint
+        os.environ['OPENAI_API_BASE'] = credentials.azure_openai_endpoint
+        # ChromaDB Azure endpoint
+        os.environ['CHROMA_OPENAI_API_BASE'] = credentials.azure_openai_endpoint
+        updates['AZURE_OPENAI_ENDPOINT'] = 'Updated'
+
+    if credentials.azure_openai_deployment:
+        os.environ['AZURE_OPENAI_DEPLOYMENT'] = credentials.azure_openai_deployment
+        # ChromaDB uses this for embedding model
+        os.environ['CHROMA_OPENAI_MODEL'] = credentials.azure_openai_deployment
+        updates['AZURE_OPENAI_DEPLOYMENT'] = 'Updated'
+
+    if credentials.azure_openai_api_version:
+        os.environ['AZURE_OPENAI_API_VERSION'] = credentials.azure_openai_api_version
+        os.environ['OPENAI_API_VERSION'] = credentials.azure_openai_api_version
+        # ChromaDB Azure API version
+        os.environ['CHROMA_OPENAI_API_VERSION'] = credentials.azure_openai_api_version
+        updates['AZURE_OPENAI_API_VERSION'] = 'Updated'
+
     return updates

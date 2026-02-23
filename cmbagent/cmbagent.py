@@ -15,6 +15,7 @@ import pickle
 from collections import defaultdict
 from openai import OpenAI
 from typing import List, Dict, Any, Optional
+from .llm_provider import create_openai_client
 import glob
 from IPython.display import Image
 from autogen.agentchat.group import ContextVariables
@@ -1040,7 +1041,7 @@ class CMBAgent:
 
     def check_assistants(self, reset_assistant=[]):
 
-        client = OpenAI(api_key = self.openai_api_key)
+        client = create_openai_client(api_key=self.openai_api_key)
         available_assistants = client.beta.assistants.list(
             order="desc",
             limit="100",

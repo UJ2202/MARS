@@ -11,7 +11,7 @@ __pycache__/
 
 # C extensions
 *.so
-
+test1
 # Distribution / packaging
 .Python
 build/
@@ -90,3 +90,9 @@ test_*.py
 
 
 tests/testdocs/*
+
+
+cmbdir
+venv
+.env*
+.claude*

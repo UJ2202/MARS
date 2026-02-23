@@ -10,6 +10,7 @@ from google.genai import types
 from autogen.agentchat.group import ContextVariables
 from pydantic import BaseModel, Field
 from .utils import get_api_keys_from_env
+from .llm_provider import create_openai_client
 from .vlm_injections import scientific_context, get_injection_by_name
 from .cmbagent_utils import cmbagent_debug
 _last_executed_code = None
@@ -211,7 +212,7 @@ def send_image_to_vlm(base_64_img: str, vlm_prompt: str, inject_wrong_plot: bool
     api_keys = get_api_keys_from_env()
 
     if vlm_model in ["gpt-4o", "o3-2025-04-16"]:
-        client = OpenAI(api_key=api_keys["OPENAI"])
+        client = create_openai_client(api_key=api_keys["OPENAI"])
         reasoning_effort = "medium"
 
         if cmbagent_debug:
@@ -437,7 +438,7 @@ def generate_llm_scientific_criteria(plot_description: str, plot_type: str = "sc
     """
     try:
         api_keys = get_api_keys_from_env()
-        client = OpenAI(api_key=api_keys["OPENAI"])
+        client = create_openai_client(api_key=api_keys["OPENAI"])
 
         prompt = f"""You are a scientific expert analyzing plots. Generate domain-specific scientific accuracy criteria for evaluating a {plot_type}.
 

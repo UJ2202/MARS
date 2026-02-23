@@ -6,6 +6,7 @@ import logging
 import structlog
 from ruamel.yaml import YAML
 from .cmbagent_utils import cmbagent_debug
+from .llm_provider import get_provider_config, resolve_model_for_provider, create_openai_client
 from pathlib import Path
 
 # Configure logging - only set up handler if no handlers exist yet
@@ -190,28 +191,26 @@ default_agents_llm_model ={
 default_agent_llm_configs = {}
 
 def get_api_keys_from_env():
+    provider_config = get_provider_config()
     api_keys = {
-        "OPENAI" : os.getenv("OPENAI_API_KEY"),
+        "OPENAI" : provider_config.effective_api_key or os.getenv("OPENAI_API_KEY"),
         "GEMINI" : os.getenv("GEMINI_API_KEY"),
         "ANTHROPIC" : os.getenv("ANTHROPIC_API_KEY"),
         "MISTRAL" : os.getenv("MISTRAL_API_KEY"),
+        "AZURE_OPENAI" : provider_config.azure_api_key or os.getenv("AZURE_OPENAI_API_KEY"),
     }
     return api_keys
 
 def get_model_config(model, api_keys):
+    provider_config = get_provider_config()
     config = {
         "model": model,
         "api_key": None,
         "api_type": None
     }
 
-    if 'o3' in model:
-        config.update({
-            "reasoning_effort": "medium",
-            "api_key": api_keys["OPENAI"],
-            "api_type": "openai"
-        })
-    elif "gemini" in model:
+    # Non-OpenAI models always route to their native provider
+    if "gemini" in model:
         config.update({
             "api_key": api_keys["GEMINI"],
             "api_type": "google"
@@ -221,11 +220,26 @@ def get_model_config(model, api_keys):
             "api_key": api_keys["ANTHROPIC"],
             "api_type": "anthropic"
         })
+    elif provider_config.is_azure:
+        # Route OpenAI-style models through Azure
+        # Note: Azure OpenAI doesn't support reasoning_effort parameter
+        azure_config = {
+            "model": resolve_model_for_provider(model),
+            "api_key": provider_config.effective_api_key,
+            "api_type": "azure",
+            "base_url": provider_config.effective_endpoint,
+            "api_version": provider_config.effective_api_version,
+        }
+        config.update(azure_config)
     else:
-        config.update({
+        # Standard OpenAI
+        openai_update = {
             "api_key": api_keys["OPENAI"],
             "api_type": "openai"
-        })
+        }
+        if 'o3' in model:
+            openai_update["reasoning_effort"] = "medium"
+        config.update(openai_update)
     return config
 
 api_keys_env = get_api_keys_from_env()
@@ -286,6 +300,17 @@ def clean_llm_config(llm_config):
         if 'top_p' in llm_config:
             llm_config.pop('top_p', None)
 
-    if llm_config['config_list'][0]['api_type'] == 'google':
+    api_type = llm_config['config_list'][0].get('api_type', '')
+
+    if api_type == 'google':
         if 'top_p' in llm_config:
             llm_config.pop('top_p')
+
+    # Azure-specific: strip params that Azure doesn't support
+    if api_type == 'azure':
+        # Azure OpenAI doesn't support reasoning_effort parameter
+        if 'reasoning_effort' in llm_config['config_list'][0]:
+            llm_config['config_list'][0].pop('reasoning_effort')
+            # Also remove temperature/top_p for reasoning models
+            llm_config.pop('top_p', None)
+            llm_config.pop('temperature', None)

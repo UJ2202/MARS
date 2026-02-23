@@ -29,6 +29,7 @@ interface CredentialValidation {
   openaiValid: boolean;
   anthropicValid: boolean;
   vertexValid: boolean;
+  azureValid: boolean;
   statusMessage: string;
 }
 
@@ -53,33 +54,44 @@ export const useCredentials = () => {
         openaiValid: false,
         anthropicValid: false,
         vertexValid: false,
+        azureValid: false,
         statusMessage: 'Unable to verify credentials'
       };
     }
 
     const openaiValid = credentialStatus.results.openai?.status === 'valid';
+    const azureValid = credentialStatus.results.azure_openai?.status === 'valid';
     const anthropicValid = credentialStatus.results.anthropic?.status === 'valid';
     const vertexValid = credentialStatus.results.vertex?.status === 'valid';
 
+    // Can submit task if either OpenAI or Azure OpenAI is valid
+    const canSubmitTask = openaiValid || azureValid;
+
     let statusMessage = '';
-    if (!openaiValid) {
-      statusMessage = 'OpenAI API key required to submit tasks';
-    } else if (openaiValid && anthropicValid && vertexValid) {
+    if (!canSubmitTask) {
+      statusMessage = 'OpenAI or Azure OpenAI API key required to submit tasks';
+    } else if ((openaiValid || azureValid) && anthropicValid && vertexValid) {
       statusMessage = 'All credentials valid';
     } else {
       const missing = [];
+      if (!openaiValid && !azureValid) missing.push('OpenAI');
       if (!anthropicValid) missing.push('Anthropic');
       if (!vertexValid) missing.push('Vertex AI');
-      statusMessage = `Limited functionality: ${missing.join(' and ')} not configured`;
+      if (missing.length > 0) {
+        statusMessage = `Limited functionality: ${missing.join(' and ')} not configured`;
+      } else {
+        statusMessage = 'Ready';
+      }
     }
 
     return {
-      canSubmitTask: openaiValid,
+      canSubmitTask,
       canUseAnthropicModels: anthropicValid,
       canUseGeminiModels: vertexValid,
       openaiValid,
       anthropicValid,
       vertexValid,
+      azureValid,
       statusMessage
     };
   }, [credentialStatus]);
