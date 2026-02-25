@@ -43,6 +43,9 @@ from .processing import summarize_document, summarize_documents, preprocess_task
 # Utilities
 from .utils import work_dir_default
 
+# LLM Provider
+from .llm_provider import create_openai_client, get_provider_config, LLMProviderConfig
+
 # Workflow callbacks for event tracking
 from .callbacks import (
     WorkflowCallbacks,

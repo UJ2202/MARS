@@ -2,6 +2,7 @@ import os
 import importlib
 import logging
 from openai import OpenAI
+from .llm_provider import create_openai_client, get_azure_headers, get_base_url, get_provider_config
 from .cmbagent_utils import cmbagent_debug
 import requests
 from .utils import path_to_assistants,default_chunking_strategy,YAML,update_yaml_preserving_format
@@ -31,7 +32,7 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
     if make_vector_stores == False:
         return
 
-    client = OpenAI(api_key = cmbagent_instance.llm_api_key)
+    client = create_openai_client(api_key=cmbagent_instance.llm_api_key)
 
     # 1. identify rag agents and set store names
 
@@ -57,14 +58,17 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
 
     # 2. collect all vector stores
 
-    # Set the headers for authentication
-    headers = {
-        "Authorization": f"Bearer {cmbagent_instance.llm_api_key}",
-        "OpenAI-Beta": "assistants=v2"
-    }
+    # Set the headers for authentication (Azure or OpenAI)
+    headers = get_azure_headers(api_key=cmbagent_instance.llm_api_key)
 
     # Define the URL endpoint for listing vector stores
-    url = "https://api.openai.com/v1/vector_stores"
+    provider_config = get_provider_config()
+    if provider_config.is_azure:
+        base = provider_config.effective_endpoint.rstrip('/')
+        api_ver = provider_config.effective_api_version
+        url = f"{base}/openai/vector_stores?api-version={api_ver}"
+    else:
+        url = "https://api.openai.com/v1/vector_stores"
 
     # Send a GET request to list vector stores
     response = requests.get(url, headers=headers)
@@ -94,7 +98,10 @@ def push_vector_stores(cmbagent_instance, make_vector_stores, chunking_strategy,
             for vector_store_id in matching_vector_store_ids:
 
                 # Define the URL endpoint for deleting a vector store by ID
-                delete_url = f"https://api.openai.com/v1/vector_stores/{vector_store_id}"
+                if provider_config.is_azure:
+                    delete_url = f"{base}/openai/vector_stores/{vector_store_id}?api-version={api_ver}"
+                else:
+                    delete_url = f"https://api.openai.com/v1/vector_stores/{vector_store_id}"
 
                 # Send a DELETE request to delete the vector store
                 delete_response = requests.delete(delete_url, headers=headers)

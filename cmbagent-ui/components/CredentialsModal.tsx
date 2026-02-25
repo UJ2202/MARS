@@ -31,12 +31,17 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
   const [formData, setFormData] = useState({
     openai_key: '',
     anthropic_key: '',
-    vertex_json: ''
+    vertex_json: '',
+    azure_api_key: '',
+    azure_endpoint: '',
+    azure_deployment: '',
+    azure_api_version: ''
   });
   
   const [showKeys, setShowKeys] = useState({
     openai: false,
-    anthropic: false
+    anthropic: false,
+    azure: false
   });
   
   const [testResults, setTestResults] = useState<Record<string, CredentialTest> | null>(null);
@@ -137,7 +142,8 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
     }
   };
 
-  const hasCredentialsToTest = formData.openai_key || formData.anthropic_key || formData.vertex_json;
+  const hasCredentialsToTest = formData.openai_key || formData.anthropic_key || formData.vertex_json || 
+    (formData.azure_api_key && formData.azure_endpoint);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -280,6 +286,88 @@ export const CredentialsModal: React.FC<CredentialsModalProps> = ({
                     </pre>
                   </details>
                 )}
+              </div>
+            )}
+          </div>
+
+          {/* Azure OpenAI */}
+          <div className="space-y-4 border-t pt-4">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-gray-800">Azure OpenAI</h3>
+              <span className="text-xs text-gray-500">(Optional - For corporate environments)</span>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Azure API Key
+              </label>
+              <div className="relative">
+                <input
+                  type={showKeys.azure ? 'text' : 'password'}
+                  value={formData.azure_api_key}
+                  onChange={(e) => handleInputChange('azure_api_key', e.target.value)}
+                  placeholder="Your Azure OpenAI API key"
+                  className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKeys(prev => ({ ...prev, azure: !prev.azure }))}
+                  className="absolute right-2 top-2 p-1 text-gray-500 hover:text-gray-700"
+                >
+                  {showKeys.azure ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Azure Endpoint
+              </label>
+              <input
+                type="text"
+                value={formData.azure_endpoint}
+                onChange={(e) => handleInputChange('azure_endpoint', e.target.value)}
+                placeholder="https://your-resource.openai.azure.com/"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">
+                Deployment Name
+              </label>
+              <input
+                type="text"
+                value={formData.azure_deployment}
+                onChange={(e) => handleInputChange('azure_deployment', e.target.value)}
+                placeholder="gpt-4o"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">
+                API Version
+              </label>
+              <input
+                type="text"
+                value={formData.azure_api_version}
+                onChange={(e) => handleInputChange('azure_api_version', e.target.value)}
+                placeholder="2024-12-01-preview"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+
+            {testResults?.azure_openai && (
+              <div className="flex items-center gap-2 text-sm">
+                {getStatusIcon(testResults.azure_openai.status)}
+                <span className={
+                  testResults.azure_openai.status === 'valid' ? 'text-green-600' :
+                  testResults.azure_openai.status === 'invalid' ? 'text-red-600' :
+                  'text-yellow-600'
+                }>
+                  {testResults.azure_openai.message}
+                </span>
               </div>
             )}
           </div>

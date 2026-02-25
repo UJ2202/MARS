@@ -56,6 +56,12 @@ const ProviderIcon: React.FC<{ provider: string }> = ({ provider }) => {
           AI
         </div>
       );
+    case 'azure_openai':
+      return (
+        <div className="w-6 h-6 bg-blue-600 text-white rounded-sm flex items-center justify-center text-xs font-bold">
+          AZ
+        </div>
+      );
     case 'anthropic':
       return (
         <div className="w-6 h-6 bg-orange-500 text-white rounded-sm flex items-center justify-center text-xs font-bold">

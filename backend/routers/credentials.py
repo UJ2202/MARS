@@ -21,6 +21,7 @@ def _get_credentials_module():
                 test_openai_credentials,
                 test_anthropic_credentials,
                 test_vertex_credentials,
+                test_azure_openai_credentials,
                 store_credentials_in_env,
                 CredentialStorage,
                 CredentialTest
@@ -30,6 +31,7 @@ def _get_credentials_module():
                 "test_openai_credentials": test_openai_credentials,
                 "test_anthropic_credentials": test_anthropic_credentials,
                 "test_vertex_credentials": test_vertex_credentials,
+                "test_azure_openai_credentials": test_azure_openai_credentials,
                 "store_credentials_in_env": store_credentials_in_env,
                 "CredentialStorage": CredentialStorage,
                 "CredentialTest": CredentialTest,
@@ -78,6 +80,14 @@ async def test_specific_credentials(credentials: dict):
 
         if storage.vertex_json:
             results['vertex'] = await creds["test_vertex_credentials"](storage.vertex_json)
+
+        if storage.azure_openai_key and storage.azure_openai_endpoint:
+            results['azure_openai'] = await creds["test_azure_openai_credentials"](
+                storage.azure_openai_key,
+                storage.azure_openai_endpoint,
+                storage.azure_openai_deployment or "",
+                storage.azure_openai_api_version or "2024-12-01-preview"
+            )
 
         return {
             "status": "success",

@@ -9,6 +9,7 @@ import logging
 import structlog
 from typing import List, Dict, Any, Optional
 from openai import OpenAI
+from cmbagent.llm_provider import create_openai_client
 
 from cmbagent.utils import path_to_assistants, update_yaml_preserving_format
 from cmbagent.cmbagent_utils import cmbagent_debug
@@ -38,7 +39,7 @@ class AssistantManager:
         """
         self.openai_api_key = openai_api_key
         self.llm_config = llm_config
-        self.client = OpenAI(api_key=openai_api_key)
+        self.client = create_openai_client(api_key=openai_api_key)
 
     def create_assistant(self, agent: Any) -> Any:
         """

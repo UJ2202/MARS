@@ -22,6 +22,9 @@ class Settings:
         "http://localhost:3002",
         "http://localhost:3003",
         "http://localhost:3004",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "*",  # Allow all origins for development
     ])
 
     # Default work directory
@@ -32,6 +35,13 @@ class Settings:
 
     # Debug settings
     debug: bool = False
+
+    # Azure OpenAI settings
+    azure_openai_api_key: str = ""
+    azure_openai_endpoint: str = ""
+    azure_openai_deployment: str = ""
+    azure_openai_api_version: str = "2024-12-01-preview"
+    azure_openai_verify_ssl: bool = True
 
     def __post_init__(self):
         """Load settings from environment variables if available."""
@@ -45,6 +55,13 @@ class Settings:
             self.cors_origins = [origin.strip() for origin in cors_env.split(",")]
         self.max_file_size_mb = int(os.getenv("CMBAGENT_MAX_FILE_SIZE_MB", str(self.max_file_size_mb)))
         self.debug = os.getenv("CMBAGENT_DEBUG", "false").lower() == "true"
+
+        # Azure OpenAI settings
+        self.azure_openai_api_key = os.getenv("AZURE_OPENAI_API_KEY", self.azure_openai_api_key)
+        self.azure_openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", self.azure_openai_endpoint)
+        self.azure_openai_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", self.azure_openai_deployment)
+        self.azure_openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION", self.azure_openai_api_version)
+        self.azure_openai_verify_ssl = os.getenv("AZURE_OPENAI_VERIFY_SSL", "true").lower() != "false"
 
 
 # Global settings instance

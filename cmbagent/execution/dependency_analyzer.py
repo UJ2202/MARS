@@ -184,16 +184,12 @@ class DependencyAnalyzer:
         return result
 
     def _get_default_llm_client(self) -> Any:
-        """Get default OpenAI client"""
+        """Get default OpenAI client (auto-detects Azure)"""
         try:
             import os
-            from openai import OpenAI
+            from cmbagent.llm_provider import create_openai_client
 
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY not set")
-
-            return OpenAI(api_key=api_key)
+            return create_openai_client()
         except ImportError:
             raise ImportError(
                 "OpenAI client not available. Install with: pip install openai"
