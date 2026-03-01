@@ -53,6 +53,8 @@ def planning_and_control_context_carryover(
     approval_manager=None,
     callbacks=None,
     hitl_after_planning=False,
+    parent_run_id=None,
+    stage_name=None,
 ):
     """
     Execute planning and control workflow with context carryover.
@@ -83,6 +85,8 @@ def planning_and_control_context_carryover(
         approval_manager: Direct approval manager injection (preferred)
         callbacks: Workflow callbacks for events
         hitl_after_planning: Add HITL checkpoint after planning
+        parent_run_id: Optional parent task run ID for hierarchical tracking
+        stage_name: Optional stage name for tracking within parent task
 
     Returns:
         Dictionary with chat_history, final_context, and timing info
@@ -178,6 +182,10 @@ def planning_and_control_context_carryover(
         api_keys=api_keys,
         callbacks=callbacks,
         approval_manager=_effective_approval_manager,
+        initial_shared_state={
+            "_parent_run_id": parent_run_id,
+            "_stage_name": stage_name,
+        } if parent_run_id else None,
     )
 
     # Handle restart case - load existing context

@@ -18,6 +18,7 @@ from routers.tasks import router as tasks_router
 from routers.phases import router as phases_router
 from routers.copilot import router as copilot_router
 from routers.sessions import router as sessions_router
+from routers.denario import router as denario_router
 
 
 def register_routers(app):
@@ -27,6 +28,7 @@ def register_routers(app):
     app.include_router(phases_router)  # Phase-based workflows
     app.include_router(copilot_router)  # Copilot mode
     app.include_router(sessions_router)  # Session management (Stage 10)
+    app.include_router(denario_router)  # Denario research paper wizard
     app.include_router(files_router)
     app.include_router(credentials_router)
     app.include_router(arxiv_router)
@@ -50,4 +52,5 @@ __all__ = [
     "phases_router",
     "copilot_router",
     "sessions_router",
+    "denario_router",
 ]

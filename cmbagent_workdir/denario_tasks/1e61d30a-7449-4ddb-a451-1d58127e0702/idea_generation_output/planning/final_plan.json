@@ -1,0 +1,58 @@
+{
+    "sub_tasks": [
+        {
+            "bullet_points": [
+                "Analyze the ticket data to identify potential research areas.",
+                "Generate 5 innovative and diverse research project ideas.",
+                "Ensure ideas are relevant to the dataset and have potential for impact."
+            ],
+            "sub_task": "Generate 5 new research project ideas related to the ticket data.",
+            "sub_task_agent": "idea_maker"
+        },
+        {
+            "bullet_points": [
+                "Evaluate each idea for feasibility, originality, and potential impact.",
+                "Provide constructive criticism and suggest improvements.",
+                "Identify any ideas that may not be viable or relevant."
+            ],
+            "sub_task": "Critique the 5 research project ideas.",
+            "sub_task_agent": "idea_hater"
+        },
+        {
+            "bullet_points": [
+                "Review the critiques provided by the idea_hater.",
+                "Choose 2 ideas with the most potential for success.",
+                "Refine and enhance these ideas based on the feedback."
+            ],
+            "sub_task": "Select and improve 2 out of the 5 research project ideas.",
+            "sub_task_agent": "idea_maker"
+        },
+        {
+            "bullet_points": [
+                "Assess the improvements made to the selected ideas.",
+                "Provide further feedback on how to enhance these ideas.",
+                "Ensure the ideas are robust and well-developed."
+            ],
+            "sub_task": "Critique the 2 improved research project ideas.",
+            "sub_task_agent": "idea_hater"
+        },
+        {
+            "bullet_points": [
+                "Compare the two improved ideas based on the latest critiques.",
+                "Determine which idea has the highest potential for success.",
+                "Finalize the selection of the best research project idea."
+            ],
+            "sub_task": "Select the best idea out of the 2 improved ideas.",
+            "sub_task_agent": "idea_maker"
+        },
+        {
+            "bullet_points": [
+                "Create a compelling and descriptive title for the research project.",
+                "Write a concise 5-sentence description outlining the project's objectives, significance, and potential impact.",
+                "Ensure the description is clear and engaging to attract interest."
+            ],
+            "sub_task": "Report the best idea in the form of a scientific paper title with a 5-sentence description.",
+            "sub_task_agent": "idea_maker"
+        }
+    ]
+}

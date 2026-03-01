@@ -48,6 +48,86 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
     await ws_handler(websocket, task_id, execute_cmbagent_task)
 
 
+# WebSocket endpoint for Denario stage execution
+@app.websocket("/ws/denario/{task_id}/{stage_num}")
+async def denario_websocket_endpoint(websocket: WebSocket, task_id: str, stage_num: int):
+    """WebSocket endpoint for streaming Denario stage execution output.
+
+    Streams console output from the shared buffer in real-time and sends
+    stage_completed/stage_failed events when the phase finishes.
+    """
+    import asyncio
+    from routers.denario import _get_console_lines, _clear_console_buffer
+
+    await websocket.accept()
+
+    buf_key = f"{task_id}:{stage_num}"
+    line_index = 0
+
+    try:
+        await send_ws_event(websocket, "status", {
+            "message": f"Connected to stage {stage_num}",
+            "stage_num": stage_num,
+        }, run_id=task_id)
+
+        while True:
+            await asyncio.sleep(1)
+
+            # Stream new console output lines
+            new_lines = _get_console_lines(buf_key, since_index=line_index)
+            for line in new_lines:
+                await send_ws_event(websocket, "console_output", {
+                    "text": line,
+                    "stage_num": stage_num,
+                }, run_id=task_id)
+            line_index += len(new_lines)
+
+            # Check DB for stage completion (every cycle)
+            try:
+                from cmbagent.database.base import get_db_session
+                db = get_db_session()
+                try:
+                    from routers.denario import _get_session_id_for_task, _get_stage_repo
+                    session_id = _get_session_id_for_task(task_id, db)
+                    repo = _get_stage_repo(db, session_id=session_id)
+                    stages = repo.list_stages(parent_run_id=task_id)
+                    stage = next((s for s in stages if s.stage_number == stage_num), None)
+                    if stage:
+                        if stage.status == "completed":
+                            # Flush remaining console lines
+                            remaining = _get_console_lines(buf_key, since_index=line_index)
+                            for line in remaining:
+                                await send_ws_event(websocket, "console_output", {
+                                    "text": line,
+                                    "stage_num": stage_num,
+                                }, run_id=task_id)
+                            await send_ws_event(websocket, "stage_completed", {
+                                "stage_num": stage_num,
+                                "stage_name": stage.stage_name,
+                            }, run_id=task_id)
+                            _clear_console_buffer(buf_key)
+                            break
+                        elif stage.status == "failed":
+                            remaining = _get_console_lines(buf_key, since_index=line_index)
+                            for line in remaining:
+                                await send_ws_event(websocket, "console_output", {
+                                    "text": line,
+                                    "stage_num": stage_num,
+                                }, run_id=task_id)
+                            await send_ws_event(websocket, "stage_failed", {
+                                "stage_num": stage_num,
+                                "error": stage.error_message or "Stage failed",
+                            }, run_id=task_id)
+                            _clear_console_buffer(buf_key)
+                            break
+                finally:
+                    db.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 # For backward compatibility - expose some common utilities
 def resolve_run_id(run_id: str) -> str:
     """Resolve task_id to database run_id if available."""

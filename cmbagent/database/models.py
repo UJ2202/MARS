@@ -157,6 +157,11 @@ class WorkflowRun(Base):
     is_branch = Column(Boolean, nullable=False, default=False)
     branch_depth = Column(Integer, nullable=False, default=0)
 
+    # Task hierarchy fields (nullable - only set for task child workflows)
+    parent_run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    stage_number = Column(Integer, nullable=True)  # 1-4 for task stages
+    stage_name = Column(String(100), nullable=True)  # e.g., "idea_generation"
+
     # Relationships
     session = relationship("Session", back_populates="workflow_runs")
     project = relationship("Project", back_populates="workflow_runs")
@@ -164,13 +169,16 @@ class WorkflowRun(Base):
     dag_nodes = relationship("DAGNode", back_populates="run", cascade="all, delete-orphan")
     checkpoints = relationship("Checkpoint", back_populates="run", cascade="all, delete-orphan")
     messages = relationship("Message", back_populates="run", cascade="all, delete-orphan")
-    cost_records = relationship("CostRecord", back_populates="run", cascade="all, delete-orphan")
+    cost_records = relationship("CostRecord", back_populates="run", cascade="all, delete-orphan", foreign_keys="CostRecord.run_id")
     approval_requests = relationship("ApprovalRequest", back_populates="run", cascade="all, delete-orphan")
     parent_branches = relationship("Branch", foreign_keys="Branch.parent_run_id", back_populates="parent_run")
     child_branches = relationship("Branch", foreign_keys="Branch.child_run_id", back_populates="child_run")
     workflow_metrics = relationship("WorkflowMetric", back_populates="run", cascade="all, delete-orphan")
     files = relationship("File", back_populates="run", cascade="all, delete-orphan")
     execution_events = relationship("ExecutionEvent", back_populates="run", cascade="all, delete-orphan")
+    # Task hierarchy relationships
+    parent_run = relationship("WorkflowRun", remote_side=[id], foreign_keys=[parent_run_id], backref="child_stage_runs")
+    task_stages = relationship("TaskStage", back_populates="parent_run", cascade="all, delete-orphan", foreign_keys="TaskStage.parent_run_id")
 
     __table_args__ = (
         Index("idx_workflow_runs_session_status", "session_id", "status"),
@@ -384,6 +392,7 @@ class CostRecord(Base):
     session_id = Column(String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
     model = Column(String(100), nullable=False, index=True)
     agent_name = Column(String(200), nullable=True, index=True)
+    parent_run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True)
     prompt_tokens = Column(Integer, nullable=False, default=0)
     completion_tokens = Column(Integer, nullable=False, default=0)
     total_tokens = Column(Integer, nullable=False, default=0)
@@ -391,7 +400,7 @@ class CostRecord(Base):
     timestamp = Column(TIMESTAMP, nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
-    run = relationship("WorkflowRun", back_populates="cost_records")
+    run = relationship("WorkflowRun", back_populates="cost_records", foreign_keys=[run_id])
     step = relationship("WorkflowStep", back_populates="cost_records")
     session = relationship("Session", back_populates="cost_records")
 
@@ -719,6 +728,36 @@ class ExecutionEvent(Base):
     def __repr__(self):
         return (f"<ExecutionEvent(id={self.id}, type={self.event_type}, "
                 f"agent={self.agent_name}, order={self.execution_order})>")
+
+
+class TaskStage(Base):
+    """Individual stage tracking within a multi-stage task workflow."""
+    __tablename__ = "task_stages"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    parent_run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    child_run_id = Column(String(36), ForeignKey("workflow_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    stage_number = Column(Integer, nullable=False)
+    stage_name = Column(String(100), nullable=False)  # idea_generation, method_development, experiment_execution, paper_generation
+    status = Column(String(50), nullable=False, default="pending", index=True)
+    # Status: pending, running, completed, failed, skipped
+    input_data = Column(JSON, nullable=True)  # Context keys received
+    output_data = Column(JSON, nullable=True)  # Context keys produced
+    output_files = Column(JSON, nullable=True)  # List of file paths created
+    error_message = Column(Text, nullable=True)
+    started_at = Column(TIMESTAMP, nullable=True)
+    completed_at = Column(TIMESTAMP, nullable=True)
+    meta = Column(JSON, nullable=True)
+
+    # Relationships
+    parent_run = relationship("WorkflowRun", foreign_keys=[parent_run_id], back_populates="task_stages")
+    child_run = relationship("WorkflowRun", foreign_keys=[child_run_id])
+
+    __table_args__ = (
+        Index("idx_task_stages_parent_run", "parent_run_id"),
+        Index("idx_task_stages_status", "status"),
+        Index("idx_task_stages_parent_stage", "parent_run_id", "stage_number"),
+    )
 
 
 class StateHistory(Base):

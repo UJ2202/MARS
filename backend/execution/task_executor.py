@@ -104,6 +104,7 @@ async def execute_cmbagent_task(
         "copilot", "hitl-interactive",          # HITL: bidirectional comms
         "planning-control", "idea-generation",  # Need dynamic DAG + full tracking
         "deep-research-extended",               # Need dynamic DAG + full tracking
+        "denario-research",                     # Denario multi-stage research paper
         "one-shot",                             # Need DAG + cost + file tracking
     }
 
@@ -200,7 +201,7 @@ async def execute_cmbagent_task(
         )
 
         # Set initial phase based on mode
-        if mode in ["planning-control", "idea-generation", "hitl-interactive", "copilot", "deep-research-extended"]:
+        if mode in ["planning-control", "idea-generation", "hitl-interactive", "copilot", "deep-research-extended", "denario-research"]:
             dag_tracker.set_phase("planning", None)
         else:
             dag_tracker.set_phase("execution", None)
@@ -310,6 +311,13 @@ async def execute_cmbagent_task(
             await send_ws_event(
                 websocket, "output",
                 {"message": f"Configuration: Agent={agent}, Model={engineer_model}"},
+                run_id=task_id,
+                session_id=session_id
+            )
+        elif mode == "denario-research":
+            await send_ws_event(
+                websocket, "output",
+                {"message": "Configuration: Denario Research Paper (4-stage workflow)"},
                 run_id=task_id,
                 session_id=session_id
             )
@@ -923,6 +931,25 @@ async def execute_cmbagent_task(
                     workflow_def = get_workflow("deep_research_extended")
                     executor = WorkflowExecutor(
                         workflow=workflow_def,
+                        task=task,
+                        work_dir=task_work_dir,
+                        api_keys=api_keys,
+                        callbacks=workflow_callbacks,
+                    )
+                    wf_context = executor.run_sync()
+                    results = {
+                        "chat_history": [],
+                        "final_context": wf_context.shared_state,
+                        "run_id": wf_context.run_id,
+                        "total_time": wf_context.phase_timings.get("total", 0),
+                    }
+                    for r in executor.results:
+                        results["chat_history"].extend(r.chat_history)
+                elif mode == "denario-research":
+                    from cmbagent.workflows.composer import DENARIO_WORKFLOW, WorkflowExecutor
+
+                    executor = WorkflowExecutor(
+                        workflow=DENARIO_WORKFLOW,
                         task=task,
                         work_dir=task_work_dir,
                         api_keys=api_keys,

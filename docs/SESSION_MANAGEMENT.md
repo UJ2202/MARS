@@ -1793,5 +1793,316 @@ All endpoints validate inputs:
 
 ---
 
-*Last updated: 2026-02-18*
-*Version: 1.0*
+## Simplifying to Single-Session Approach
+
+### Why Simplify?
+
+The current multi-tab session management adds significant complexity:
+- **ParallelSessionsContext** managing multiple tabs
+- Background polling for non-live tabs (every 5 seconds)
+- Tab switching logic and state synchronization
+- Complex display logic (live vs snapshot data)
+- Higher memory usage and API call overhead
+
+**Trade-offs:**
+- ✅ **Reduced complexity**: Remove entire tab management layer
+- ✅ **Better performance**: No background polling, fewer API calls
+- ✅ **Simpler UX**: Focus on one workflow at a time
+- ❌ **Lost capability**: Cannot work on multiple workflows simultaneously
+
+### What Changes?
+
+#### 1. Remove Frontend Components
+
+**Delete these files:**
+- `cmbagent-ui/contexts/ParallelSessionsContext.tsx` - Entire multi-tab context
+- `cmbagent-ui/components/layout/SessionTabBar.tsx` - Tab bar UI
+
+**Simplify these files:**
+- `cmbagent-ui/app/page.tsx` - Remove tab switching logic, use WebSocket state directly
+- `cmbagent-ui/app/providers.tsx` - Remove `ParallelSessionsProvider`
+
+#### 2. Simplified State Management
+
+**Before (Multi-tab):**
+```typescript
+<WebSocketProvider>
+  <ParallelSessionsProvider>
+    {/* Multiple tabs, complex state */}
+  </ParallelSessionsProvider>
+</WebSocketProvider>
+```
+
+**After (Single-session):**
+```typescript
+<WebSocketProvider>
+  {/* Direct WebSocket state, no tabs */}
+</WebSocketProvider>
+```
+
+#### 3. Updated Main Page (`app/page.tsx`)
+
+**Remove:**
+- All tab management (addTab, removeTab, switchTab)
+- Background polling for non-live tabs
+- Tab snapshot data storage
+- Display logic switching between live/snapshot
+
+**Keep:**
+- WebSocket connection management
+- Session resume capability
+- Real-time updates (console, DAG, costs)
+- Session list/browser
+
+**Simplified Display:**
+```typescript
+// Before (complex):
+const displayConsole = isActiveTabLive
+  ? consoleOutput
+  : (activeTab?.consoleOutput || []);
+
+// After (simple):
+const displayConsole = consoleOutput; // Always from WebSocket
+```
+
+#### 4. Session Navigation Flow
+
+**Single-session workflow:**
+1. User starts new session → WebSocket connects
+2. Session runs → Real-time updates
+3. User pauses → Session suspended
+4. User resumes → New WebSocket connection
+5. User starts new session → **Previous session disconnects**
+
+**Key difference:** Starting a new session automatically disconnects from current session. User must save/pause current work first.
+
+#### 5. Backend Changes
+
+**No backend changes needed!** The backend already supports:
+- Single WebSocket connections per task
+- Session persistence
+- Resume capability
+- Multiple sessions (stored, not concurrent)
+
+The simplification is **frontend-only**.
+
+#### 6. Updated UI Flow
+
+**Main Screen Layout:**
+```
+┌─────────────────────────────────────────┐
+│ TopBar (logo, theme, user)              │
+├─────────────────────────────────────────┤
+│ SideNav                   │ Main Area   │
+│ - New Session             │             │
+│ - Resume Session          │  Console    │
+│ - View All Sessions       │  DAG        │
+│ - Settings                │  Costs      │
+│                           │  Files      │
+└───────────────────────────┴─────────────┘
+```
+
+**No tab bar** - single session always visible.
+
+#### 7. Session Switching
+
+**Current (multi-tab):**
+- Multiple sessions open in tabs
+- Switch between tabs instantly
+- Each tab maintains independent state
+
+**Single-session:**
+- One active session at a time
+- To switch: Pause current → Resume different session
+- Forces intentional context switching
+
+#### 8. Migration Guide
+
+**Step 1: Remove ParallelSessionsContext**
+```bash
+rm cmbagent-ui/contexts/ParallelSessionsContext.tsx
+```
+
+**Step 2: Remove SessionTabBar**
+```bash
+rm cmbagent-ui/components/layout/SessionTabBar.tsx
+```
+
+**Step 3: Update providers.tsx**
+```typescript
+// Remove this import
+import { ParallelSessionsProvider } from '@/contexts/ParallelSessionsContext';
+
+// Remove this wrapper
+<ParallelSessionsProvider>
+```
+
+**Step 4: Simplify page.tsx**
+
+Remove all references to:
+- `useParallelSessions()` hook
+- `tabs`, `activeTab`, `activeTabId`
+- Tab management functions
+- Background polling logic
+- Display data switching logic
+
+Use WebSocket state directly:
+```typescript
+const {
+  consoleOutput,
+  dagData,
+  costSummary,
+  workflowStatus,
+  connect,
+  disconnect,
+  resumeSession
+} = useWebSocket();
+```
+
+**Step 5: Update navigation**
+
+When starting new session:
+```typescript
+const handleNewSession = async () => {
+  // Disconnect current session if active
+  if (copilotSessionId) {
+    await handleSuspend(); // Auto-pause current
+  }
+
+  // Start new session
+  await connect(taskId, task, config);
+};
+```
+
+#### 9. User Experience Changes
+
+**Before:**
+- User can open 5+ sessions in tabs
+- Switch between them freely
+- Background tabs keep running (polled)
+- Can forget about sessions in background tabs
+
+**After:**
+- User focuses on one session at a time
+- Must explicitly pause before switching
+- Clearer mental model: "current session"
+- Better awareness of running workflows
+
+#### 10. Performance Improvements
+
+**Removed overhead:**
+- ❌ Background polling (5s intervals)
+- ❌ Tab state snapshots (memory)
+- ❌ Multiple API calls per tab
+- ❌ Complex state synchronization
+
+**Expected gains:**
+- 🚀 50-70% reduction in API calls
+- 🚀 Cleaner React component tree
+- 🚀 Faster page load (less context initialization)
+- 🚀 Simpler state management (easier debugging)
+
+#### 11. Recommended Implementation Order
+
+1. **Phase 1: Prepare**
+   - Audit current `page.tsx` for tab dependencies
+   - Document current tab-specific logic
+   - Test current session resume flow
+
+2. **Phase 2: Remove**
+   - Delete `ParallelSessionsContext.tsx`
+   - Delete `SessionTabBar.tsx`
+   - Update `providers.tsx`
+
+3. **Phase 3: Refactor**
+   - Simplify `page.tsx` display logic
+   - Remove tab management UI
+   - Update session navigation
+
+4. **Phase 4: Test**
+   - Test session creation
+   - Test session resume
+   - Test session switching (pause → resume)
+   - Test WebSocket reconnection
+
+5. **Phase 5: Polish**
+   - Add clear "current session" indicator
+   - Add warnings when starting new session
+   - Update documentation
+
+#### 12. Code Comparison
+
+**Current `page.tsx` Complexity:**
+```typescript
+// ~800 lines with:
+- Tab management (100+ lines)
+- Background polling (50+ lines)
+- Display data switching (50+ lines)
+- Tab state synchronization (30+ lines)
+```
+
+**Simplified `page.tsx`:**
+```typescript
+// ~500 lines with:
+- Direct WebSocket state usage
+- Simple session switching
+- Cleaner component structure
+```
+
+**Estimated LOC reduction:** ~300 lines (~37% reduction)
+
+#### 13. Benefits Summary
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| **Contexts** | 2 (WebSocket + ParallelSessions) | 1 (WebSocket only) |
+| **API Calls** | High (polling per tab) | Low (single session) |
+| **Memory** | High (multiple snapshots) | Low (single state) |
+| **Complexity** | High (tab management) | Low (direct state) |
+| **UX** | Multi-tasking | Focused |
+| **Code LOC** | ~800 lines | ~500 lines |
+
+#### 14. Potential Issues & Solutions
+
+**Issue 1: User wants multiple sessions**
+- **Solution:** Session browser always available - quick pause/resume
+- **Alternative:** Add "session bookmarks" for frequently used sessions
+
+**Issue 2: Accidental session switch**
+- **Solution:** Confirm dialog before disconnecting active session
+- **Warning:** "You have an active session. Pause before switching?"
+
+**Issue 3: Lost work when starting new**
+- **Solution:** Auto-pause current session before starting new
+- **Safety:** Always persist session state on pause
+
+#### 15. Next Steps
+
+To implement single-session approach:
+
+```bash
+# 1. Create feature branch
+git checkout -b feature/single-session-simplification
+
+# 2. Remove multi-tab files
+git rm cmbagent-ui/contexts/ParallelSessionsContext.tsx
+git rm cmbagent-ui/components/layout/SessionTabBar.tsx
+
+# 3. Update providers and page.tsx
+# (Manual refactoring needed)
+
+# 4. Test thoroughly
+npm run dev
+# Verify: session creation, resume, switching
+
+# 5. Commit changes
+git add .
+git commit -m "Simplify to single-session approach"
+
+# 6. Update documentation
+```
+
+---
+
+*Last updated: 2026-03-01*
+*Version: 2.0 - Added single-session simplification guide*

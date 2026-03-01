@@ -9,6 +9,7 @@ import {
   GitBranch,
   Code2,
   ClipboardList,
+  FileText,
 } from 'lucide-react'
 import TaskCard from './TaskCard'
 import { Button, Badge, EmptyState } from '@/components/core'
@@ -61,6 +62,15 @@ const TASKS: TaskData[] = [
     lastRun: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
     icon: <Code2 className="w-5 h-5" />,
     color: 'from-orange-500 to-red-500',
+  },
+  {
+    id: 'denario-research',
+    name: 'Research Paper',
+    description: 'Generate a research paper through interactive idea, method, experiment, and writing stages',
+    mode: 'denario-research',
+    status: 'active',
+    icon: <FileText className="w-5 h-5" />,
+    color: 'from-violet-500 to-indigo-500',
   },
 ]
 

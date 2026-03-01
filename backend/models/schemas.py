@@ -2,13 +2,19 @@
 Pydantic models for API request and response validation.
 """
 
+from enum import Enum
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # =============================================================================
 # Task Models
 # =============================================================================
+
+class TaskType(str, Enum):
+    STANDARD = "standard"
+    DENARIO_RESEARCH = "denario-research"
+
 
 class TaskRequest(BaseModel):
     """Request model for task submission."""
@@ -20,6 +26,8 @@ class TaskRequest(BaseModel):
         "agent": "engineer",
         "workDir": "~/Desktop/cmbdir"
     }
+    task_type: TaskType = Field(default=TaskType.STANDARD, description="Task type")
+    data_description: Optional[str] = Field(None, description="Data description for Denario tasks")
 
 
 class TaskResponse(BaseModel):
@@ -27,6 +35,32 @@ class TaskResponse(BaseModel):
     task_id: str
     status: str
     message: str
+
+
+class StageInfo(BaseModel):
+    """Stage information within a multi-stage task."""
+    stage_number: int
+    stage_name: str
+    status: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class TaskStatusResponse(BaseModel):
+    """Extended task status including stage information."""
+    task_id: str
+    status: str
+    task_type: str = "standard"
+    mode: Optional[str] = None
+    created_at: Optional[str] = None
+    result: Optional[Any] = None
+    error: Optional[str] = None
+    updated_at: Optional[str] = None
+    # Stage fields (only for denario tasks)
+    stages: Optional[List[StageInfo]] = None
+    current_stage: Optional[int] = None
+    progress_percent: Optional[float] = None
+    total_cost_usd: Optional[float] = None
 
 
 # =============================================================================

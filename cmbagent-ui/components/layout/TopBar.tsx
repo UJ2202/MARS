@@ -4,7 +4,6 @@ import { Sun, Moon, Menu } from 'lucide-react'
 import { ConnectionStatus } from '@/components/common/ConnectionStatus'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import { useTheme } from '@/contexts/ThemeContext'
-import SessionTabBar from './SessionTabBar'
 
 interface TopBarProps {
   onToggleMobileNav?: () => void
@@ -47,11 +46,6 @@ export default function TopBar({ onToggleMobileNav }: TopBarProps) {
           >
             MARS
           </h1>
-        </div>
-
-        {/* Center: Session tabs (hidden on mobile) */}
-        <div className="flex-1 items-end justify-start px-4 hidden sm:flex overflow-hidden">
-          <SessionTabBar />
         </div>
 
         {/* Right Actions */}
