@@ -45,6 +45,7 @@ class IntakeData(BaseModel):
     existingFunctionality: Optional[str] = ""
     problemKeywords: str = ""
     expectedOutput: List[str] = Field(default_factory=list)
+    researchMode: str = "one_shot"  # "one_shot" | "planning_and_control"
 
 
 class ClientDetailsRequest(BaseModel):
@@ -200,7 +201,9 @@ async def api_research_summary(request: ResearchSummaryRequest):
     """Step 1: Generate research summary (direct LLM with optional researcher)."""
     try:
         from services.pda_service import generate_research_summary
-        result = await generate_research_summary(request.intakeData.dict())
+        intake_dict = request.intakeData.dict()
+        research_mode = intake_dict.pop("researchMode", "one_shot")
+        result = await generate_research_summary(intake_dict, research_mode=research_mode)
         return ResearchSummaryResponse(**result)
     except Exception as e:
         logger.error("research-summary failed: %s\n%s", e, traceback.format_exc())

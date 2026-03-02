@@ -51,6 +51,7 @@ import {
 
 import type {
   IntakeFormData,
+  ResearchMode,
   ResearchSummary,
   ProblemDefinition,
   OpportunityArea,
@@ -678,6 +679,7 @@ function IntakeStep({
       existingFunctionality: '',
       problemKeywords: '',
       expectedOutput: ['All'],
+      researchMode: 'one_shot',
     },
   )
   const [loadingClient, setLoadingClient] = useState(false)
@@ -901,6 +903,29 @@ function IntakeStep({
               onChange={(e) => update({ problemKeywords: e.target.value })}
               placeholder="Describe the problem, pain points, or opportunity areas…"
             />
+          </Field>
+
+          {/* Research Mode */}
+          <Field label="Research Mode *">
+            <select
+              className="w-full h-9 px-3 border rounded-md text-sm"
+              style={inputStyle}
+              value={form.researchMode}
+              onChange={(e) =>
+                update({ researchMode: e.target.value as ResearchMode })
+              }
+            >
+              <option value="one_shot">One Shot (Fast)</option>
+              <option value="planning_and_control">Planning &amp; Control (Deep Research)</option>
+            </select>
+            <p
+              className="text-xs mt-1"
+              style={{ color: 'var(--mars-color-text-tertiary)' }}
+            >
+              {form.researchMode === 'one_shot'
+                ? 'Single-pass research using a researcher agent — faster, suitable for straightforward queries.'
+                : 'Multi-step planning then controlled execution — deeper, more thorough research with multiple phases.'}
+            </p>
           </Field>
 
           {/* Expected Output */}

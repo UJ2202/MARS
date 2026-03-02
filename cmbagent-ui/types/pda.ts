@@ -3,6 +3,8 @@
  * Extracted from pda_6d3220af/src/types/discovery.ts
  */
 
+export type ResearchMode = 'one_shot' | 'planning_and_control'
+
 export interface IntakeFormData {
   clientName: string
   industry: string
@@ -14,6 +16,7 @@ export interface IntakeFormData {
   existingFunctionality?: string
   problemKeywords: string
   expectedOutput: string[]
+  researchMode: ResearchMode
 }
 
 export interface ResearchSummary {

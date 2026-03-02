@@ -143,7 +143,7 @@ def _call_llm_direct(
     prompt: str,
     system_prompt: Optional[str] = None,
     temperature: float = 0.7,
-    max_tokens: int = 4096,
+    max_tokens: int = 12000,
 ) -> str:
     """
     Call LLM directly using cmbagent's create_openai_client().
@@ -306,6 +306,65 @@ def _salvage_researcher_output(run_dir: str) -> Optional[str]:
     return None
 
 
+def _extract_pc_output(results: Dict[str, Any]) -> Optional[str]:
+    """
+    Extract usable research text from planning_and_control_context_carryover results.
+
+    The return shape is the same as one_shot: {chat_history, final_context, ...}.
+    We try multiple extraction strategies:
+      1. final_context['previous_steps_execution_summary'] — concatenated markdown
+         of all completed steps (richest output from P&C).
+      2. Chat history messages from 'researcher' / 'researcher_response_formatter'.
+      3. Any substantial final_context string values.
+    """
+    if not results or not isinstance(results, dict):
+        return None
+
+    # Strategy 1: previous_steps_execution_summary from final_context
+    final_ctx = results.get('final_context', {})
+    if isinstance(final_ctx, dict):
+        summary = final_ctx.get('previous_steps_execution_summary', '')
+        if isinstance(summary, str) and len(summary.strip()) > 50:
+            logger.info("P&C extract: using previous_steps_execution_summary (%d chars)", len(summary))
+            return summary
+
+    # Strategy 2: chat_history messages from researcher agents
+    chat_history = results.get('chat_history', [])
+    researcher_outputs = []
+    for msg in chat_history:
+        if not isinstance(msg, dict):
+            continue
+        name = msg.get('name', '')
+        content = msg.get('content', '')
+        if not content or content == 'None':
+            continue
+        if isinstance(content, str) and any(phrase in content.lower() for phrase in [
+            'has been marked as failed',
+            'exitcode: 1',
+            'execution failed',
+        ]):
+            continue
+        if name in ('researcher', 'researcher_response_formatter'):
+            researcher_outputs.append(content)
+
+    for output in researcher_outputs:
+        if isinstance(output, str) and len(output.strip()) > 50:
+            return output
+    if researcher_outputs:
+        return researcher_outputs[0]
+
+    # Strategy 3: any final_context string values
+    if isinstance(final_ctx, dict):
+        for key in ('researcher_output', 'response', 'result', 'content', 'output'):
+            val = final_ctx.get(key)
+            if val and isinstance(val, str) and len(val.strip()) > 20:
+                return val
+
+    # Strategy 4: serialize final_context
+    raw = json.dumps(final_ctx) if isinstance(final_ctx, dict) else str(final_ctx)
+    return raw if raw and raw not in ('{}', 'None', '') else None
+
+
 def _call_cmbagent_planning_control(task: str, work_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     Use cmbagent.planning_and_control_context_carryover for complex multi-step research.
@@ -346,7 +405,7 @@ async def _async_llm_direct(
     prompt: str,
     system_prompt: Optional[str] = None,
     temperature: float = 0.7,
-    max_tokens: int = 4096,
+    max_tokens: int = 12000,
 ) -> str:
     loop = asyncio.get_event_loop()
     fn = partial(_call_llm_direct, prompt, system_prompt, temperature, max_tokens)
@@ -408,18 +467,38 @@ Business functions should be selected from: Store Ops, Supply Chain, Merchandisi
     return {"industry": "", "subIndustry": "", "businessFunctions": []}
 
 
-async def generate_research_summary(intake_data: Dict[str, Any]) -> Dict[str, Any]:
+async def generate_research_summary(intake_data: Dict[str, Any], research_mode: str = "one_shot") -> Dict[str, Any]:
     """
     Step 1: Generate research summary.
 
-    Primary path: cmbagent.one_shot(agent='researcher') for web-search-augmented research.
-    Fallback: direct LLM via create_openai_client() if the researcher fails.
+    research_mode:
+      - "one_shot": cmbagent.one_shot(agent='researcher') — fast, single-agent research.
+      - "planning_and_control": cmbagent.planning_and_control_context_carryover()
+        — multi-step planning → control deep research.
+
+    Fallback: direct LLM via create_openai_client() if the chosen method fails.
     """
     research_prompt = _build_research_prompt(intake_data)
 
-    # --- Primary: use cmbagent researcher agent ---
-    logger.info("Step 1: attempting cmbagent.one_shot(researcher)")
-    researcher_text = await _async_researcher(research_prompt)
+    researcher_text: Optional[str] = None
+
+    if research_mode == "planning_and_control":
+        # --- Primary: use cmbagent planning & control ---
+        logger.info("Step 1: attempting cmbagent.planning_and_control_context_carryover()")
+        try:
+            pc_results = await _async_planning_control(research_prompt)
+            researcher_text = _extract_pc_output(pc_results)
+            if researcher_text:
+                logger.info("Step 1: P&C returned text (%d chars)", len(researcher_text))
+        except Exception as e:
+            logger.warning(
+                "Step 1: planning_and_control failed (will fallback): %s\n%s",
+                e, traceback.format_exc(),
+            )
+    else:
+        # --- Primary: use cmbagent researcher agent (one_shot) ---
+        logger.info("Step 1: attempting cmbagent.one_shot(researcher)")
+        researcher_text = await _async_researcher(research_prompt)
 
     if researcher_text:
         parsed = _extract_json_object(researcher_text)
@@ -434,7 +513,7 @@ async def generate_research_summary(intake_data: Dict[str, Any]) -> Dict[str, An
 Do NOT make up new information — only restructure what is provided.
 
 ### Raw Research Text
-{researcher_text[:6000]}
+{researcher_text[:15000]}
 
 ### Required JSON format (return ONLY valid JSON, no markdown):
 {{
@@ -499,17 +578,17 @@ Using the inputs below, generate a concise but comprehensive research summary th
    - Only include trends, competitors, pain points, and workshop angles that clearly connect to this problem area.
 2. Perspective: Domain Consulting Group – Product Discovery.
    - Prioritize insights for opportunity framing, risk identification, value propositions, and solution hypotheses.
-3. Level of Detail: Clear, non-fluffy, consulting-style language. Each item should be 1-2 sentences, specific and actionable.
-4. Total 3 to 6 points per section.
+3. Level of Detail: Clear, non-fluffy, consulting-style language. Each item should be 2-4 sentences with specific data points, statistics, or examples wherever possible. Be thorough and substantive.
+4. **CRITICAL: Provide 10 to 15 points per section. Do NOT provide fewer than 10.** Quantity AND quality matter — cover the space comprehensively.
 
 ### Output Format (JSON only)
 Return ONLY valid JSON, no markdown, no explanations:
 {{
-  "marketTrends": ["Each item: a concrete trend related to the Problem/Keywords. 3-6 items."],
-  "competitorMoves": ["Each item: a specific competitor move relevant to the Problem/Keywords. 3-6 items."],
-  "industryPainPoints": ["Each item: a concrete pain point tied to the Problem/Keywords. 3-6 items."],
-  "workshopAngles": ["Each item: a sharp angle for a product discovery workshop. 3-6 items."],
-  "references": ["Each item: a specific, authoritative reference. 3-6 items."]
+  "marketTrends": ["Each item: a concrete, data-backed trend related to the Problem/Keywords. 2-4 sentences per item with specific numbers, percentages, or real examples. 10-15 items REQUIRED."],
+  "competitorMoves": ["Each item: a specific competitor move or strategic initiative relevant to the Problem/Keywords. Name real companies and their actions where possible. 2-4 sentences. 10-15 items REQUIRED."],
+  "industryPainPoints": ["Each item: a concrete pain point tied to the Problem/Keywords. Include measurable impact (cost, time, revenue, satisfaction). 2-4 sentences. 10-15 items REQUIRED."],
+  "workshopAngles": ["Each item: a sharp, provocative angle for a product discovery workshop. Include the 'so what' — why this angle matters and what it unlocks. 2-4 sentences. 10-15 items REQUIRED."],
+  "references": ["Each item: a specific, authoritative reference (reports, analyst publications, industry studies). 8-12 items."]
 }}"""
 
 
@@ -557,7 +636,7 @@ async def generate_problem_definition(
         else "New Process"
     )
 
-    prompt = f"""Based on the following research and inputs, generate a crisp problem definition:
+    prompt = f"""You are a senior Product Discovery strategist at Domain Consulting Group. Based on the following research and inputs, generate a thorough, evidence-backed problem definition that will anchor the entire product discovery engagement.
 
 Research Summary:
 Market Trends: {market}
@@ -572,17 +651,25 @@ Client Context:
 - Process Type: {process_info}
 - Problem Keywords: {intake_data.get('problemKeywords', '')}
 
-Consider the client's specific context, organizational maturity, and strategic priorities when framing the problem.
+### Requirements
+- Consider the client's specific context, organizational maturity, competitive landscape, and strategic priorities when framing the problem.
+- The problem statement should be sharp, specific, and anchored in evidence from the research summary.
+- Supporting points should connect research findings to client-specific impact.
+- Root cause analysis should go 3 levels deep (symptom → cause → systemic root cause).
+- Personas should include their pain frequency, severity, and workaround cost.
+- KPIs should include current baseline estimates and target improvement ranges.
+- Reframing examples should unlock new solution spaces.
 
 Return ONLY valid JSON, no prefix or suffix text:
 {{
-  "problemStatement": "A crisp 1-2 line problem statement",
-  "supportingPoints": ["point 1", "point 2", "point 3"],
-  "personasAffected": ["persona 1", "persona 2", "persona 3"],
-  "kpisImpacted": ["kpi 1", "kpi 2", "kpi 3"],
-  "rootCause": "Root cause explanation (2-3 paragraphs)",
-  "reframingExamples": ["example 1", "example 2"],
-  "references": ["source 1", "source 2"]
+  "problemStatement": "A crisp 2-3 sentence problem statement that is specific to this client and anchored in research evidence",
+  "supportingPoints": ["6-8 evidence-backed points connecting research to client impact. Each 2-3 sentences with specific data."],
+  "personasAffected": ["6-8 personas with format: 'Persona Name — pain description, frequency, and cost of current workarounds'"],
+  "kpisImpacted": ["6-8 KPIs with format: 'KPI Name: current estimated state → target state (% improvement range)'"],
+  "rootCause": "Deep 3-level root cause analysis in 3-4 paragraphs. Level 1: visible symptoms. Level 2: operational causes. Level 3: systemic/structural root causes. Include interconnections between causes.",
+  "reframingExamples": ["4-6 alternative problem framings that open different solution spaces. Each 2-3 sentences."],
+  "impactAssessment": "2-3 paragraphs quantifying the cost of inaction: revenue impact, efficiency loss, competitive risk, and customer impact.",
+  "references": ["4-6 specific sources backing the analysis"]
 }}"""
 
     content = await _async_llm_direct(prompt, _SYSTEM_STRATEGIST)
@@ -596,6 +683,7 @@ Return ONLY valid JSON, no prefix or suffix text:
             "kpisImpacted": parsed.get("kpisImpacted", []),
             "rootCause": parsed.get("rootCause", ""),
             "reframingExamples": parsed.get("reframingExamples", []),
+            "impactAssessment": parsed.get("impactAssessment", ""),
             "references": parsed.get("references", []),
         }
 
@@ -606,6 +694,7 @@ Return ONLY valid JSON, no prefix or suffix text:
         "kpisImpacted": [],
         "rootCause": "",
         "reframingExamples": [],
+        "impactAssessment": "",
         "references": [],
     }
 
@@ -616,40 +705,86 @@ async def generate_opportunities(
 ) -> List[Dict[str, Any]]:
     """
     Step 3: Generate opportunity areas.
-    Uses direct LLM for structured JSON generation.
+    Primary: cmbagent.one_shot(researcher) for research-backed opportunities.
+    Fallback: direct LLM for structured JSON generation.
     """
-    prompt = f"""Based on the problem definition below, generate 3-5 specific opportunity areas:
+    process_info = (
+        f"Existing Process - Current functionality: {intake_data.get('existingFunctionality', '')}"
+        if intake_data.get('processType') == 'existing'
+        else 'New Process'
+    )
 
+    prompt = f"""You are a senior Product Discovery strategist at Domain Consulting Group. Based on the problem definition below, generate 6-10 specific, high-value opportunity areas that are tightly connected to the client's problem space.
+
+Problem Definition:
 {problem_definition}
 
-Context:
+Client Context:
 - Client: {intake_data.get('clientName', '')}
 - Industry: {intake_data.get('industry', '')} - {intake_data.get('subIndustry', '')}
 - Client Context: {intake_data.get('clientContext', '')}
 - Business Function: {intake_data.get('businessFunction', '')}
-- Process Type: {'Existing Process - Current functionality: ' + intake_data.get('existingFunctionality', '') if intake_data.get('processType') == 'existing' else 'New Process'}
+- Process Type: {process_info}
+- Problem Keywords: {intake_data.get('problemKeywords', '')}
 
-Tailor opportunities to the client's specific context, organizational capabilities, and strategic priorities.
+### Requirements
+- Tailor every opportunity to the client's specific context, organizational capabilities, digital maturity, and strategic priorities.
+- Be SPECIFIC: name technologies, methodologies, platforms, or frameworks where relevant.
+- Each opportunity should be distinct — avoid overlap. Cover a broad range of value categories.
+- For each opportunity, deeply explain the business case: WHY this matters NOW, WHAT changes it drives, and HOW success is measured.
+- Provide 6 to 10 opportunity areas. Quality AND quantity matter.
 
 For each opportunity, provide:
-1. Title (concise and compelling)
-2. Short explanation
-3. Value category (Revenue, Efficiency, Experience, or Risk)
-4. KPIs influenced (2-4 specific metrics)
-5. "Why now" justification
+1. Title (concise, compelling, action-oriented)
+2. Explanation (3-5 sentences: what this opportunity is, why it matters, what it unlocks, and how it connects to the client's problem)
+3. Value category (Revenue, Efficiency, Experience, Risk, or Innovation)
+4. KPIs influenced (4-6 specific, measurable metrics with target direction — e.g., "Reduce manual processing time by 40-60%")
+5. "Why now" justification (2-3 sentences: market timing, technology readiness, competitive pressure)
+6. Implementation considerations (2-3 sentences: key enablers, prerequisites, or risks)
+7. References (1-2 sources)
 
 Format as JSON array with this structure, no prefix or suffix text:
 [
   {{
     "title": "...",
     "explanation": "...",
-    "valueCategory": "Revenue|Efficiency|Experience|Risk",
-    "kpis": ["...", "..."],
+    "valueCategory": "Revenue|Efficiency|Experience|Risk|Innovation",
+    "kpis": ["...", "...", "...", "..."],
     "whyNow": "...",
+    "implementationNotes": "...",
     "references": ["..."]
   }}
 ]"""
 
+    # --- Primary: try cmbagent researcher ---
+    logger.info("Step 3: attempting cmbagent.one_shot(researcher) for opportunities")
+    researcher_text = await _async_researcher(prompt)
+
+    if researcher_text:
+        arr = _extract_json_array(researcher_text)
+        if arr and len(arr) >= 2:
+            logger.info("Step 3: researcher returned valid JSON array (%d items)", len(arr))
+            return [{"id": f"opp-{i}", **opp} for i, opp in enumerate(arr)]
+
+        # Researcher returned text but not structured — feed to LLM for structuring
+        logger.info("Step 3: researcher returned text (%d chars), structuring via LLM", len(researcher_text))
+        structure_prompt = f"""Extract and organize the following research into the JSON array format below. Do NOT invent new information.
+
+### Raw Research
+{researcher_text[:15000]}
+
+### Required format (return ONLY valid JSON array):
+[{{"title":"...","explanation":"...","valueCategory":"...","kpis":["..."],"whyNow":"...","implementationNotes":"...","references":["..."]}}]"""
+        try:
+            structured = await _async_llm_direct(structure_prompt, _SYSTEM_STRATEGIST, temperature=0.3)
+            arr2 = _extract_json_array(structured)
+            if arr2 and len(arr2) >= 2:
+                return [{"id": f"opp-{i}", **opp} for i, opp in enumerate(arr2)]
+        except Exception as e:
+            logger.warning("Step 3: structuring researcher output failed: %s", e)
+
+    # --- Fallback: direct LLM ---
+    logger.info("Step 3: falling back to direct LLM for opportunities")
     content = await _async_llm_direct(prompt, "You are a senior product discovery strategist.")
 
     arr = _extract_json_array(content)
@@ -665,42 +800,89 @@ async def generate_solution_archetypes(
 ) -> List[Dict[str, Any]]:
     """
     Step 4: Generate solution archetypes.
-    Uses direct LLM for structured JSON generation.
+    Primary: cmbagent.one_shot(researcher) for research-backed archetypes.
+    Fallback: direct LLM for structured JSON generation.
     """
-    prompt = f"""Based on this opportunity, generate 2-3 solution archetypes:
+    process_info = (
+        f"Existing Process - {intake_data.get('existingFunctionality', '')}"
+        if intake_data.get('processType') == 'existing'
+        else 'New Process'
+    )
+
+    prompt = f"""You are a senior Product Discovery strategist and solution architect at Domain Consulting Group. Based on this opportunity, generate 3-5 distinct solution archetypes that address it from different strategic angles.
 
 Opportunity: {selected_opportunity.get('title', '')}
 {selected_opportunity.get('explanation', '')}
 Value Category: {selected_opportunity.get('valueCategory', '')}
+KPIs: {', '.join(selected_opportunity.get('kpis', []))}
 
 Client Context:
 - Client: {intake_data.get('clientName', '')}
 - Industry: {intake_data.get('industry', '')} - {intake_data.get('subIndustry', '')}
 - Client Context: {intake_data.get('clientContext', '')}
-- Process Type: {'Existing Process - ' + intake_data.get('existingFunctionality', '') if intake_data.get('processType') == 'existing' else 'New Process'}
+- Business Function: {intake_data.get('businessFunction', '')}
+- Process Type: {process_info}
+- Problem Keywords: {intake_data.get('problemKeywords', '')}
 
-Tailor solution archetypes to the client's digital maturity, organizational capabilities, and strategic priorities.
-
-Suggest solution archetypes such as: AI-powered assistant, Predictive engine, Automation co-pilot, Command center, Insights engine.
+### Requirements
+- Tailor solution archetypes to the client's digital maturity, organizational capabilities, tech landscape, and strategic priorities.
+- Each archetype must be DISTINCT in approach (e.g., AI-powered assistant vs. Predictive analytics engine vs. Automation co-pilot vs. Command center vs. Self-service portal).
+- Be SPECIFIC about technologies, AI/ML techniques, integration patterns, and architecture approaches.
+- Think about the full user journey — not just features, but how the solution fits into daily workflows.
 
 For each archetype, provide:
-1. Title
-2. Summary (2-3 sentences)
-3. Personas who will use it (2-3)
-4. Expected benefits (3-5 bullets)
-5. References
+1. Title (distinctive and descriptive)
+2. Summary (4-6 sentences: what it is, how it works, key differentiator, and value proposition)
+3. Core approach (1-2 sentences: the fundamental strategy — e.g., "Uses NLP + knowledge graphs to surface relevant insights proactively")
+4. Personas who will use it (3-5 personas with their primary use case)
+5. Expected benefits (5-8 specific, measurable benefits — e.g., "Reduce decision-making time from 3 days to 4 hours")
+6. Technology enablers (3-5 key technologies or platforms needed)
+7. Implementation complexity (Low/Medium/High with 1-2 sentence justification)
+8. References (1-2 sources)
 
 Format as JSON array:
 [
   {{
     "title": "...",
     "summary": "...",
-    "personas": ["...", "..."],
-    "benefits": ["...", "..."],
+    "coreApproach": "...",
+    "personas": ["Persona: use case", "..."],
+    "benefits": ["...", "...", "...", "...", "..."],
+    "technologyEnablers": ["...", "...", "..."],
+    "implementationComplexity": "Low|Medium|High — explanation",
     "references": ["..."]
   }}
 ]"""
 
+    # --- Primary: try cmbagent researcher ---
+    logger.info("Step 4: attempting cmbagent.one_shot(researcher) for archetypes")
+    researcher_text = await _async_researcher(prompt)
+
+    if researcher_text:
+        arr = _extract_json_array(researcher_text)
+        if arr and len(arr) >= 2:
+            logger.info("Step 4: researcher returned valid JSON array (%d items)", len(arr))
+            return [{"id": f"arch-{i}", **arch} for i, arch in enumerate(arr)]
+
+        # Researcher returned text but not structured — feed to LLM for structuring
+        logger.info("Step 4: researcher returned text (%d chars), structuring via LLM", len(researcher_text))
+        structure_prompt = f"""Extract and organize the following research into the JSON array format below. Do NOT invent new information.
+
+### Raw Research
+{researcher_text[:15000]}
+
+### Required format (return ONLY valid JSON array):
+[{{"title":"...","summary":"...","coreApproach":"...","personas":["..."],"benefits":["..."],"technologyEnablers":["..."],"implementationComplexity":"...","references":["..."]}}]"""
+        try:
+            structured = await _async_llm_direct(structure_prompt, _SYSTEM_STRATEGIST, temperature=0.3)
+            arr2 = _extract_json_array(structured)
+            if arr2 and len(arr2) >= 2:
+                return [{"id": f"arch-{i}", **arch} for i, arch in enumerate(arr2)]
+        except Exception as e:
+            logger.warning("Step 4: structuring researcher output failed: %s", e)
+
+    # --- Fallback: direct LLM ---
+    logger.info("Step 4: falling back to direct LLM for archetypes")
     content = await _async_llm_direct(prompt, "You are a senior product discovery strategist.")
 
     arr = _extract_json_array(content)
@@ -717,34 +899,49 @@ async def generate_features(
 ) -> List[Dict[str, Any]]:
     """
     Step 5: Generate feature set.
-    Uses direct LLM for structured JSON generation.
+    Primary: cmbagent.one_shot(researcher) for research-backed features.
+    Fallback: direct LLM for structured JSON generation.
     """
-    prompt = f"""Generate a comprehensive feature set for this solution:
+    process_info = (
+        f"Existing Process - {intake_data.get('existingFunctionality', '')}"
+        if intake_data.get('processType') == 'existing'
+        else 'New Process'
+    )
 
-Solution: {selected_archetype.get('title', '')}
+    prompt = f"""You are a senior Product Manager and Feature Architect at Domain Consulting Group. Generate a comprehensive, production-grade feature set for this solution.
+
+Solution Archetype: {selected_archetype.get('title', '')}
 {selected_archetype.get('summary', '')}
+Core Approach: {selected_archetype.get('coreApproach', '')}
 
 Opportunity Context: {opportunity.get('title', '')}
+{opportunity.get('explanation', '')}
 
 Client Context:
 - Client: {intake_data.get('clientName', '')}
 - Industry: {intake_data.get('industry', '')} - {intake_data.get('subIndustry', '')}
 - Client Context: {intake_data.get('clientContext', '')}
 - Business Function: {intake_data.get('businessFunction', '')}
-- Process Type: {'Existing Process - ' + intake_data.get('existingFunctionality', '') if intake_data.get('processType') == 'existing' else 'New Process'}
+- Process Type: {process_info}
+- Problem Keywords: {intake_data.get('problemKeywords', '')}
 
-Consider the client's specific context, tech stack, organizational constraints, and strategic priorities.
-
-Provide features organized by buckets (Core Features, Analytics, Integration, UX/UI, etc.)
+### Requirements
+- Consider the client's specific context, tech stack, organizational constraints, and strategic priorities.
+- Features must span the full solution: Core Features, Analytics & Intelligence, Integration & Data, UX/UI, Admin & Governance, and Automation.
+- Be SPECIFIC: reference real technologies, APIs, data sources, and methodologies where relevant.
+- Think end-to-end: from data ingestion through processing, insight generation, user interaction, and feedback loops.
+- Provide 10 to 15 features across multiple buckets. Ensure a good mix of Must/Should/Could priorities.
 
 For each feature provide:
-1. Feature name
-2. Description (2-3 sentences)
-3. Strategic Goal (1-2 sentences)
-4. User Stories (3-5 starting with "As a...")
-5. Success Metrics (3-4 measurable criteria)
-6. Bucket/category
-7. Priority tag (Must, Should, or Could)
+1. Feature name (clear and descriptive)
+2. Description (3-5 sentences: what it does, how it works, what user need it satisfies, and what makes it valuable)
+3. Strategic Goal (2-3 sentences: how this feature connects to the broader business objective and ROI)
+4. User Stories (4-6 stories starting with "As a..." — cover different personas and scenarios)
+5. Success Metrics (4-6 measurable criteria with specific targets — e.g., "Dashboard load time < 2 seconds for 95th percentile")
+6. Acceptance Criteria (3-5 testable conditions — e.g., "System processes 10,000 records per minute without degradation")
+7. Bucket/category (Core Features, Analytics, Integration, UX/UI, Admin, Automation)
+8. Priority tag (Must, Should, or Could)
+9. Effort estimate (Small/Medium/Large)
 
 Format as JSON array:
 [
@@ -752,13 +949,50 @@ Format as JSON array:
     "name": "...",
     "description": "...",
     "strategicGoal": "...",
-    "userStories": ["As a...", "As a...", "As a..."],
-    "successMetrics": ["...", "...", "..."],
+    "userStories": ["As a...", "As a...", "As a...", "As a..."],
+    "successMetrics": ["...", "...", "...", "..."],
+    "acceptanceCriteria": ["...", "...", "..."],
     "bucket": "...",
-    "priority": "Must|Should|Could"
+    "priority": "Must|Should|Could",
+    "effort": "Small|Medium|Large"
   }}
 ]"""
 
+    # --- Primary: try cmbagent researcher ---
+    logger.info("Step 5: attempting cmbagent.one_shot(researcher) for features")
+    researcher_text = await _async_researcher(prompt)
+
+    if researcher_text:
+        arr = _extract_json_array(researcher_text)
+        if arr and len(arr) >= 3:
+            logger.info("Step 5: researcher returned valid JSON array (%d items)", len(arr))
+            return [
+                {"id": f"feat-{i}", "selected": feat.get("priority") == "Must", **feat}
+                for i, feat in enumerate(arr)
+            ]
+
+        # Researcher returned text but not structured — feed to LLM for structuring
+        logger.info("Step 5: researcher returned text (%d chars), structuring via LLM", len(researcher_text))
+        structure_prompt = f"""Extract and organize the following research into the JSON array format below. Do NOT invent new information.
+
+### Raw Research
+{researcher_text[:15000]}
+
+### Required format (return ONLY valid JSON array):
+[{{"name":"...","description":"...","strategicGoal":"...","userStories":["As a..."],"successMetrics":["..."],"acceptanceCriteria":["..."],"bucket":"...","priority":"Must|Should|Could","effort":"Small|Medium|Large"}}]"""
+        try:
+            structured = await _async_llm_direct(structure_prompt, _SYSTEM_STRATEGIST, temperature=0.3)
+            arr2 = _extract_json_array(structured)
+            if arr2 and len(arr2) >= 3:
+                return [
+                    {"id": f"feat-{i}", "selected": feat.get("priority") == "Must", **feat}
+                    for i, feat in enumerate(arr2)
+                ]
+        except Exception as e:
+            logger.warning("Step 5: structuring researcher output failed: %s", e)
+
+    # --- Fallback: direct LLM ---
+    logger.info("Step 5: falling back to direct LLM for features")
     content = await _async_llm_direct(prompt, "You are a product manager and feature architect.")
 
     arr = _extract_json_array(content)
@@ -783,7 +1017,7 @@ async def generate_prompts(
     """
     feature_list = ", ".join(f.get("name", "") for f in selected_features)
 
-    prompt = f"""Generate three different prompts for building this solution:
+    prompt = f"""You are an expert prompt engineer and product strategist at Domain Consulting Group. Generate three comprehensive, production-ready builder prompts for this solution.
 
 Client Context:
 - Client: {intake_data.get('clientName', '')}
@@ -791,26 +1025,30 @@ Client Context:
 - Client Context: {intake_data.get('clientContext', '')}
 - Business Function: {intake_data.get('businessFunction', '')}
 - Process Type: {'Existing Process - ' + intake_data.get('existingFunctionality', '') if intake_data.get('processType') == 'existing' else 'New Process'}
+- Problem Keywords: {intake_data.get('problemKeywords', '')}
 
 Problem: {intake_data.get('problemKeywords', '')}
 Opportunity: {opportunity.get('title', '')} - {opportunity.get('explanation', '')}
 Solution: {archetype.get('title', '')} - {archetype.get('summary', '')}
+Core Approach: {archetype.get('coreApproach', '')}
 Features: {feature_list}
 
-Include client context, organizational considerations, and integration requirements.
+### Requirements
+- Each prompt must be COMPREHENSIVE — at least 500 words — covering the full solution scope.
+- Include problem context, opportunity rationale, solution archetype, ALL selected features with their descriptions, suggested screens & flows, data model considerations, integration points, and technical architecture guidance.
+- Incorporate client-specific context, organizational considerations, and integration requirements throughout.
+- Each prompt should be self-contained — a developer should be able to build the entire solution from the prompt alone.
 
 Generate:
-1. A Lovable app prompt (optimized for Lovable's AI app builder)
-2. A Google AI Studio prompt (optimized for Gemini)
-3. A general LLM prompt (works with any LLM)
-
-Each prompt should include problem context, opportunity rationale, solution archetype, selected features, suggested screens & flows, technical considerations.
+1. A Lovable app prompt (optimized for Lovable's AI app builder — focus on UI components, pages, user flows, styling, and real-time features)
+2. A Google AI Studio prompt (optimized for Gemini — focus on AI/ML capabilities, data processing, and intelligent features)
+3. A general LLM prompt (works with any LLM — comprehensive technical specification including architecture, APIs, database schema, and deployment)
 
 Format as JSON:
 {{
-  "lovable": "...",
-  "googleAI": "...",
-  "general": "..."
+  "lovable": "Complete Lovable prompt (500+ words)...",
+  "googleAI": "Complete Google AI Studio prompt (500+ words)...",
+  "general": "Complete general LLM prompt (500+ words)..."
 }}"""
 
     content = await _async_llm_direct(prompt, "You are an expert prompt engineer.")
@@ -853,7 +1091,7 @@ async def generate_slide_content(
         for f in features if f.get("selected", False)
     )
 
-    prompt = f"""Generate presentation-ready slide content for this product discovery:
+    prompt = f"""You are a senior presentation expert and product strategist at Domain Consulting Group. Generate comprehensive, executive-ready presentation slide content for this product discovery engagement. This is the FINAL deliverable — include MAXIMUM context and detail.
 
 Client Information:
 - Client: {intake_data.get('clientName', '')}
@@ -861,6 +1099,7 @@ Client Information:
 - Client Context: {intake_data.get('clientContext', '')}
 - Business Function: {intake_data.get('businessFunction', '')}
 - Process Type: {'Existing Process - ' + intake_data.get('existingFunctionality', '') if intake_data.get('processType') == 'existing' else 'New Process'}
+- Problem Keywords: {intake_data.get('problemKeywords', '')}
 
 Research Context:
 {research}
@@ -870,28 +1109,47 @@ Problem:
 
 Opportunity: {opportunity.get('title', '')}
 {opportunity.get('explanation', '')}
+Value Category: {opportunity.get('valueCategory', '')}
+KPIs: {', '.join(opportunity.get('kpis', []))}
+Why Now: {opportunity.get('whyNow', '')}
 
 Solution: {archetype.get('title', '')}
 {archetype.get('summary', '')}
+Core Approach: {archetype.get('coreApproach', '')}
+Technology Enablers: {', '.join(archetype.get('technologyEnablers', []))}
 
 Features:
 {feature_list}
 
-Incorporate client-specific context throughout. Tailor recommendations based on organizational maturity.
+### Requirements
+- This is the FINAL report — include ALL research findings, analysis, and recommendations.
+- Each slide should have 5-8 detailed bullet points (not generic filler).
+- Use specific data, metrics, and evidence from the research.
+- Include speaker notes / talking points for key slides.
+- Incorporate client-specific context throughout. Tailor recommendations based on organizational maturity.
+- The document should be 1500-2500 words total — comprehensive enough to stand alone as a deliverable.
 
-Generate slide-ready bullet points for:
-1. Problem Statement slide
-2. Research Insights slide (3-5 key insights)
-3. Opportunities slide
-4. Solution Overview slide
-5. Features & Capabilities slide
-6. Value Drivers slide
-7. Architecture Snapshot slide (high-level components)
-8. Prototype Prompt slide (how to build it)
-9. Next Steps slide
+Generate slide-ready content for:
+1. **Title Slide** — Engagement title, client name, date, DCG branding
+2. **Executive Summary** — 4-6 bullets summarizing the entire discovery (problem, opportunity, solution, expected impact)
+3. **Problem Statement** — The core problem, evidence, and urgency (5-8 bullets)
+4. **Research Insights: Market Trends** — Key market trends with data (5-8 bullets)
+5. **Research Insights: Competitive Landscape** — What competitors are doing (5-8 bullets)
+6. **Research Insights: Industry Pain Points** — Critical pain points with impact (5-8 bullets)
+7. **Opportunity Analysis** — The selected opportunity, value drivers, and KPIs (5-8 bullets)
+8. **Solution Overview** — The archetype, core approach, and differentiators (5-8 bullets)
+9. **Features & Capabilities** — Key features organized by priority (8-12 bullets)
+10. **User Personas & Journeys** — Who benefits and how (5-8 bullets)
+11. **Value Drivers & ROI** — Expected business impact with metrics (5-8 bullets)
+12. **Architecture Snapshot** — High-level technical components and integration points (5-8 bullets)
+13. **Implementation Roadmap** — Phased approach: Quick Wins (0-3mo), Foundation (3-6mo), Scale (6-12mo) (6-10 bullets)
+14. **Risk & Mitigation** — Key risks and mitigation strategies (4-6 bullets)
+15. **Prototype Prompt** — How to build a working prototype (4-6 bullets)
+16. **Next Steps & Call to Action** — Concrete next steps with owners and timelines (5-8 bullets)
+17. **Appendix: References** — All sources and references
 
-Format as markdown with clear slide titles (use ## for slides) and concise bullets.
-Include references where applicable."""
+Format as markdown with ## for slide titles, ### for sub-sections, and - for bullets.
+Include references and data citations where applicable."""
 
     content = await _async_llm_direct(prompt, "You are a presentation expert and product strategist.")
     return content
