@@ -54,9 +54,6 @@ __all__ = [
     "phases_router",
     "copilot_router",
     "sessions_router",
-<<<<<<< HEAD
     "pda_router",
-=======
     "denario_router",
->>>>>>> 474d7ff67edf1502cd372af14cf354d8bea05990
 ]
