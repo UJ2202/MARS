@@ -7,7 +7,6 @@ import ConsoleOutput from '@/components/ConsoleOutput'
 import { ApprovalChatPanel } from '@/components/ApprovalChatPanel'
 import { CopilotView } from '@/components/CopilotView'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
-import { useParallelSessions } from '@/contexts/ParallelSessionsContext'
 import { WorkflowDashboard } from '@/components/workflow'
 import { DAGWorkspace } from '@/components/dag'
 import { Branch } from '@/types/branching'
@@ -20,23 +19,9 @@ import BottomPanel from '@/components/layout/BottomPanel'
 export default function Home() {
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Tab/session management
-  const {
-    tabs,
-    activeTabId,
-    liveTabId,
-    setActiveTab,
-    addTab,
-    closeTab,
-    updateTab,
-    setLiveTab,
-  } = useParallelSessions()
-
-  const activeTab = tabs.find(t => t.id === activeTabId)
-
-  // Local UI state derived from active tab
-  const [selectedMode, setSelectedMode] = useState<string | null>(activeTab?.mode || null)
-  const [isCopilotMode, setIsCopilotMode] = useState(activeTab?.isCopilotMode || false)
+  // Local UI state
+  const [selectedMode, setSelectedMode] = useState<string | null>(null)
+  const [isCopilotMode, setIsCopilotMode] = useState(false)
   const [elapsedTime, setElapsedTime] = useState('0:00')
   const [startTime, setStartTime] = useState<number | null>(null)
 
@@ -99,86 +84,14 @@ export default function Home() {
     setCostTimeSeriesDirect,
   } = useWebSocketContext()
 
-  // Determine if active tab is the live (WS-connected) tab
-  const isActiveTabLive = activeTabId === liveTabId
-
-  // Display data: live from WS or from tab snapshot
-  const displayConsole = isActiveTabLive ? consoleOutput : (activeTab?.consoleOutput || [])
-  const displayResults = isActiveTabLive ? results : (activeTab?.results || null)
-  const displayDag = isActiveTabLive ? dagData : (activeTab?.dagData || null)
-  const displayWorkflowStatus = isActiveTabLive ? workflowStatus : (activeTab?.workflowStatus || null)
-  const displayIsRunning = isActiveTabLive ? isRunning : (activeTab?.isRunning || false)
-  const displayCostSummary = isActiveTabLive ? costSummary : (activeTab?.costSummary || { total_cost: 0, total_tokens: 0, input_tokens: 0, output_tokens: 0, model_breakdown: [], agent_breakdown: [], step_breakdown: [] })
-  const displayCostTimeSeries = isActiveTabLive ? costTimeSeries : (activeTab?.costTimeSeries || [])
-
-  // Save backend sessionId to the live tab when it arrives via WS
-  useEffect(() => {
-    if (copilotSessionId && liveTabId) {
-      updateTab(liveTabId, { sessionId: copilotSessionId })
-    }
-  }, [copilotSessionId, liveTabId, updateTab])
-
-  // Sync local state when active tab changes
-  const prevTabRef = useRef(activeTabId)
-  useEffect(() => {
-    if (prevTabRef.current !== activeTabId) {
-      const tab = tabs.find(t => t.id === activeTabId)
-      setSelectedMode(tab?.mode || null)
-      setIsCopilotMode(tab?.isCopilotMode || false)
-      setCopilotMessages(tab?.copilotMessages || [])
-      prevTabRef.current = activeTabId
-    }
-  }, [activeTabId, tabs])
-
-  // Reload console logs from backend when switching to a non-live tab
-  useEffect(() => {
-    const tab = tabs.find(t => t.id === activeTabId)
-    if (!tab || !tab.sessionId || isActiveTabLive) return
-    // Only reload if the tab was running or just completed (has a session)
-    if (tab.status === 'new') return
-
-    const loadSessionLogs = async () => {
-      try {
-        const response = await fetch(getApiUrl(`/api/sessions/${tab.sessionId}/history?limit=500`))
-        if (!response.ok) return
-        const data = await response.json()
-        const messages = data.messages || []
-        if (messages.length === 0) return
-
-        const logLines: string[] = []
-        messages.forEach((msg: any) => {
-          const agent = msg.agent ? `[${msg.agent}]` : ''
-          const content = msg.content || ''
-          const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : ''
-          const prefix = ts ? `${ts} ` : ''
-          if (msg.role === 'user') {
-            logLines.push(`${prefix}[USER] ${content}`)
-          } else if (agent) {
-            logLines.push(`${prefix}${agent} ${content}`)
-          } else if (content) {
-            logLines.push(`${prefix}${content}`)
-          }
-        })
-
-        if (logLines.length > 0) {
-          updateTab(activeTabId, { consoleOutput: logLines })
-        }
-      } catch (error) {
-        console.warn('Failed to reload session logs:', error)
-      }
-    }
-
-    loadSessionLogs()
-  }, [activeTabId, isActiveTabLive])
-
   // Track elapsed time when running
   useEffect(() => {
-    if (displayIsRunning && !startTime) {
+    if (isRunning && !startTime) {
       setStartTime(Date.now())
-    } else if (!displayIsRunning && startTime) {
+    } else if (!isRunning && startTime) {
       setStartTime(null)
     }
-  }, [displayIsRunning, startTime])
+  }, [isRunning, startTime])
 
   useEffect(() => {
     if (!startTime) {
@@ -196,7 +109,7 @@ export default function Home() {
 
   // Convert agent messages to copilot chat messages
   useEffect(() => {
-    if (!isCopilotMode || agentMessages.length === 0 || !isActiveTabLive) return
+    if (!isCopilotMode || agentMessages.length === 0) return
     const lastAgentMsg = agentMessages[agentMessages.length - 1]
     if (!lastAgentMsg) return
     const importantKeywords = [
@@ -220,26 +133,8 @@ export default function Home() {
       }
       setCopilotMessages(prev => [...prev, assistantMessage])
     }
-  }, [agentMessages, isCopilotMode, isActiveTabLive])
+  }, [agentMessages, isCopilotMode])
 
-  // Save live tab state when task completes
-  useEffect(() => {
-    if (!isRunning && liveTabId && prevRunningRef.current) {
-      updateTab(liveTabId, {
-        isRunning: false,
-        status: workflowStatus === 'failed' ? 'failed' : 'completed',
-        consoleOutput: [...consoleOutput],
-        results: results,
-        dagData: dagData,
-        workflowStatus: workflowStatus,
-        costSummary: costSummary,
-        costTimeSeries: [...costTimeSeries],
-        copilotMessages: [...copilotMessages],
-      })
-    }
-    prevRunningRef.current = isRunning
-  }, [isRunning])
-  const prevRunningRef = useRef(isRunning)
 
   const handleTaskSubmit = async (task: string, config: any) => {
     const copilotMode = config.mode === 'copilot'
@@ -247,7 +142,6 @@ export default function Home() {
     // If entering copilot mode UI only (no task)
     if (config._enterCopilotMode && !task.trim()) {
       setIsCopilotMode(true)
-      updateTab(activeTabId, { isCopilotMode: true })
       setCopilotConfig({
         enablePlanning: config.enablePlanning ?? true,
         approvalMode: config.approvalMode ?? 'after_step',
@@ -266,26 +160,10 @@ export default function Home() {
     // Don't allow empty tasks
     if (!task.trim()) return
 
-    // If this tab already has a running task, don't double-submit
-    if (isActiveTabLive && isRunning) return
-
-    // If another tab is live and running, save its state first
-    if (liveTabId && liveTabId !== activeTabId && isRunning) {
-      updateTab(liveTabId, {
-        consoleOutput: [...consoleOutput],
-        results: results,
-        dagData: dagData,
-        workflowStatus: workflowStatus,
-        costSummary: costSummary,
-        costTimeSeries: [...costTimeSeries],
-        isRunning: true,
-        currentRunId: currentRunId,
-        copilotMessages: [...copilotMessages],
-      })
-    }
+    // Don't allow double-submit
+    if (isRunning) return
 
     setIsCopilotMode(copilotMode)
-    updateTab(activeTabId, { isCopilotMode: copilotMode })
 
     if (copilotMode) {
       setCopilotConfig({
@@ -318,26 +196,12 @@ export default function Home() {
 
     const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
-    // Mark this tab as live and active
-    setLiveTab(activeTabId)
-    updateTab(activeTabId, {
-      isRunning: true,
-      status: 'active',
-      currentRunId: taskId,
-      consoleOutput: [],
-      results: null,
-      dagData: null,
-      workflowStatus: null,
-      startedAt: new Date().toISOString(),
-    })
-
     try {
       await connect(taskId, task, config)
     } catch (error) {
       console.error('Failed to start task:', error)
       addConsoleOutput(`Error: Failed to connect to backend`)
       setIsRunning(false)
-      updateTab(activeTabId, { isRunning: false, status: 'failed' })
     }
   }
 
@@ -345,7 +209,6 @@ export default function Home() {
     disconnect()
     setIsRunning(false)
     addConsoleOutput('Task execution stopped by user')
-    updateTab(activeTabId, { isRunning: false, status: 'completed' })
   }
 
   const handlePause = () => {
@@ -353,7 +216,6 @@ export default function Home() {
       sendMessage({ type: 'pause', run_id: currentRunId })
       setWorkflowStatus('paused')
       addConsoleOutput('Pause request sent to workflow')
-      updateTab(activeTabId, { status: 'paused' })
     }
   }
 
@@ -362,7 +224,6 @@ export default function Home() {
       sendMessage({ type: 'resume', run_id: currentRunId })
       setWorkflowStatus('executing')
       addConsoleOutput('Resume request sent to workflow')
-      updateTab(activeTabId, { status: 'active' })
     }
   }
 
@@ -394,7 +255,7 @@ export default function Home() {
   }
 
   const handleCopilotSendMessage = async (message: string) => {
-    if ((isActiveTabLive && isRunning) || !message.trim()) return
+    if (isRunning || !message.trim()) return
 
     const userMessage = {
       id: `msg_${Date.now()}`,
@@ -423,21 +284,12 @@ export default function Home() {
 
     const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
-    // Mark this tab as live
-    setLiveTab(activeTabId)
-    updateTab(activeTabId, {
-      isRunning: true,
-      status: 'active',
-      currentRunId: taskId,
-    })
-
     try {
       await connect(taskId, message, config)
     } catch (error) {
       console.error('Failed to start task:', error)
       addConsoleOutput(`Error: Failed to connect to backend`)
       setIsRunning(false)
-      updateTab(activeTabId, { isRunning: false, status: 'failed' })
       const errorMessage = {
         id: `msg_${Date.now()}`,
         role: 'system' as const,
@@ -491,7 +343,7 @@ export default function Home() {
   }
 
   const handleResumeSessionFromList = async (sessionId: string, mode?: string) => {
-    if (isActiveTabLive && isRunning) return
+    if (isRunning) return
 
     try {
       const response = await fetch(getApiUrl(`/api/sessions/${sessionId}`))
@@ -505,7 +357,6 @@ export default function Home() {
       if (sessionMode === 'copilot') {
         setIsCopilotMode(true)
         setCopilotSessionId(sessionId)
-        updateTab(activeTabId, { isCopilotMode: true, mode: 'copilot' })
         if (sessionData.config) {
           setCopilotConfig(prev => ({
             ...prev,
@@ -548,9 +399,6 @@ export default function Home() {
         clearConsole()
         setResults(null)
         setStartTime(Date.now())
-
-        setLiveTab(activeTabId)
-        updateTab(activeTabId, { isRunning: true, status: 'active', mode: sessionMode })
 
         const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
         await connect(taskId, taskDescription, resumeConfig)
@@ -685,18 +533,18 @@ export default function Home() {
 
   // Add completed workflow to history
   useEffect(() => {
-    if (!displayIsRunning && displayResults && currentRunId) {
+    if (!isRunning && results && currentRunId) {
       const newWorkflow: WorkflowRow = {
         id: currentRunId,
         session_id: 'session_1',
-        task_description: displayResults.task || 'Task completed',
-        status: displayWorkflowStatus === 'failed' ? 'failed' : 'completed',
-        agent: displayResults.agent || 'engineer',
-        model: displayResults.model || 'gpt-4o',
+        task_description: results.task || 'Task completed',
+        status: workflowStatus === 'failed' ? 'failed' : 'completed',
+        agent: results.agent || 'engineer',
+        model: results.model || 'gpt-4o',
         started_at: startTime ? new Date(startTime).toISOString() : undefined,
         completed_at: new Date().toISOString(),
-        total_cost: displayResults.total_cost || 0,
-        step_count: displayDag?.nodes.length || 1,
+        total_cost: results.total_cost || 0,
+        step_count: dagData?.nodes.length || 1,
       }
       setWorkflowHistory(prev => {
         if (prev.some(w => w.id === currentRunId)) return prev
@@ -715,7 +563,7 @@ export default function Home() {
         setCurrentBranchId(mainBranch.branch_id)
       }
     }
-  }, [displayIsRunning, displayResults, currentRunId, displayWorkflowStatus, startTime, displayDag, branches.length])
+  }, [isRunning, results, currentRunId, workflowStatus, startTime, dagData, branches.length])
 
   const handleOpenDirectory = useCallback((path: string) => {
     const mockResults = {
@@ -729,13 +577,8 @@ export default function Home() {
   // Handle mode launch from gallery
   const handleLaunchMode = (modeId: string) => {
     setSelectedMode(modeId)
-    updateTab(activeTabId, {
-      mode: modeId,
-      name: getModeDisplayName(modeId),
-    })
     if (modeId === 'copilot') {
       setIsCopilotMode(true)
-      updateTab(activeTabId, { isCopilotMode: true })
       setCopilotConfig(prev => ({
         ...prev,
         enablePlanning: true,
@@ -749,7 +592,6 @@ export default function Home() {
   const handleBackToGallery = () => {
     setSelectedMode(null)
     setIsCopilotMode(false)
-    updateTab(activeTabId, { mode: null, isCopilotMode: false })
   }
 
   return (
@@ -763,8 +605,8 @@ export default function Home() {
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-full">
                 <div className="lg:col-span-2 h-full overflow-hidden rounded-lg border border-gray-700">
                   <CopilotView
-                    consoleOutput={displayConsole}
-                    isRunning={displayIsRunning}
+                    consoleOutput={consoleOutput}
+                    isRunning={isRunning}
                     onSendMessage={handleCopilotSendMessage}
                     onStop={handleStopTask}
                     onClearSession={handleClearCopilotSession}
@@ -781,9 +623,9 @@ export default function Home() {
                       className="px-4 py-2 text-sm font-medium text-purple-400 border-b-2 border-purple-400 flex items-center gap-2"
                     >
                       Workflow
-                      {displayDag && displayDag.nodes.length > 0 && (
+                      {dagData && dagData.nodes.length > 0 && (
                         <span className="px-1.5 py-0.5 text-xs bg-purple-500/20 text-purple-400 rounded-full">
-                          {displayDag.nodes.length}
+                          {dagData.nodes.length}
                         </span>
                       )}
                     </button>
@@ -796,14 +638,14 @@ export default function Home() {
                   </div>
                   <div className="flex-1 min-h-0 overflow-auto">
                     <WorkflowDashboard
-                      status={displayWorkflowStatus || (displayIsRunning ? 'executing' : 'draft')}
-                      dagData={displayDag}
+                      status={workflowStatus || (isRunning ? 'executing' : 'draft')}
+                      dagData={dagData}
                       elapsedTime={elapsedTime}
                       branches={branches}
                       currentBranchId={currentBranchId}
                       workflowHistory={workflowHistory}
-                      costSummary={displayCostSummary}
-                      costTimeSeries={displayCostTimeSeries}
+                      costSummary={costSummary}
+                      costTimeSeries={costTimeSeries}
                       filesUpdatedCounter={filesUpdatedCounter}
                       onPause={handlePause}
                       onResume={handleResume}
@@ -849,7 +691,7 @@ export default function Home() {
               >
                 {getModeDisplayName(selectedMode)}
               </span>
-              {displayIsRunning && (
+              {isRunning && (
                 <span className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--mars-color-success)' }}>
                   <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: 'var(--mars-color-success)' }} />
                   Running {elapsedTime}
@@ -863,7 +705,7 @@ export default function Home() {
                 <TaskInput
                   onSubmit={handleTaskSubmit}
                   onStop={handleStopTask}
-                  isRunning={displayIsRunning}
+                  isRunning={isRunning}
                   isConnecting={isConnecting}
                   onOpenDirectory={handleOpenDirectory}
                   defaultMode={selectedMode}
@@ -876,16 +718,16 @@ export default function Home() {
 
       {/* Bottom Panel - Console + Workflow (always visible, collapsible) */}
       <BottomPanel
-        consoleOutput={displayConsole}
-        isRunning={displayIsRunning}
+        consoleOutput={consoleOutput}
+        isRunning={isRunning}
         onClearConsole={clearConsole}
-        pendingApproval={isActiveTabLive ? pendingApproval : null}
+        pendingApproval={pendingApproval}
         onApprovalResolve={handleApprovalResolve}
-        workflowStatus={displayWorkflowStatus}
-        dagData={displayDag}
+        workflowStatus={workflowStatus}
+        dagData={dagData}
         elapsedTime={elapsedTime}
-        costSummary={displayCostSummary}
-        costTimeSeries={displayCostTimeSeries}
+        costSummary={costSummary}
+        costTimeSeries={costTimeSeries}
         filesUpdatedCounter={filesUpdatedCounter}
         branches={branches}
         currentBranchId={currentBranchId}

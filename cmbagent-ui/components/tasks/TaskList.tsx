@@ -10,6 +10,7 @@ import {
   Code2,
   ClipboardList,
   Compass,
+  FileText,
 } from 'lucide-react'
 import TaskCard from './TaskCard'
 import { Button, Badge, EmptyState } from '@/components/core'
@@ -72,6 +73,15 @@ const TASKS: TaskData[] = [
     lastRun: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
     icon: <Compass className="w-5 h-5" />,
     color: 'from-cyan-500 to-blue-500',
+  },
+  {
+    id: 'denario-research',
+    name: 'Research Paper',
+    description: 'Generate a research paper through interactive idea, method, experiment, and writing stages',
+    mode: 'denario-research',
+    status: 'active',
+    icon: <FileText className="w-5 h-5" />,
+    color: 'from-violet-500 to-indigo-500',
   },
 ]
 

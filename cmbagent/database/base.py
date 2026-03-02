@@ -106,6 +106,12 @@ def _apply_schema_migrations(engine):
         ],
         "cost_records": [
             ("agent_name", "VARCHAR(200)"),
+            ("parent_run_id", "VARCHAR(36)"),
+        ],
+        "workflow_runs": [
+            ("parent_run_id", "VARCHAR(36)"),
+            ("stage_number", "INTEGER"),
+            ("stage_name", "VARCHAR(100)"),
         ],
     }
 
@@ -129,7 +135,7 @@ def init_database():
         DAGNode, DAGEdge, Checkpoint, Message,
         CostRecord, ApprovalRequest, ActiveConnection, Branch,
         RacingGroup, WorkflowMetric, File, StateHistory,
-        ExecutionEvent,
+        ExecutionEvent, TaskStage,
     )
 
     engine = get_engine()

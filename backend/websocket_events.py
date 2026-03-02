@@ -67,6 +67,12 @@ class WebSocketEventType(str, Enum):
     # Error events
     ERROR_OCCURRED = "error_occurred"
 
+    # Task stage events (Denario integration)
+    TASK_STAGE_STARTED = "task_stage_started"
+    TASK_STAGE_COMPLETED = "task_stage_completed"
+    TASK_STAGE_FAILED = "task_stage_failed"
+    TASK_PROGRESS = "task_progress"
+
     # Heartbeat
     HEARTBEAT = "heartbeat"
     PONG = "pong"
@@ -239,6 +245,27 @@ class ErrorOccurredData(BaseModel):
     traceback: Optional[str] = None
 
 
+class TaskStageStartedData(BaseModel):
+    """Data for task_stage_started event"""
+    stage_number: int
+    stage_name: str
+    total_stages: int
+
+
+class TaskStageCompletedData(BaseModel):
+    """Data for task_stage_completed event"""
+    stage_number: int
+    stage_name: str
+    output_summary: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskProgressData(BaseModel):
+    """Data for task_progress event"""
+    completed: int
+    total: int
+    percent: int = 0
+
+
 # Helper functions for creating events
 
 def create_workflow_started_event(run_id: str, task_description: str, agent: str, model: str, work_dir: Optional[str] = None) -> WebSocketEvent:
@@ -336,5 +363,50 @@ def create_event_captured_event(
             timestamp=timestamp,
             execution_order=execution_order,
             depth=depth
+        ).dict()
+    )
+
+
+def create_task_stage_started_event(
+    run_id: str, stage_number: int, stage_name: str, total_stages: int
+) -> WebSocketEvent:
+    """Create a task_stage_started event"""
+    return WebSocketEvent(
+        event_type=WebSocketEventType.TASK_STAGE_STARTED,
+        run_id=run_id,
+        data=TaskStageStartedData(
+            stage_number=stage_number,
+            stage_name=stage_name,
+            total_stages=total_stages,
+        ).dict()
+    )
+
+
+def create_task_stage_completed_event(
+    run_id: str, stage_number: int, stage_name: str, output_summary: Dict[str, Any] = None
+) -> WebSocketEvent:
+    """Create a task_stage_completed event"""
+    return WebSocketEvent(
+        event_type=WebSocketEventType.TASK_STAGE_COMPLETED,
+        run_id=run_id,
+        data=TaskStageCompletedData(
+            stage_number=stage_number,
+            stage_name=stage_name,
+            output_summary=output_summary or {},
+        ).dict()
+    )
+
+
+def create_task_progress_event(
+    run_id: str, completed: int, total: int
+) -> WebSocketEvent:
+    """Create a task_progress event"""
+    return WebSocketEvent(
+        event_type=WebSocketEventType.TASK_PROGRESS,
+        run_id=run_id,
+        data=TaskProgressData(
+            completed=completed,
+            total=total,
+            percent=round(completed / total * 100) if total else 0,
         ).dict()
     )

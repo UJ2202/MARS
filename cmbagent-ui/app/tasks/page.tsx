@@ -6,8 +6,9 @@ import AIWeeklyTaskEnhanced from '@/components/tasks/AIWeeklyTaskEnhanced'
 import ReleaseNotesTask from '@/components/tasks/ReleaseNotesTask'
 import CodeReviewTask from '@/components/tasks/CodeReviewTask'
 import ProductDiscoveryTask from '@/components/tasks/ProductDiscoveryTask'
+import DenarioResearchTask from '@/components/tasks/DenarioResearchTask'
 
-type ActiveTask = 'ai-weekly' | 'release-notes' | 'code-review' | 'product-discovery' | null
+type ActiveTask = 'ai-weekly' | 'release-notes' | 'code-review' | 'product-discovery' | 'denario-research' | null
 
 export default function TasksPage() {
   const [activeTask, setActiveTask] = useState<ActiveTask>(null)
@@ -24,6 +25,9 @@ export default function TasksPage() {
   }
   if (activeTask === 'product-discovery') {
     return <ProductDiscoveryTask onBack={() => setActiveTask(null)} />
+  }
+  if (activeTask === 'denario-research') {
+    return <DenarioResearchTask onBack={() => setActiveTask(null)} />
   }
 
   // Default: show task list

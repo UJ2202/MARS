@@ -105,3 +105,6 @@ cmbdir
 venv
 .env*
 .claude*
+.env
+.env.local
+.env.*.local

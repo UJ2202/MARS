@@ -7,7 +7,7 @@ import mimetypes
 import shutil
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
 from models.schemas import FileItem, DirectoryListing
@@ -260,3 +260,68 @@ async def serve_image(path: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error serving image: {str(e)}")
+
+
+# Allowed extensions for file upload
+_UPLOAD_ALLOWED_EXTENSIONS = {
+    '.csv', '.txt', '.md', '.json', '.fits', '.npy',
+    '.h5', '.hdf5', '.dat', '.tsv', '.xlsx', '.xls',
+    '.png', '.jpg', '.jpeg', '.pdf',
+}
+
+
+@router.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    task_id: str = Form(...),
+    subfolder: str = Form("input_files"),
+):
+    """Upload a file for a Denario research task.
+
+    Files are stored in {work_dir}/denario_tasks/{task_id}/{subfolder}/.
+    """
+    # Validate extension
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in _UPLOAD_ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File extension '{ext}' not allowed. Allowed: {sorted(_UPLOAD_ALLOWED_EXTENSIONS)}"
+        )
+
+    # Prevent path traversal in filename
+    safe_name = os.path.basename(file.filename or "upload")
+    if not safe_name or safe_name.startswith('.'):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Prevent path traversal in subfolder
+    safe_subfolder = os.path.normpath(subfolder).lstrip(os.sep)
+    if ".." in safe_subfolder:
+        raise HTTPException(status_code=400, detail="Invalid subfolder path")
+
+    # Build target directory
+    base_work_dir = os.path.expanduser(settings.default_work_dir)
+    target_dir = os.path.join(base_work_dir, "denario_tasks", task_id, safe_subfolder)
+    os.makedirs(target_dir, exist_ok=True)
+
+    target_path = os.path.join(target_dir, safe_name)
+
+    # Read and validate size
+    contents = await file.read()
+    max_size = settings.max_file_size_mb * 1024 * 1024
+    if len(contents) > max_size:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max size: {settings.max_file_size_mb}MB"
+        )
+
+    # Write file
+    with open(target_path, "wb") as f:
+        f.write(contents)
+
+    return {
+        "filename": safe_name,
+        "path": target_path,
+        "size": len(contents),
+        "task_id": task_id,
+        "subfolder": safe_subfolder,
+    }

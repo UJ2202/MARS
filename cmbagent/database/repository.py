@@ -11,6 +11,7 @@ from cmbagent.database.models import (
     DAGNode, DAGEdge, Checkpoint, Message,
     CostRecord, ApprovalRequest, Branch,
     WorkflowMetric, File, ExecutionEvent,
+    TaskStage,
 )
 
 
@@ -407,6 +408,20 @@ class CostRepository(BaseRepository):
             "record_count": len(records),
         }
 
+    def get_task_total_cost(self, parent_run_id: str) -> Dict[str, Any]:
+        """Get total cost for a task including all child stage runs."""
+        records = self.db.query(CostRecord).filter(
+            (CostRecord.run_id == parent_run_id) |
+            (CostRecord.parent_run_id == parent_run_id)
+        ).all()
+        total_cost = sum(r.cost_usd for r in records)
+        total_tokens = sum(r.total_tokens for r in records)
+        return {
+            "total_cost_usd": float(total_cost),
+            "total_tokens": total_tokens,
+            "record_count": len(records),
+        }
+
     def get_session_cost(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> Dict[str, Any]:
         """Get total cost for the session."""
         query = self.db.query(CostRecord).filter(CostRecord.session_id == self.session_id)
@@ -433,6 +448,65 @@ class CostRepository(BaseRepository):
             "total_tokens": total_tokens,
             "record_count": len(records),
             "by_model": by_model,
+        }
+
+
+class TaskStageRepository(BaseRepository):
+    """Repository for task stage operations."""
+
+    def create_stage(self, parent_run_id: str, stage_number: int, stage_name: str, **kwargs) -> TaskStage:
+        """Create a new task stage."""
+        stage = TaskStage(
+            parent_run_id=parent_run_id,
+            stage_number=stage_number,
+            stage_name=stage_name,
+            **kwargs
+        )
+        self.db.add(stage)
+        self.db.commit()
+        return stage
+
+    def get_stage(self, stage_id: str) -> Optional[TaskStage]:
+        """Get stage by ID."""
+        return self.db.query(TaskStage).filter(TaskStage.id == stage_id).first()
+
+    def list_stages(self, parent_run_id: str) -> List[TaskStage]:
+        """List all stages for a parent run, ordered by stage_number."""
+        return self.db.query(TaskStage).filter(
+            TaskStage.parent_run_id == parent_run_id
+        ).order_by(TaskStage.stage_number).all()
+
+    def get_current_stage(self, parent_run_id: str) -> Optional[TaskStage]:
+        """Get the currently running stage."""
+        return self.db.query(TaskStage).filter(
+            TaskStage.parent_run_id == parent_run_id,
+            TaskStage.status == "running"
+        ).first()
+
+    def update_stage_status(self, stage_id: str, status: str, **kwargs):
+        """Update stage status and related fields."""
+        stage = self.get_stage(stage_id)
+        if stage:
+            stage.status = status
+            if status == "running" and not stage.started_at:
+                stage.started_at = datetime.now(timezone.utc)
+            if status in ("completed", "failed"):
+                stage.completed_at = datetime.now(timezone.utc)
+            for key, value in kwargs.items():
+                if hasattr(stage, key):
+                    setattr(stage, key, value)
+            self.db.commit()
+
+    def get_task_progress(self, parent_run_id: str) -> Dict[str, Any]:
+        """Get progress info for a task."""
+        stages = self.list_stages(parent_run_id)
+        total = len(stages)
+        completed = sum(1 for s in stages if s.status == "completed")
+        return {
+            "total_stages": total,
+            "completed_stages": completed,
+            "progress_percent": (completed / total * 100) if total > 0 else 0,
+            "current_stage": next((s.stage_name for s in stages if s.status == "running"), None),
         }
 
 

@@ -4,8 +4,11 @@ Pydantic models and schemas for API request/response validation.
 
 from models.schemas import (
     # Task models
+    TaskType,
     TaskRequest,
     TaskResponse,
+    StageInfo,
+    TaskStatusResponse,
     # File models
     FileItem,
     DirectoryListing,
@@ -41,8 +44,11 @@ from models.copilot_schemas import (
 
 __all__ = [
     # Task models
+    "TaskType",
     "TaskRequest",
     "TaskResponse",
+    "StageInfo",
+    "TaskStatusResponse",
     # File models
     "FileItem",
     "DirectoryListing",
