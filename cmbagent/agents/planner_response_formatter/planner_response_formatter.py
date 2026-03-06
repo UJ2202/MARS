@@ -30,10 +30,10 @@ class PlannerResponse(BaseModel):
 {plan_output}
         """
         return message
-        
+
 
 class PlannerResponseFormatterAgent(BaseAgent):
-    
+
     def __init__(self, llm_config=None, **kwargs):
 
         agent_id = os.path.splitext(os.path.abspath(__file__))[0]
@@ -53,10 +53,9 @@ class PlannerResponseFormatterAgent(BaseAgent):
 
 
 
-
 def _parse_plan_string(plan_str: str) -> List[Dict[str, Any]]:
     """
-    Convert the markdown‐style plan string produced by PlannerResponse.format()
+    Convert the markdown-style plan string produced by PlannerResponse.format()
     back into a list[dict] matching the Subtasks model.
     """
     lines = [ln.rstrip() for ln in plan_str.splitlines()]
@@ -75,7 +74,7 @@ def _parse_plan_string(plan_str: str) -> List[Dict[str, Any]]:
             in_instr = False
             continue
 
-        # --- sub‑task -------------------------------------------------------
+        # --- sub-task -------------------------------------------------------
         if ln_stripped.startswith("* sub-task:"):
             if current is None:    # defensive
                 current = {"bullet_points": []}
@@ -130,19 +129,31 @@ def save_final_plan(final_context: Dict[str, Any], work_dir: str) -> Path:
 
     plan_obj = final_context["final_plan"]
 
-    # ---- Case 1: a Pydantic object ----------------------------------------
+    # ---- Case 1: a Pydantic object ----------------------------------------
     if hasattr(plan_obj, "model_dump"):          # Pydantic v2
         plan_dict = plan_obj.model_dump()
     elif hasattr(plan_obj, "dict"):              # Pydantic v1
         plan_dict = plan_obj.dict()
 
-    # ---- Case 2: already a dict / list ------------------------------------
+    # ---- Case 2: already a dict / list ------------------------------------
     elif isinstance(plan_obj, (dict, list)):
         plan_dict = {"sub_tasks": plan_obj} if isinstance(plan_obj, list) else plan_obj
 
-    # ---- Case 3: formatted string -----------------------------------------
+    # ---- Case 3: string (JSON or formatted markdown) ----------------------
     elif isinstance(plan_obj, str):
-        plan_dict = {"sub_tasks": _parse_plan_string(plan_obj)}
+        # Try JSON first (structured output from planner_response_formatter)
+        try:
+            parsed = json.loads(plan_obj)
+            if isinstance(parsed, dict) and "sub_tasks" in parsed:
+                plan_dict = parsed
+            elif isinstance(parsed, list):
+                plan_dict = {"sub_tasks": parsed}
+            else:
+                # Valid JSON but unexpected structure, fall back to markdown parse
+                plan_dict = {"sub_tasks": _parse_plan_string(plan_obj)}
+        except (json.JSONDecodeError, TypeError):
+            # Not JSON, try markdown format
+            plan_dict = {"sub_tasks": _parse_plan_string(plan_obj)}
     else:
         raise TypeError(
             '"final_plan" must be a PlannerResponse, dict/list, or formatted string'
@@ -154,4 +165,3 @@ def save_final_plan(final_context: Dict[str, Any], work_dir: str) -> Path:
         json.dump(plan_dict, fp, ensure_ascii=False, indent=4)
 
     return json_path
-

@@ -1,6 +1,7 @@
 'use client'
 
-import { usePathname, useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import {
   LayoutGrid,
   ListTodo,
@@ -22,7 +23,6 @@ const navItems = [
 
 export default function SideNav({ collapsed, onToggle }: SideNavProps) {
   const pathname = usePathname()
-  const router = useRouter()
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/'
@@ -45,9 +45,10 @@ export default function SideNav({ collapsed, onToggle }: SideNavProps) {
           const Icon = item.icon
           const active = isActive(item.href)
           return (
-            <button
+            <Link
               key={item.id}
-              onClick={() => router.push(item.href)}
+              href={item.href}
+              prefetch={true}
               className={`
                 w-full flex items-center gap-3 px-4 py-3 text-sm font-medium
                 transition-colors duration-mars-fast
@@ -61,7 +62,7 @@ export default function SideNav({ collapsed, onToggle }: SideNavProps) {
             >
               <Icon className="w-5 h-5 flex-shrink-0" />
               {!collapsed && <span>{item.label}</span>}
-            </button>
+            </Link>
           )
         })}
       </div>

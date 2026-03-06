@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useCallback } from 'react'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Square, Trash2 } from 'lucide-react'
 import { Button } from '@/components/core'
 import Stepper from '@/components/core/Stepper'
 import type { StepperStep } from '@/components/core/Stepper'
@@ -29,6 +29,8 @@ export default function DenarioResearchTask({ onBack, resumeTaskId }: DenarioRes
     isExecuting,
     setCurrentStep,
     resumeTask,
+    stopTask,
+    deleteTask,
     clearError,
   } = hook
 
@@ -80,6 +82,16 @@ export default function DenarioResearchTask({ onBack, resumeTaskId }: DenarioRes
     }
   }, [currentStep, isExecuting, setCurrentStep])
 
+  const handleStop = useCallback(async () => {
+    await stopTask()
+  }, [stopTask])
+
+  const handleDelete = useCallback(async () => {
+    if (!confirm('Delete this task? This will remove all data and files.')) return
+    await deleteTask()
+    onBack()
+  }, [deleteTask, onBack])
+
   return (
     <div className="p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -114,6 +126,30 @@ export default function DenarioResearchTask({ onBack, resumeTaskId }: DenarioRes
             }}
           >
             Cost: ${taskState.total_cost_usd.toFixed(4)}
+          </div>
+        )}
+        {/* Task actions */}
+        {taskId && (
+          <div className={`flex items-center gap-2 ${taskState?.total_cost_usd ? '' : 'ml-auto'}`}>
+            {isExecuting && (
+              <Button
+                onClick={handleStop}
+                variant="secondary"
+                size="sm"
+              >
+                <Square className="w-3.5 h-3.5 mr-1" />
+                Stop
+              </Button>
+            )}
+            <Button
+              onClick={handleDelete}
+              variant="secondary"
+              size="sm"
+              disabled={isExecuting}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" />
+              Delete
+            </Button>
           </div>
         )}
       </div>

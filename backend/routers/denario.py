@@ -38,10 +38,10 @@ router = APIRouter(prefix="/api/denario", tags=["Denario"])
 
 # Stage definitions
 STAGE_DEFS = [
-    {"number": 1, "name": "idea_generation", "phase_type": "denario_idea", "shared_key": "research_idea", "file": "idea.md"},
-    {"number": 2, "name": "method_development", "phase_type": "denario_method", "shared_key": "methodology", "file": "methods.md"},
-    {"number": 3, "name": "experiment_execution", "phase_type": "denario_experiment", "shared_key": "results", "file": "results.md"},
-    {"number": 4, "name": "paper_generation", "phase_type": "denario_paper", "shared_key": None, "file": None},
+    {"number": 1, "name": "idea_generation", "shared_key": "research_idea", "file": "idea.md"},
+    {"number": 2, "name": "method_development", "shared_key": "methodology", "file": "methods.md"},
+    {"number": 3, "name": "experiment_execution", "shared_key": "results", "file": "results.md"},
+    {"number": 4, "name": "paper_generation", "shared_key": None, "file": None},
 ]
 
 
@@ -404,106 +404,30 @@ async def _run_phase(
     shared_state: Dict[str, Any],
     config_overrides: Dict[str, Any],
 ):
-    """Execute a Denario phase in the background."""
-    from cmbagent.phases.base import PhaseContext, PhaseStatus
+    """Execute a Denario phase in the background.
 
+    Stages 1-3 call planning_and_control_context_carryover() directly
+    with full callbacks (cost tracking, event logging, structured print).
+    Stage 4 uses DenarioPaperPhase (LangGraph).
+    """
     sdef = STAGE_DEFS[stage_num - 1]
-    phase_type = sdef["phase_type"]
     buf_key = f"{task_id}:{stage_num}"
 
     # Initialize console buffer
     with _console_lock:
         _console_buffers[buf_key] = [f"Starting {sdef['name']}..."]
 
-    # Import phase classes
-    phase_classes = {
-        "denario_idea": "cmbagent.task_framework.phases.idea.DenarioIdeaPhase",
-        "denario_method": "cmbagent.task_framework.phases.method.DenarioMethodPhase",
-        "denario_experiment": "cmbagent.task_framework.phases.experiment.DenarioExperimentPhase",
-        "denario_paper": "cmbagent.task_framework.phases.paper.DenarioPaperPhase",
-    }
-
     try:
-        # Dynamic import of the phase class
-        module_path, class_name = phase_classes[phase_type].rsplit(".", 1)
-        import importlib
-        module = importlib.import_module(module_path)
-        PhaseClass = getattr(module, class_name)
-
-        # Build config
-        config_kwargs = {"parent_run_id": task_id, **config_overrides}
-        if phase_type == "denario_idea":
-            config_kwargs["data_description"] = shared_state.get("data_description") or task_description
-        phase = PhaseClass(PhaseClass.config_class(**config_kwargs))
-
-        # Build PhaseContext
-        context = PhaseContext(
-            workflow_id=f"denario-{task_id}",
-            run_id=task_id,
-            phase_id=f"stage-{stage_num}",
-            task=task_description,
-            work_dir=work_dir,
-            shared_state=shared_state,
-            api_keys={},
-            callbacks=None,
-        )
-
-        with _console_lock:
-            _console_buffers.setdefault(buf_key, []).append(
-                f"Phase {phase_type} initialized, executing..."
+        if stage_num <= 3:
+            await _run_planning_control_stage(
+                task_id, stage_num, sdef, buf_key,
+                task_description, work_dir, shared_state, config_overrides,
             )
-
-        # Run the phase with stdout/stderr capture
-        # The phase calls planning_and_control_context_carryover via asyncio.to_thread,
-        # which runs in a thread pool. We capture stdout from that thread.
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-        capture_out = _ConsoleCapture(buf_key, original_stdout)
-        capture_err = _ConsoleCapture(buf_key, original_stderr)
-
-        try:
-            sys.stdout = capture_out
-            sys.stderr = capture_err
-            result = await phase.execute(context)
-        finally:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
-
-        # Persist result to DB
-        db = _get_db()
-        try:
-            sid = _get_session_id_for_task(task_id, db)
-            repo = _get_stage_repo(db, session_id=sid)
-            stages = repo.list_stages(parent_run_id=task_id)
-            stage = next((s for s in stages if s.stage_number == stage_num), None)
-            if stage:
-                if result.status == PhaseStatus.COMPLETED:
-                    repo.update_stage_status(
-                        stage.id,
-                        "completed",
-                        output_data=result.context.output_data,
-                        output_files=list((result.context.output_data or {}).get("artifacts", {}).values()),
-                    )
-                    logger.info("denario_stage_completed task=%s stage=%d", task_id, stage_num)
-                    with _console_lock:
-                        _console_buffers.setdefault(buf_key, []).append(
-                            f"Stage {stage_num} ({sdef['name']}) completed successfully."
-                        )
-                else:
-                    repo.update_stage_status(
-                        stage.id,
-                        "failed",
-                        error_message=result.error or "Phase failed",
-                    )
-                    logger.error("denario_stage_failed task=%s stage=%d error=%s", task_id, stage_num, result.error)
-                    with _console_lock:
-                        _console_buffers.setdefault(buf_key, []).append(
-                            f"Stage {stage_num} failed: {result.error}"
-                        )
-            db.commit()
-        finally:
-            db.close()
-
+        else:
+            await _run_paper_stage(
+                task_id, stage_num, sdef, buf_key,
+                task_description, work_dir, shared_state, config_overrides,
+            )
     except Exception as e:
         logger.error("denario_phase_exception task=%s stage=%d error=%s", task_id, stage_num, e, exc_info=True)
         with _console_lock:
@@ -527,6 +451,344 @@ async def _run_phase(
         _running_tasks.pop(bg_key, None)
         # Don't clear buffer here - WS endpoint needs to read remaining lines
         # Buffer is cleared after WS sends final event or after a timeout
+
+
+async def _run_planning_control_stage(
+    task_id: str,
+    stage_num: int,
+    sdef: dict,
+    buf_key: str,
+    task_description: str,
+    work_dir: str,
+    shared_state: Dict[str, Any],
+    config_overrides: Dict[str, Any],
+):
+    """Run stages 1-3 by calling planning_and_control_context_carryover directly.
+
+    Sets up full callback infrastructure (CostCollector, ExecutionEvent logging,
+    structured print callbacks) before calling the function, matching the
+    observability of the standard task execution flow in task_executor.py.
+    """
+    from cmbagent.workflows.planning_control import planning_and_control_context_carryover
+    from cmbagent.callbacks import merge_callbacks, create_print_callbacks, WorkflowCallbacks
+    from cmbagent.task_framework import stage_helpers
+
+    # ── 1. Set up DB session for cost + event tracking ──
+    db = _get_db()
+    session_id = _get_session_id_for_task(task_id, db)
+
+    cost_collector = None
+    event_repo = None
+    try:
+        from backend.execution.cost_collector import CostCollector
+        cost_collector = CostCollector(
+            db_session=db,
+            session_id=session_id,
+            run_id=task_id,
+        )
+    except Exception as exc:
+        logger.warning("denario_cost_collector_init_failed error=%s", exc)
+
+    try:
+        from cmbagent.database.repository import EventRepository
+        event_repo = EventRepository(db, session_id)
+    except Exception as exc:
+        logger.warning("denario_event_repo_init_failed error=%s", exc)
+
+    # ── 2. Build event tracking callbacks ──
+    execution_order = [0]  # mutable counter for ordering
+
+    def on_agent_msg(agent, role, content, metadata):
+        if not event_repo:
+            return
+        try:
+            execution_order[0] += 1
+            event_repo.create_event(
+                run_id=task_id,
+                event_type="agent_call",
+                execution_order=execution_order[0],
+                agent_name=agent,
+                status="completed",
+                inputs={"role": role, "message": (content or "")[:500]},
+                outputs={"full_content": (content or "")[:3000]},
+                meta={"stage_num": stage_num, "stage_name": sdef["name"]},
+            )
+        except Exception as exc:
+            logger.debug("denario_event_create_failed error=%s", exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    def on_code_exec(agent, code, language, result):
+        if not event_repo:
+            return
+        try:
+            execution_order[0] += 1
+            event_repo.create_event(
+                run_id=task_id,
+                event_type="code_exec",
+                execution_order=execution_order[0],
+                agent_name=agent,
+                status="completed",
+                inputs={"language": language, "code": (code or "")[:2000]},
+                outputs={"result": (str(result) if result else "")[:2000]},
+                meta={"stage_num": stage_num, "stage_name": sdef["name"]},
+            )
+        except Exception as exc:
+            logger.debug("denario_code_event_failed error=%s", exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    def on_tool(agent, tool_name, arguments, result):
+        if not event_repo:
+            return
+        try:
+            import json as _json
+            execution_order[0] += 1
+            args_str = _json.dumps(arguments, default=str)[:500] if isinstance(arguments, dict) else str(arguments)[:500]
+            event_repo.create_event(
+                run_id=task_id,
+                event_type="tool_call",
+                execution_order=execution_order[0],
+                agent_name=agent,
+                status="completed",
+                inputs={"tool": tool_name, "args": args_str},
+                outputs={"result": (str(result) if result else "")[:2000]},
+                meta={"stage_num": stage_num, "stage_name": sdef["name"]},
+            )
+        except Exception as exc:
+            logger.debug("denario_tool_event_failed error=%s", exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    def on_cost_update(cost_data):
+        if cost_collector:
+            try:
+                cost_collector.collect_from_callback(cost_data)
+            except Exception as exc:
+                logger.debug("denario_cost_callback_failed error=%s", exc)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+    event_tracking_callbacks = WorkflowCallbacks(
+        on_agent_message=on_agent_msg,
+        on_code_execution=on_code_exec,
+        on_tool_call=on_tool,
+        on_cost_update=on_cost_update,
+    )
+
+    workflow_callbacks = merge_callbacks(
+        create_print_callbacks(),
+        event_tracking_callbacks,
+    )
+
+    # ── 3. Build stage-specific kwargs ──
+    data_description = shared_state.get("data_description") or task_description
+
+    if stage_num == 1:
+        kwargs = stage_helpers.build_idea_kwargs(
+            data_description=data_description,
+            work_dir=work_dir,
+            parent_run_id=task_id,
+            config_overrides=config_overrides,
+        )
+    elif stage_num == 2:
+        kwargs = stage_helpers.build_method_kwargs(
+            data_description=data_description,
+            research_idea=shared_state["research_idea"],
+            work_dir=work_dir,
+            parent_run_id=task_id,
+            config_overrides=config_overrides,
+        )
+    elif stage_num == 3:
+        kwargs = stage_helpers.build_experiment_kwargs(
+            data_description=data_description,
+            research_idea=shared_state["research_idea"],
+            methodology=shared_state["methodology"],
+            work_dir=work_dir,
+            parent_run_id=task_id,
+            config_overrides=config_overrides,
+        )
+
+    # Inject callbacks
+    kwargs["callbacks"] = workflow_callbacks
+
+    # Extract task arg (planning_and_control takes it as first positional arg)
+    task_arg = kwargs.pop("task")
+
+    with _console_lock:
+        _console_buffers.setdefault(buf_key, []).append(
+            f"Stage {stage_num} ({sdef['name']}) initialized, executing..."
+        )
+
+    # ── 4. Run with stdout/stderr capture ──
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    capture_out = _ConsoleCapture(buf_key, original_stdout)
+    capture_err = _ConsoleCapture(buf_key, original_stderr)
+
+    try:
+        sys.stdout = capture_out
+        sys.stderr = capture_err
+        results = await asyncio.to_thread(
+            planning_and_control_context_carryover,
+            task_arg,
+            **kwargs,
+        )
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+
+    # ── 5. Extract results + save files ──
+    if stage_num == 1:
+        research_idea = stage_helpers.extract_idea_result(results)
+        idea_path = stage_helpers.save_idea(research_idea, work_dir)
+        output_data = stage_helpers.build_idea_output(
+            research_idea, data_description, idea_path, results["chat_history"],
+        )
+    elif stage_num == 2:
+        methodology = stage_helpers.extract_method_result(results)
+        methods_path = stage_helpers.save_method(methodology, work_dir)
+        output_data = stage_helpers.build_method_output(
+            shared_state["research_idea"], data_description,
+            methodology, methods_path, results["chat_history"],
+        )
+    elif stage_num == 3:
+        experiment_results, plot_paths = stage_helpers.extract_experiment_result(results)
+        results_path, plots_dir, final_plot_paths = stage_helpers.save_experiment(
+            experiment_results, plot_paths, work_dir,
+        )
+        output_data = stage_helpers.build_experiment_output(
+            shared_state["research_idea"], data_description,
+            shared_state["methodology"], experiment_results,
+            final_plot_paths, results_path, plots_dir, results["chat_history"],
+        )
+
+    # ── 6. Safety net: scan work_dir for cost files written to disk ──
+    if cost_collector:
+        try:
+            cost_collector.collect_from_work_dir(work_dir)
+        except Exception as exc:
+            logger.debug("denario_cost_work_dir_failed error=%s", exc)
+
+    # Close the callback DB session — it may be in a bad state after
+    # long-running callbacks.  Use a fresh session for the persist step.
+    try:
+        db.close()
+    except Exception:
+        pass
+
+    # ── 7. Persist to DB (fresh session) ──
+    persist_db = _get_db()
+    try:
+        repo = _get_stage_repo(persist_db, session_id=session_id)
+        stages = repo.list_stages(parent_run_id=task_id)
+        stage = next((s for s in stages if s.stage_number == stage_num), None)
+        if stage:
+            repo.update_stage_status(
+                stage.id,
+                "completed",
+                output_data=output_data,
+                output_files=list(output_data.get("artifacts", {}).values()),
+            )
+            logger.info("denario_stage_completed task=%s stage=%d", task_id, stage_num)
+            with _console_lock:
+                _console_buffers.setdefault(buf_key, []).append(
+                    f"Stage {stage_num} ({sdef['name']}) completed successfully."
+                )
+        persist_db.commit()
+    finally:
+        persist_db.close()
+
+
+async def _run_paper_stage(
+    task_id: str,
+    stage_num: int,
+    sdef: dict,
+    buf_key: str,
+    task_description: str,
+    work_dir: str,
+    shared_state: Dict[str, Any],
+    config_overrides: Dict[str, Any],
+):
+    """Run stage 4 (paper generation) using DenarioPaperPhase (LangGraph)."""
+    from cmbagent.task_framework.phases.paper import DenarioPaperPhase, DenarioPaperPhaseConfig
+    from cmbagent.phases.base import PhaseContext, PhaseStatus
+
+    config_kwargs = {"parent_run_id": task_id, **config_overrides}
+    phase = DenarioPaperPhase(DenarioPaperPhaseConfig(**config_kwargs))
+
+    context = PhaseContext(
+        workflow_id=f"denario-{task_id}",
+        run_id=task_id,
+        phase_id=f"stage-{stage_num}",
+        task=task_description,
+        work_dir=work_dir,
+        shared_state=shared_state,
+        api_keys={},
+        callbacks=None,
+    )
+
+    with _console_lock:
+        _console_buffers.setdefault(buf_key, []).append(
+            f"Paper generation initialized, executing..."
+        )
+
+    # Run the phase with stdout/stderr capture
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    capture_out = _ConsoleCapture(buf_key, original_stdout)
+    capture_err = _ConsoleCapture(buf_key, original_stderr)
+
+    try:
+        sys.stdout = capture_out
+        sys.stderr = capture_err
+        result = await phase.execute(context)
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+
+    # Persist result to DB
+    db = _get_db()
+    try:
+        sid = _get_session_id_for_task(task_id, db)
+        repo = _get_stage_repo(db, session_id=sid)
+        stages = repo.list_stages(parent_run_id=task_id)
+        stage = next((s for s in stages if s.stage_number == stage_num), None)
+        if stage:
+            if result.status == PhaseStatus.COMPLETED:
+                repo.update_stage_status(
+                    stage.id,
+                    "completed",
+                    output_data=result.context.output_data,
+                    output_files=list((result.context.output_data or {}).get("artifacts", {}).values()),
+                )
+                logger.info("denario_stage_completed task=%s stage=%d", task_id, stage_num)
+                with _console_lock:
+                    _console_buffers.setdefault(buf_key, []).append(
+                        f"Stage {stage_num} ({sdef['name']}) completed successfully."
+                    )
+            else:
+                repo.update_stage_status(
+                    stage.id,
+                    "failed",
+                    error_message=result.error or "Phase failed",
+                )
+                logger.error("denario_stage_failed task=%s stage=%d error=%s", task_id, stage_num, result.error)
+                with _console_lock:
+                    _console_buffers.setdefault(buf_key, []).append(
+                        f"Stage {stage_num} failed: {result.error}"
+                    )
+        db.commit()
+    finally:
+        db.close()
 
 
 # =============================================================================
@@ -554,7 +816,7 @@ async def get_stage_content(task_id: str, stage_num: int):
             if sdef["shared_key"] and shared:
                 content = shared.get(sdef["shared_key"])
 
-            # Fallback: read from the .md file on disk
+            # Fallback 1: read from the .md file on disk
             if not content and sdef["file"]:
                 from cmbagent.database.models import WorkflowRun
                 parent = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
@@ -563,6 +825,29 @@ async def get_stage_content(task_id: str, stage_num: int):
                 if os.path.exists(file_path):
                     with open(file_path, "r") as f:
                         content = f.read()
+
+            # Fallback 2: re-extract from chat_history stored in output_data
+            if not content and stage.output_data.get("chat_history"):
+                try:
+                    from cmbagent.task_framework import stage_helpers
+                    if stage_num == 1:
+                        content = stage_helpers.extract_idea_result(
+                            {"chat_history": stage.output_data["chat_history"]}
+                        )
+                        # Repair: persist the recovered content back to DB and disk
+                        if content and shared is not None and sdef["shared_key"]:
+                            shared[sdef["shared_key"]] = content
+                            stage.output_data["shared"] = shared
+                            from cmbagent.database.repository import TaskStageRepository
+                            repo.update_stage_status(
+                                stage.id, "completed", output_data=stage.output_data
+                            )
+                            db.commit()
+                            logger.info("denario_content_recovered task=%s stage=%d len=%d",
+                                        task_id, stage_num, len(content))
+                except Exception as exc:
+                    logger.warning("denario_content_recovery_failed task=%s stage=%d error=%s",
+                                   task_id, stage_num, exc)
 
         return DenarioStageContentResponse(
             stage_number=stage.stage_number,
@@ -601,8 +886,11 @@ async def update_stage_content(task_id: str, stage_num: int, request: DenarioCon
         if not stage:
             raise HTTPException(status_code=404, detail=f"Stage {stage_num} not found")
 
-        if stage.status != "completed":
-            raise HTTPException(status_code=400, detail="Can only edit completed stages")
+        if stage.status not in ("completed", "failed"):
+            raise HTTPException(status_code=400, detail="Can only edit completed or recovered stages")
+
+        # If stage was failed but has recovered content, mark it as completed
+        new_status = "completed" if stage.status == "failed" else stage.status
 
         # Update output_data['shared'][field]
         output_data = stage.output_data or {}
@@ -610,7 +898,7 @@ async def update_stage_content(task_id: str, stage_num: int, request: DenarioCon
         shared[request.field] = request.content
         output_data["shared"] = shared
 
-        repo.update_stage_status(stage.id, "completed", output_data=output_data)
+        repo.update_stage_status(stage.id, new_status, output_data=output_data)
 
         # Also update the .md file on disk
         if sdef["file"]:
@@ -750,6 +1038,105 @@ async def list_recent_tasks():
         return result
     finally:
         db.close()
+
+
+# =============================================================================
+# POST /api/denario/{task_id}/stop
+# =============================================================================
+
+@router.post("/{task_id}/stop")
+async def stop_task(task_id: str):
+    """Stop a running Denario task.
+
+    Cancels any executing background stage and marks it as failed.
+    """
+    # Cancel any running asyncio tasks for this task_id
+    cancelled = []
+    for key in list(_running_tasks):
+        if key.startswith(f"{task_id}:"):
+            bg_task = _running_tasks.get(key)
+            if bg_task and not bg_task.done():
+                bg_task.cancel()
+                cancelled.append(key)
+
+    # Update DB: mark running stages as failed
+    db = _get_db()
+    try:
+        from cmbagent.database.models import WorkflowRun
+        parent = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        session_id = parent.session_id
+        repo = _get_stage_repo(db, session_id=session_id)
+        stages = repo.list_stages(parent_run_id=task_id)
+        for s in stages:
+            if s.status == "running":
+                repo.update_stage_status(s.id, "failed", error_message="Stopped by user")
+
+        parent.status = "failed"
+        db.commit()
+
+        return {"status": "stopped", "task_id": task_id, "cancelled_stages": cancelled}
+    finally:
+        db.close()
+
+
+# =============================================================================
+# DELETE /api/denario/{task_id}
+# =============================================================================
+
+@router.delete("/{task_id}")
+async def delete_task(task_id: str):
+    """Delete a Denario task, its DB records, and its work directory.
+
+    Running stages are cancelled first.
+    """
+    import shutil
+
+    # 1. Cancel any running background tasks
+    for key in list(_running_tasks):
+        if key.startswith(f"{task_id}:"):
+            bg_task = _running_tasks.pop(key, None)
+            if bg_task and not bg_task.done():
+                bg_task.cancel()
+
+    # Clean up console buffers
+    for key in list(_console_buffers):
+        if key.startswith(f"{task_id}:"):
+            with _console_lock:
+                _console_buffers.pop(key, None)
+
+    # 2. Delete DB records
+    db = _get_db()
+    work_dir = None
+    try:
+        from cmbagent.database.models import WorkflowRun
+        parent = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        work_dir = (parent.meta or {}).get("work_dir")
+
+        # TaskStage rows cascade-delete via FK, but delete explicitly for clarity
+        repo = _get_stage_repo(db, session_id=parent.session_id)
+        stages = repo.list_stages(parent_run_id=task_id)
+        for s in stages:
+            db.delete(s)
+
+        db.delete(parent)
+        db.commit()
+    finally:
+        db.close()
+
+    # 3. Remove work directory from disk
+    if work_dir and os.path.isdir(work_dir):
+        try:
+            shutil.rmtree(work_dir)
+        except Exception as exc:
+            logger.warning("denario_delete_workdir_failed path=%s error=%s", work_dir, exc)
+
+    return {"status": "deleted", "task_id": task_id}
 
 
 # =============================================================================

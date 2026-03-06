@@ -39,6 +39,8 @@ interface UseDenarioTaskReturn {
   setCurrentStep: (step: DenarioWizardStep) => void
   setEditableContent: (content: string) => void
   resumeTask: (taskId: string) => Promise<void>
+  stopTask: () => Promise<void>
+  deleteTask: () => Promise<void>
   clearError: () => void
 }
 
@@ -228,9 +230,9 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     if (!taskId) return null
     try {
       const content: DenarioStageContent = await apiFetch(`/api/denario/${taskId}/stages/${stageNum}/content`)
-      if (content.content) {
-        setEditableContent(content.content)
-      }
+      // Always update editable content — use content from response,
+      // or empty string as fallback (content may be null/undefined/empty)
+      setEditableContent(content.content ?? '')
       return content
     } catch {
       return null
@@ -369,6 +371,47 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     }
   }, [loadTaskState, connectWs, startPolling, startConsolePoll])
 
+  // ---- Stop / Delete ----
+
+  const stopTask = useCallback(async () => {
+    if (!taskId) return
+    try {
+      await apiFetch(`/api/denario/${taskId}/stop`, { method: 'POST' })
+      setIsExecuting(false)
+      wsRef.current?.close()
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = null
+      if (consolePollRef.current) clearInterval(consolePollRef.current)
+      consolePollRef.current = null
+      await loadTaskState(taskId)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to stop task')
+    }
+  }, [taskId, apiFetch, loadTaskState])
+
+  const deleteTask = useCallback(async () => {
+    if (!taskId) return
+    try {
+      await apiFetch(`/api/denario/${taskId}`, { method: 'DELETE' })
+      // Reset all state
+      setTaskId(null)
+      setTaskState(null)
+      setCurrentStep(0)
+      setEditableContent('')
+      setRefinementMessages([])
+      setConsoleOutput([])
+      setIsExecuting(false)
+      setError(null)
+      wsRef.current?.close()
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = null
+      if (consolePollRef.current) clearInterval(consolePollRef.current)
+      consolePollRef.current = null
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to delete task')
+    }
+  }, [taskId, apiFetch])
+
   return {
     taskId,
     taskState,
@@ -389,6 +432,8 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     setCurrentStep: setCurrentStep as (step: DenarioWizardStep) => void,
     setEditableContent,
     resumeTask,
+    stopTask,
+    deleteTask,
     clearError,
   }
 }

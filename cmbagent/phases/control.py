@@ -399,7 +399,20 @@ class ControlPhase(Phase):
             context.shared_state.get('plan_steps') or
             context.shared_state.get('final_plan')
         )
+
+        # Distinguish between "no plan key" and "empty plan list"
         if not has_plan and self.config.execute_all_steps:
-            errors.append("Plan is required for control phase (run planning first)")
+            plan_present_but_empty = (
+                context.input_data.get('final_plan') == [] or
+                context.shared_state.get('plan_steps') == [] or
+                context.shared_state.get('final_plan') == []
+            )
+            if plan_present_but_empty:
+                errors.append(
+                    "Plan is empty (0 steps). The planning phase completed but "
+                    "generated no plan steps — check the planner output."
+                )
+            else:
+                errors.append("Plan is required for control phase (run planning first)")
 
         return errors

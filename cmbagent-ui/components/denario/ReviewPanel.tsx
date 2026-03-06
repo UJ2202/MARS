@@ -52,12 +52,13 @@ export default function ReviewPanel({
   const isStageNotStarted = stage?.status === 'pending'
   const isStageFailed = stage?.status === 'failed'
 
-  // Load content when stage is completed
+  // Load content when stage is completed (or failed — content may still
+  // be available on disk even if the DB persist step failed)
   useEffect(() => {
-    if (isStageCompleted && !contentLoaded) {
+    if ((isStageCompleted || isStageFailed) && !contentLoaded) {
       fetchStageContent(stageNum).then(() => setContentLoaded(true))
     }
-  }, [isStageCompleted, contentLoaded, fetchStageContent, stageNum])
+  }, [isStageCompleted, isStageFailed, contentLoaded, fetchStageContent, stageNum])
 
   // Auto-execute if stage hasn't started yet (guarded against double-fire)
   useEffect(() => {
@@ -67,6 +68,10 @@ export default function ReviewPanel({
     }
   }, [isStageNotStarted, isExecuting, executeStage, stageNum])
 
+  // Content is available for editing when stage is completed, or when
+  // stage failed but content was recovered from disk
+  const canEdit = isStageCompleted || (isStageFailed && !!editableContent)
+
   // Auto-save with debounce
   const handleContentChange = useCallback((value: string) => {
     setEditableContent(value)
@@ -74,14 +79,14 @@ export default function ReviewPanel({
 
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
     saveTimeoutRef.current = setTimeout(async () => {
-      if (isStageCompleted) {
+      if (canEdit) {
         setSaveIndicator('saving')
         await saveStageContent(stageNum, value, sharedKey)
         setSaveIndicator('saved')
         setTimeout(() => setSaveIndicator('idle'), 2000)
       }
     }, 1000)
-  }, [isStageCompleted, saveStageContent, setEditableContent, stageNum, sharedKey])
+  }, [canEdit, saveStageContent, setEditableContent, stageNum, sharedKey])
 
   // Manual save
   const handleSave = useCallback(async () => {
@@ -101,22 +106,22 @@ export default function ReviewPanel({
   // Apply refined content from chat
   const handleApply = useCallback((content: string) => {
     setEditableContent(content)
-    if (isStageCompleted) {
+    if (canEdit) {
       saveStageContent(stageNum, content, sharedKey)
     }
-  }, [setEditableContent, isStageCompleted, saveStageContent, stageNum, sharedKey])
+  }, [setEditableContent, canEdit, saveStageContent, stageNum, sharedKey])
 
   // Handle next with save
   const handleNext = useCallback(async () => {
-    if (isStageCompleted) {
+    if (canEdit) {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
       await saveStageContent(stageNum, editableContent, sharedKey)
     }
     onNext()
-  }, [isStageCompleted, saveStageContent, stageNum, editableContent, sharedKey, onNext])
+  }, [canEdit, saveStageContent, stageNum, editableContent, sharedKey, onNext])
 
-  // Show failure state with retry option
-  if (isStageFailed && !isExecuting) {
+  // Show failure state with retry option (only when no content was recovered)
+  if (isStageFailed && !isExecuting && !editableContent) {
     return (
       <div className="max-w-3xl mx-auto space-y-4">
         <div
@@ -299,7 +304,7 @@ export default function ReviewPanel({
           onClick={handleNext}
           variant="primary"
           size="sm"
-          disabled={!isStageCompleted}
+          disabled={!canEdit}
         >
           Next
           <ArrowRight className="w-4 h-4 ml-1" />

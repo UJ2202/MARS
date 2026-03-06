@@ -34,9 +34,10 @@ export default function SessionScreen() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  const fetchSessions = useCallback(async () => {
+  const fetchSessions = useCallback(async (isInitial = false) => {
     try {
-      setLoading(true)
+      // Only show loading skeleton on the very first fetch
+      if (isInitial) setLoading(true)
       setError(null)
       const response = await fetch(getApiUrl('/api/sessions?limit=100'))
       if (!response.ok) throw new Error('Failed to fetch sessions')
@@ -50,8 +51,8 @@ export default function SessionScreen() {
   }, [])
 
   useEffect(() => {
-    fetchSessions()
-    const interval = setInterval(fetchSessions, 30000)
+    fetchSessions(true)
+    const interval = setInterval(() => fetchSessions(false), 30000)
     return () => clearInterval(interval)
   }, [fetchSessions])
 
@@ -69,7 +70,7 @@ export default function SessionScreen() {
         method: 'POST',
       })
       if (response.ok) {
-        fetchSessions()
+        fetchSessions(false)
       }
     } catch (err) {
       console.error('Failed to pause session:', err)
@@ -128,7 +129,7 @@ export default function SessionScreen() {
               size="md"
               label="Refresh sessions"
               icon={<RefreshCw className="w-4 h-4" />}
-              onClick={fetchSessions}
+              onClick={() => fetchSessions(false)}
             />
           </div>
 
@@ -175,7 +176,7 @@ export default function SessionScreen() {
               >
                 Error: {error}
                 <button
-                  onClick={fetchSessions}
+                  onClick={() => fetchSessions(true)}
                   className="ml-2 underline"
                 >
                   Retry

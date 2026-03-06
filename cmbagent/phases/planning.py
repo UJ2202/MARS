@@ -212,13 +212,38 @@ class PlanningPhase(Phase):
             elif isinstance(raw_plan, list):
                 plan_steps_list = raw_plan
             elif isinstance(raw_plan, str):
-                # Load the saved JSON which has proper structure
                 import json
-                with open(plan_file, 'r') as f:
-                    plan_dict = json.load(f)
-                plan_steps_list = plan_dict.get('sub_tasks', [])
+                # Try parsing the string as JSON first (structured output)
+                try:
+                    parsed = json.loads(raw_plan)
+                    if isinstance(parsed, dict) and 'sub_tasks' in parsed:
+                        plan_steps_list = parsed['sub_tasks']
+                    elif isinstance(parsed, list):
+                        plan_steps_list = parsed
+                    else:
+                        # Fall back to saved JSON file
+                        with open(plan_file, 'r') as f:
+                            plan_dict = json.load(f)
+                        plan_steps_list = plan_dict.get('sub_tasks', [])
+                except (json.JSONDecodeError, TypeError):
+                    # Not JSON, load from saved file (which was parsed from markdown)
+                    with open(plan_file, 'r') as f:
+                        plan_dict = json.load(f)
+                    plan_steps_list = plan_dict.get('sub_tasks', [])
             else:
                 plan_steps_list = []
+
+            if not plan_steps_list:
+                logger.error(
+                    "Planning produced 0 steps. raw_plan type=%s, raw_plan=%s",
+                    type(raw_plan).__name__,
+                    repr(raw_plan)[:500] if raw_plan else "None",
+                )
+                return manager.fail(
+                    "Planning produced 0 steps. The planner did not generate any "
+                    "plan steps — check the planner prompt, structured-output "
+                    "parsing, and model response."
+                )
 
             # NOW invoke planning complete callback to send WebSocket events
             if context.callbacks:

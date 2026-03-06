@@ -2,7 +2,7 @@
 
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo, ReactNode } from 'react';
 import { useEventHandler } from '@/hooks/useEventHandler';
 import { WebSocketEvent, DAGCreatedData, DAGNodeStatusChangedData, ApprovalRequestedData, DAGNodeData, DAGEdgeData, CostUpdateData, FilesUpdatedData, AgentMessageData } from '@/types/websocket-events';
 import { getWsUrl, getApiUrl } from '@/lib/config';
@@ -674,7 +674,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     setCostTimeSeries(series);
   }, []);
 
-  const value: WebSocketContextValue = {
+  const value: WebSocketContextValue = useMemo(() => ({
     connected,
     reconnectAttempt,
     lastError,
@@ -711,7 +711,18 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     setDagDataDirect,
     setCostSummaryDirect,
     setCostTimeSeriesDirect,
-  };
+  }), [
+    connected, reconnectAttempt, lastError, isConnecting,
+    connect, sendMessage, disconnect, reconnect,
+    currentRunId, copilotSessionId, workflowStatus,
+    dagData, updateDAGNode, pendingApproval, clearApproval,
+    consoleOutput, addConsoleOutput, clearConsole,
+    results, isRunning, costSummary, costTimeSeries,
+    filesUpdatedCounter, agentMessages, clearAgentMessages,
+    resumeSession, loadSessionHistory,
+    setConsoleOutputDirect, setDagDataDirect,
+    setCostSummaryDirect, setCostTimeSeriesDirect,
+  ]);
 
   return (
     <WebSocketContext.Provider value={value}>
