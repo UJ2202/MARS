@@ -20,7 +20,7 @@ Transform the existing **cmbagent** UI into **MARS** with a modern, production-g
 ### Resuming Implementation:
 When resuming, provide:
 - Current stage number (from `PROGRESS.md`)
-- This README file location: `/srv/projects/mas/mars/denario/cmbagent/MARS_IMPLEMENTATION_PLAN/README.md`
+- This README file location: `/srv/projects/mas/mars/deepresearch/cmbagent/MARS_IMPLEMENTATION_PLAN/README.md`
 - Any blockers encountered
 
 ## Non-Negotiable Constraints
@@ -255,7 +255,7 @@ Stage 12 (File Viewer Overhaul)  ← can run in parallel with 11
 
 ```bash
 # Development
-cd /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui
+cd /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui
 npm run dev
 
 # Build check

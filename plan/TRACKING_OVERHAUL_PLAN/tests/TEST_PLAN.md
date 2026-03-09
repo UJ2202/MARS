@@ -14,7 +14,7 @@ Each stage is independently testable. Tests run after each stage to verify:
 ### T0.1: Import Isolation
 ```bash
 # Library must import without backend in sys.path
-cd /srv/projects/mas/mars/denario/cmbagent
+cd /srv/projects/mas/mars/deepresearch/cmbagent
 python -c "
 import sys
 # Remove backend from path if present

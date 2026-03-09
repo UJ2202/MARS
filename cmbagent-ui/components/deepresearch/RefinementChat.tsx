@@ -3,8 +3,8 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { Send, Check, Loader2 } from 'lucide-react'
 import { Button } from '@/components/core'
-import type { useDenarioTask } from '@/hooks/useDenarioTask'
-import type { RefinementMessage } from '@/types/denario'
+import type { useDeepresearchTask } from '@/hooks/useDeepresearchTask'
+import type { RefinementMessage } from '@/types/deepresearch'
 
 interface RefinementChatProps {
   messages: RefinementMessage[]

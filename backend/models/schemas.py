@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 class TaskType(str, Enum):
     STANDARD = "standard"
-    DENARIO_RESEARCH = "denario-research"
+    DEEPRESEARCH_RESEARCH = "deepresearch-research"
 
 
 class TaskRequest(BaseModel):
@@ -27,7 +27,7 @@ class TaskRequest(BaseModel):
         "workDir": "~/Desktop/cmbdir"
     }
     task_type: TaskType = Field(default=TaskType.STANDARD, description="Task type")
-    data_description: Optional[str] = Field(None, description="Data description for Denario tasks")
+    data_description: Optional[str] = Field(None, description="Data description for Deepresearch tasks")
 
 
 class TaskResponse(BaseModel):
@@ -56,7 +56,7 @@ class TaskStatusResponse(BaseModel):
     result: Optional[Any] = None
     error: Optional[str] = None
     updated_at: Optional[str] = None
-    # Stage fields (only for denario tasks)
+    # Stage fields (only for deepresearch tasks)
     stages: Optional[List[StageInfo]] = None
     current_stage: Optional[int] = None
     progress_percent: Optional[float] = None

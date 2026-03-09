@@ -1,5 +1,5 @@
 """
-Stage-specific helpers for Denario stages 1-3.
+Stage-specific helpers for Deepresearch stages 1-3.
 
 Pure functions that handle prompt formatting, result extraction,
 post-processing, file I/O, and output structuring for each stage.
@@ -73,7 +73,7 @@ def build_idea_kwargs(
     The returned dict includes 'task' as a key; the caller should pop it
     and pass it as the first positional argument.
     """
-    from cmbagent.task_framework.prompts.denario.idea import idea_planner_prompt
+    from cmbagent.task_framework.prompts.deepresearch.idea import idea_planner_prompt
 
     cfg = {**IDEA_DEFAULTS, **(config_overrides or {})}
     idea_dir = create_work_dir(work_dir, "idea")
@@ -197,7 +197,7 @@ def build_method_kwargs(
     callbacks=None,
 ) -> dict:
     """Build kwargs dict for planning_and_control_context_carryover (method stage)."""
-    from cmbagent.task_framework.prompts.denario.method import (
+    from cmbagent.task_framework.prompts.deepresearch.method import (
         method_planner_prompt,
         method_researcher_prompt,
     )
@@ -297,7 +297,7 @@ def build_experiment_kwargs(
     callbacks=None,
 ) -> dict:
     """Build kwargs dict for planning_and_control_context_carryover (experiment stage)."""
-    from cmbagent.task_framework.prompts.denario.experiment import (
+    from cmbagent.task_framework.prompts.deepresearch.experiment import (
         experiment_planner_prompt,
         experiment_engineer_prompt,
         experiment_researcher_prompt,

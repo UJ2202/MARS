@@ -1,7 +1,7 @@
 """
-Denario Research Paper wizard endpoints.
+Deepresearch Research Paper wizard endpoints.
 
-Provides staged execution of the 4-phase Denario workflow
+Provides staged execution of the 4-phase Deepresearch workflow
 (idea → method → experiment → paper) where each stage is triggered
 individually by the user after review/edit.
 """
@@ -17,23 +17,31 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 
-from models.denario_schemas import (
-    DenarioCreateRequest,
-    DenarioCreateResponse,
-    DenarioExecuteRequest,
-    DenarioStageResponse,
-    DenarioStageContentResponse,
-    DenarioContentUpdateRequest,
-    DenarioRefineRequest,
-    DenarioRefineResponse,
-    DenarioTaskStateResponse,
-    DenarioRecentTaskResponse,
+from models.deepresearch_schemas import (
+    DeepresearchCreateRequest,
+    DeepresearchCreateResponse,
+    DeepresearchExecuteRequest,
+    DeepresearchStageResponse,
+    DeepresearchStageContentResponse,
+    DeepresearchContentUpdateRequest,
+    DeepresearchRefineRequest,
+    DeepresearchRefineResponse,
+    DeepresearchTaskStateResponse,
+    DeepresearchRecentTaskResponse,
+    AnalyzeFilesResponse,
+    RefineContextRequest,
+    RefineContextResponse,
+    UpdateDescriptionRequest,
+    AiEditTexRequest,
+    AiEditTexResponse,
+    CompileTexRequest,
+    CompileTexResponse,
 )
 from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/denario", tags=["Denario"])
+router = APIRouter(prefix="/api/deepresearch", tags=["Deepresearch"])
 
 
 # Stage definitions
@@ -47,6 +55,9 @@ STAGE_DEFS = [
 
 # Track running background tasks
 _running_tasks: Dict[str, asyncio.Task] = {}
+
+# Track running file-analysis background tasks
+_running_analyses: Dict[str, asyncio.Task] = {}
 
 # Shared console buffers for stage execution (thread-safe)
 # Key: "task_id:stage_num", Value: list of output lines
@@ -71,33 +82,33 @@ def _get_db():
     return get_db_session()
 
 
-def _get_stage_repo(db, session_id: str = "denario"):
+def _get_stage_repo(db, session_id: str = "deepresearch"):
     from cmbagent.database.repository import TaskStageRepository
     return TaskStageRepository(db, session_id=session_id)
 
 
-def _get_cost_repo(db, session_id: str = "denario"):
+def _get_cost_repo(db, session_id: str = "deepresearch"):
     from cmbagent.database.repository import CostRepository
     return CostRepository(db, session_id=session_id)
 
 
 def _get_work_dir(task_id: str) -> str:
-    """Get the work directory for a denario task."""
+    """Get the work directory for a deepresearch task."""
     from core.config import settings
     base = os.path.expanduser(settings.default_work_dir)
-    return os.path.join(base, "denario_tasks", task_id)
+    return os.path.join(base, "deepresearch_tasks", task_id)
 
 
 def _get_session_id_for_task(task_id: str, db) -> str:
-    """Look up the session_id for a denario task from its WorkflowRun."""
+    """Look up the session_id for a deepresearch task from its WorkflowRun."""
     from cmbagent.database.models import WorkflowRun
     run = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
     if run:
         return run.session_id
-    return "denario"  # fallback for legacy tasks
+    return "deepresearch"  # fallback for legacy tasks
 
 
-def build_shared_state(task_id: str, up_to_stage: int, db, session_id: str = "denario") -> Dict[str, Any]:
+def build_shared_state(task_id: str, up_to_stage: int, db, session_id: str = "deepresearch") -> Dict[str, Any]:
     """Reconstruct shared_state from completed stages' output_data['shared'].
 
     This accumulates context (research_idea, methodology, results, etc.)
@@ -113,8 +124,8 @@ def build_shared_state(task_id: str, up_to_stage: int, db, session_id: str = "de
     return shared
 
 
-def _stage_to_response(stage) -> DenarioStageResponse:
-    return DenarioStageResponse(
+def _stage_to_response(stage) -> DeepresearchStageResponse:
+    return DeepresearchStageResponse(
         stage_number=stage.stage_number,
         stage_name=stage.stage_name,
         status=stage.status,
@@ -126,7 +137,7 @@ def _stage_to_response(stage) -> DenarioStageResponse:
 
 # Auto-generated files in input_files/ that should NOT be listed as "uploaded data"
 _AUTO_GENERATED_FILES = {
-    "data_description.md", "idea.md", "methods.md", "results.md",
+    "data_description.md", "idea.md", "methods.md", "results.md", "data_context.md",
 }
 _AUTO_GENERATED_DIRS = {"plots", "paper"}
 
@@ -134,14 +145,28 @@ _AUTO_GENERATED_DIRS = {"plots", "paper"}
 def _build_file_context(work_dir: str) -> str:
     """Scan input_files/ for user-uploaded data files and build context string.
 
-    Returns a string describing uploaded files with absolute paths and previews
-    for text files. This gets appended to data_description so LLM agents know
-    about the files and can reference them in code.
+    If data_context.md exists (written by the analyze-files endpoint), it is
+    included first as the authoritative 'Research Data Foundation'. Individual
+    file paths + raw previews follow so agents can reference exact paths.
     """
     input_dir = os.path.join(work_dir, "input_files")
     if not os.path.isdir(input_dir):
         return ""
 
+    sections = []
+
+    # ── Primary: AI-generated data context (if analysis has been run) ──
+    data_context_path = os.path.join(input_dir, "data_context.md")
+    if os.path.isfile(data_context_path):
+        try:
+            with open(data_context_path, 'r', encoding='utf-8', errors='replace') as f:
+                ctx = f.read().strip()
+            if ctx:
+                sections.append("\n\n---\n## Research Data Foundation\n\n" + ctx)
+        except Exception:
+            pass
+
+    # ── Secondary: Individual file paths + raw previews ──
     uploaded_files = []
     for entry in os.listdir(input_dir):
         if entry in _AUTO_GENERATED_FILES:
@@ -154,7 +179,7 @@ def _build_file_context(work_dir: str) -> str:
         uploaded_files.append((entry, full_path))
 
     if not uploaded_files:
-        return ""
+        return "\n".join(sections) if sections else ""
 
     lines = ["\n\n---\n## Uploaded Data Files\n"]
     lines.append("The following data files have been uploaded and are available at the paths below.\n")
@@ -186,7 +211,8 @@ def _build_file_context(work_dir: str) -> str:
                 pass
 
     lines.append("Use the absolute paths above to read these files in your code.\n")
-    return "\n".join(lines)
+    sections.append("\n".join(lines))
+    return "\n".join(sections)
 
 
 class _ConsoleCapture:
@@ -234,12 +260,12 @@ def _clear_console_buffer(buf_key: str):
 
 
 # =============================================================================
-# POST /api/denario/create
+# POST /api/deepresearch/create
 # =============================================================================
 
-@router.post("/create", response_model=DenarioCreateResponse)
-async def create_denario_task(request: DenarioCreateRequest):
-    """Create a new Denario research task with 4 pending stages."""
+@router.post("/create", response_model=DeepresearchCreateResponse)
+async def create_deepresearch_task(request: DeepresearchCreateRequest):
+    """Create a new Deepresearch research task with 4 pending stages."""
     task_id = str(uuid.uuid4())
     work_dir = _get_work_dir(task_id)
     os.makedirs(work_dir, exist_ok=True)
@@ -249,9 +275,9 @@ async def create_denario_task(request: DenarioCreateRequest):
     from services.session_manager import get_session_manager
     sm = get_session_manager()
     session_id = sm.create_session(
-        mode="denario-research",
+        mode="deepresearch-research",
         config={"task_id": task_id, "work_dir": work_dir},
-        name=f"Denario: {request.task[:60]}",
+        name=f"Deepresearch: {request.task[:60]}",
     )
 
     db = _get_db()
@@ -262,7 +288,7 @@ async def create_denario_task(request: DenarioCreateRequest):
         parent_run = WorkflowRun(
             id=task_id,
             session_id=session_id,
-            mode="denario-research",
+            mode="deepresearch-research",
             agent="planner",
             model="gpt-4o",
             status="executing",
@@ -299,30 +325,30 @@ async def create_denario_task(request: DenarioCreateRequest):
             with open(desc_path, "w") as f:
                 f.write(request.data_description)
 
-        logger.info("denario_task_created task_id=%s session_id=%s", task_id, session_id)
-        return DenarioCreateResponse(
+        logger.info("deepresearch_task_created task_id=%s session_id=%s", task_id, session_id)
+        return DeepresearchCreateResponse(
             task_id=task_id,
             work_dir=work_dir,
             stages=stage_responses,
         )
     except Exception as e:
         db.rollback()
-        logger.error("denario_create_failed error=%s", e)
+        logger.error("deepresearch_create_failed error=%s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
 
 
 # =============================================================================
-# POST /api/denario/{task_id}/stages/{num}/execute
+# POST /api/deepresearch/{task_id}/stages/{num}/execute
 # =============================================================================
 
 @router.post("/{task_id}/stages/{stage_num}/execute")
-async def execute_stage(task_id: str, stage_num: int, request: DenarioExecuteRequest = None):
-    """Trigger execution of a single Denario phase.
+async def execute_stage(task_id: str, stage_num: int, request: DeepresearchExecuteRequest = None):
+    """Trigger execution of a single Deepresearch phase.
 
     Runs the phase asynchronously in the background. Connect to
-    the WebSocket /ws/denario/{task_id}/{stage_num} for streaming output.
+    the WebSocket /ws/deepresearch/{task_id}/{stage_num} for streaming output.
     """
     if stage_num < 1 or stage_num > 4:
         raise HTTPException(status_code=400, detail="stage_num must be 1-4")
@@ -404,11 +430,11 @@ async def _run_phase(
     shared_state: Dict[str, Any],
     config_overrides: Dict[str, Any],
 ):
-    """Execute a Denario phase in the background.
+    """Execute a Deepresearch phase in the background.
 
     Stages 1-3 call planning_and_control_context_carryover() directly
     with full callbacks (cost tracking, event logging, structured print).
-    Stage 4 uses DenarioPaperPhase (LangGraph).
+    Stage 4 uses DeepresearchPaperPhase (LangGraph).
     """
     sdef = STAGE_DEFS[stage_num - 1]
     buf_key = f"{task_id}:{stage_num}"
@@ -429,7 +455,7 @@ async def _run_phase(
                 task_description, work_dir, shared_state, config_overrides,
             )
     except Exception as e:
-        logger.error("denario_phase_exception task=%s stage=%d error=%s", task_id, stage_num, e, exc_info=True)
+        logger.error("deepresearch_phase_exception task=%s stage=%d error=%s", task_id, stage_num, e, exc_info=True)
         with _console_lock:
             _console_buffers.setdefault(buf_key, []).append(
                 f"Error: {e}"
@@ -487,13 +513,13 @@ async def _run_planning_control_stage(
             run_id=task_id,
         )
     except Exception as exc:
-        logger.warning("denario_cost_collector_init_failed error=%s", exc)
+        logger.warning("deepresearch_cost_collector_init_failed error=%s", exc)
 
     try:
         from cmbagent.database.repository import EventRepository
         event_repo = EventRepository(db, session_id)
     except Exception as exc:
-        logger.warning("denario_event_repo_init_failed error=%s", exc)
+        logger.warning("deepresearch_event_repo_init_failed error=%s", exc)
 
     # ── 2. Build event tracking callbacks ──
     execution_order = [0]  # mutable counter for ordering
@@ -514,7 +540,7 @@ async def _run_planning_control_stage(
                 meta={"stage_num": stage_num, "stage_name": sdef["name"]},
             )
         except Exception as exc:
-            logger.debug("denario_event_create_failed error=%s", exc)
+            logger.debug("deepresearch_event_create_failed error=%s", exc)
             try:
                 db.rollback()
             except Exception:
@@ -536,7 +562,7 @@ async def _run_planning_control_stage(
                 meta={"stage_num": stage_num, "stage_name": sdef["name"]},
             )
         except Exception as exc:
-            logger.debug("denario_code_event_failed error=%s", exc)
+            logger.debug("deepresearch_code_event_failed error=%s", exc)
             try:
                 db.rollback()
             except Exception:
@@ -560,7 +586,7 @@ async def _run_planning_control_stage(
                 meta={"stage_num": stage_num, "stage_name": sdef["name"]},
             )
         except Exception as exc:
-            logger.debug("denario_tool_event_failed error=%s", exc)
+            logger.debug("deepresearch_tool_event_failed error=%s", exc)
             try:
                 db.rollback()
             except Exception:
@@ -571,7 +597,7 @@ async def _run_planning_control_stage(
             try:
                 cost_collector.collect_from_callback(cost_data)
             except Exception as exc:
-                logger.debug("denario_cost_callback_failed error=%s", exc)
+                logger.debug("deepresearch_cost_callback_failed error=%s", exc)
                 try:
                     db.rollback()
                 except Exception:
@@ -676,7 +702,7 @@ async def _run_planning_control_stage(
         try:
             cost_collector.collect_from_work_dir(work_dir)
         except Exception as exc:
-            logger.debug("denario_cost_work_dir_failed error=%s", exc)
+            logger.debug("deepresearch_cost_work_dir_failed error=%s", exc)
 
     # Close the callback DB session — it may be in a bad state after
     # long-running callbacks.  Use a fresh session for the persist step.
@@ -698,7 +724,7 @@ async def _run_planning_control_stage(
                 output_data=output_data,
                 output_files=list(output_data.get("artifacts", {}).values()),
             )
-            logger.info("denario_stage_completed task=%s stage=%d", task_id, stage_num)
+            logger.info("deepresearch_stage_completed task=%s stage=%d", task_id, stage_num)
             with _console_lock:
                 _console_buffers.setdefault(buf_key, []).append(
                     f"Stage {stage_num} ({sdef['name']}) completed successfully."
@@ -718,15 +744,15 @@ async def _run_paper_stage(
     shared_state: Dict[str, Any],
     config_overrides: Dict[str, Any],
 ):
-    """Run stage 4 (paper generation) using DenarioPaperPhase (LangGraph)."""
-    from cmbagent.task_framework.phases.paper import DenarioPaperPhase, DenarioPaperPhaseConfig
+    """Run stage 4 (paper generation) using DeepresearchPaperPhase (LangGraph)."""
+    from cmbagent.task_framework.phases.paper import DeepresearchPaperPhase, DeepresearchPaperPhaseConfig
     from cmbagent.phases.base import PhaseContext, PhaseStatus
 
     config_kwargs = {"parent_run_id": task_id, **config_overrides}
-    phase = DenarioPaperPhase(DenarioPaperPhaseConfig(**config_kwargs))
+    phase = DeepresearchPaperPhase(DeepresearchPaperPhaseConfig(**config_kwargs))
 
     context = PhaseContext(
-        workflow_id=f"denario-{task_id}",
+        workflow_id=f"deepresearch-{task_id}",
         run_id=task_id,
         phase_id=f"stage-{stage_num}",
         task=task_description,
@@ -770,7 +796,7 @@ async def _run_paper_stage(
                     output_data=result.context.output_data,
                     output_files=list((result.context.output_data or {}).get("artifacts", {}).values()),
                 )
-                logger.info("denario_stage_completed task=%s stage=%d", task_id, stage_num)
+                logger.info("deepresearch_stage_completed task=%s stage=%d", task_id, stage_num)
                 with _console_lock:
                     _console_buffers.setdefault(buf_key, []).append(
                         f"Stage {stage_num} ({sdef['name']}) completed successfully."
@@ -781,7 +807,7 @@ async def _run_paper_stage(
                     "failed",
                     error_message=result.error or "Phase failed",
                 )
-                logger.error("denario_stage_failed task=%s stage=%d error=%s", task_id, stage_num, result.error)
+                logger.error("deepresearch_stage_failed task=%s stage=%d error=%s", task_id, stage_num, result.error)
                 with _console_lock:
                     _console_buffers.setdefault(buf_key, []).append(
                         f"Stage {stage_num} failed: {result.error}"
@@ -792,10 +818,10 @@ async def _run_paper_stage(
 
 
 # =============================================================================
-# GET /api/denario/{task_id}/stages/{num}/content
+# GET /api/deepresearch/{task_id}/stages/{num}/content
 # =============================================================================
 
-@router.get("/{task_id}/stages/{stage_num}/content", response_model=DenarioStageContentResponse)
+@router.get("/{task_id}/stages/{stage_num}/content", response_model=DeepresearchStageContentResponse)
 async def get_stage_content(task_id: str, stage_num: int):
     """Get the output content and shared_state for a completed stage."""
     db = _get_db()
@@ -843,30 +869,43 @@ async def get_stage_content(task_id: str, stage_num: int):
                                 stage.id, "completed", output_data=stage.output_data
                             )
                             db.commit()
-                            logger.info("denario_content_recovered task=%s stage=%d len=%d",
+                            logger.info("deepresearch_content_recovered task=%s stage=%d len=%d",
                                         task_id, stage_num, len(content))
                 except Exception as exc:
-                    logger.warning("denario_content_recovery_failed task=%s stage=%d error=%s",
+                    logger.warning("deepresearch_content_recovery_failed task=%s stage=%d error=%s",
                                    task_id, stage_num, exc)
 
-        return DenarioStageContentResponse(
+        # Sanitize output_files: expand any directory entries to their actual files
+        # (handles old tasks whose artifacts dict included 'paper/': <dir>)
+        raw_files = stage.output_files or []
+        sanitized_files = []
+        for f in raw_files:
+            if f and os.path.isfile(f):
+                sanitized_files.append(f)
+            elif f and os.path.isdir(f):
+                # Expand directory: include .tex and .pdf files
+                for fname in sorted(os.listdir(f)):
+                    if fname.endswith(('.tex', '.pdf')):
+                        sanitized_files.append(os.path.join(f, fname))
+
+        return DeepresearchStageContentResponse(
             stage_number=stage.stage_number,
             stage_name=stage.stage_name,
             status=stage.status,
             content=content,
             shared_state=shared,
-            output_files=stage.output_files,
+            output_files=sanitized_files,
         )
     finally:
         db.close()
 
 
 # =============================================================================
-# PUT /api/denario/{task_id}/stages/{num}/content
+# PUT /api/deepresearch/{task_id}/stages/{num}/content
 # =============================================================================
 
 @router.put("/{task_id}/stages/{stage_num}/content")
-async def update_stage_content(task_id: str, stage_num: int, request: DenarioContentUpdateRequest):
+async def update_stage_content(task_id: str, stage_num: int, request: DeepresearchContentUpdateRequest):
     """Save user edits to a stage's content.
 
     Updates both the markdown file on disk and the output_data['shared']
@@ -922,11 +961,11 @@ async def update_stage_content(task_id: str, stage_num: int, request: DenarioCon
 
 
 # =============================================================================
-# POST /api/denario/{task_id}/stages/{num}/refine
+# POST /api/deepresearch/{task_id}/stages/{num}/refine
 # =============================================================================
 
-@router.post("/{task_id}/stages/{stage_num}/refine", response_model=DenarioRefineResponse)
-async def refine_stage_content(task_id: str, stage_num: int, request: DenarioRefineRequest):
+@router.post("/{task_id}/stages/{stage_num}/refine", response_model=DeepresearchRefineResponse)
+async def refine_stage_content(task_id: str, stage_num: int, request: DeepresearchRefineRequest):
     """Use LLM to refine stage content based on user instruction.
 
     This is a single LLM call (not a full phase execution).
@@ -963,17 +1002,455 @@ async def refine_stage_content(task_id: str, stage_num: int, request: DenarioRef
         with concurrent.futures.ThreadPoolExecutor() as executor:
             refined = await loop.run_in_executor(executor, _call_llm)
 
-        return DenarioRefineResponse(
+        return DeepresearchRefineResponse(
             refined_content=refined,
             message="Content refined successfully",
         )
     except Exception as e:
-        logger.error("denario_refine_failed error=%s", e)
+        logger.error("deepresearch_refine_failed error=%s", e)
         raise HTTPException(status_code=500, detail=f"Refinement failed: {str(e)}")
 
 
 # =============================================================================
-# GET /api/denario/{task_id}/stages/{num}/console  (REST fallback for console)
+# File Analysis  (POST analyze-files, GET console, PUT context, POST refine, PATCH description)
+# =============================================================================
+
+@router.post("/{task_id}/analyze-files", response_model=AnalyzeFilesResponse)
+async def analyze_files(task_id: str):
+    """Analyze uploaded files using LLM — runs in background.
+
+    Extracts metadata for CSV/TSV, JSON, TXT, FITS, HDF5, NPY/NPZ, PDF files,
+    then calls gpt-4o to produce a structured Research Data Context document
+    saved to input_files/data_context.md.
+
+    Poll GET /{task_id}/analyze-files/console for streaming progress.
+    """
+    if task_id in _running_analyses and not _running_analyses[task_id].done():
+        raise HTTPException(status_code=409, detail="Analysis already running")
+
+    db = _get_db()
+    try:
+        from cmbagent.database.models import WorkflowRun
+        parent_run = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
+        if not parent_run:
+            raise HTTPException(status_code=404, detail="Task not found")
+        work_dir = (parent_run.meta or {}).get("work_dir") or _get_work_dir(task_id)
+    finally:
+        db.close()
+
+    buf_key = f"{task_id}:analyze"
+    with _console_lock:
+        _console_buffers[buf_key] = ["Starting file analysis..."]
+
+    task_obj = asyncio.create_task(_run_file_analysis(task_id, work_dir, buf_key))
+    _running_analyses[task_id] = task_obj
+    return AnalyzeFilesResponse()
+
+
+@router.get("/{task_id}/analyze-files/console")
+async def get_analyze_console(task_id: str, since: int = 0):
+    """Poll analysis progress. Returns is_done=True and context_text when complete."""
+    buf_key = f"{task_id}:analyze"
+    lines = _get_console_lines(buf_key, since_index=since)
+
+    with _console_lock:
+        full_buf = list(_console_buffers.get(buf_key, []))
+    has_done = "__ANALYZE_DONE__" in full_buf
+    has_error = "__ANALYZE_ERROR__" in full_buf
+    is_done = has_done or has_error
+
+    # Filter sentinels from displayed lines
+    lines = [l for l in lines if l not in ("__ANALYZE_DONE__", "__ANALYZE_ERROR__")]
+
+    context_text = None
+    if has_done:
+        db = _get_db()
+        try:
+            from cmbagent.database.models import WorkflowRun
+            run = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
+            work_dir = (run.meta or {}).get("work_dir") if run and run.meta else _get_work_dir(task_id)
+        finally:
+            db.close()
+        ctx_path = os.path.join(work_dir, "input_files", "data_context.md")
+        if os.path.isfile(ctx_path):
+            try:
+                with open(ctx_path, 'r', encoding='utf-8') as f:
+                    context_text = f.read()
+            except Exception:
+                pass
+
+    return {
+        "lines": lines,
+        "next_index": since + len(lines),
+        "is_done": is_done,
+        "has_error": has_error,
+        "context_text": context_text,
+    }
+
+
+@router.put("/{task_id}/context")
+async def save_file_context(task_id: str, request: RefineContextRequest):
+    """Save an edited data context directly to data_context.md (no LLM involved)."""
+    db = _get_db()
+    try:
+        from cmbagent.database.models import WorkflowRun
+        run = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Task not found")
+        work_dir = (run.meta or {}).get("work_dir") or _get_work_dir(task_id)
+    finally:
+        db.close()
+
+    ctx_path = os.path.join(work_dir, "input_files", "data_context.md")
+    try:
+        with open(ctx_path, 'w', encoding='utf-8') as f:
+            f.write(request.content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "saved"}
+
+
+@router.post("/{task_id}/refine-context", response_model=RefineContextResponse)
+async def refine_file_context(task_id: str, request: RefineContextRequest):
+    """Use LLM to refine the data context according to user instruction, then save."""
+    import concurrent.futures
+
+    db = _get_db()
+    try:
+        from cmbagent.database.models import WorkflowRun
+        run = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Task not found")
+        work_dir = (run.meta or {}).get("work_dir") or _get_work_dir(task_id)
+    finally:
+        db.close()
+
+    prompt = (
+        "You are helping a researcher refine their research data context document.\n"
+        "Below is their current data context, followed by their refinement request.\n\n"
+        f"--- CURRENT DATA CONTEXT ---\n{request.content}\n\n"
+        f"--- USER REQUEST ---\n{request.message}\n\n"
+        "Update the data context according to the request. Keep the structured markdown format. "
+        "Return ONLY the updated document, no preamble or explanation."
+    )
+
+    try:
+        def _call():
+            from cmbagent.utils import get_api_keys_from_env
+            from openai import OpenAI
+            api_keys = get_api_keys_from_env()
+            client = OpenAI(api_key=api_keys.get("openai"))
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=4096,
+                temperature=0.4,
+            )
+            return response.choices[0].message.content
+
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            refined = await loop.run_in_executor(executor, _call)
+
+        ctx_path = os.path.join(work_dir, "input_files", "data_context.md")
+        with open(ctx_path, 'w', encoding='utf-8') as f:
+            f.write(refined)
+
+        return RefineContextResponse(refined_content=refined)
+    except Exception as e:
+        logger.error("deepresearch_refine_context_failed error=%s", e)
+        raise HTTPException(status_code=500, detail=f"Refinement failed: {str(e)}")
+
+
+@router.patch("/{task_id}/description")
+async def update_task_description(task_id: str, request: UpdateDescriptionRequest):
+    """Update task description and/or data description — used when task is pre-created."""
+    db = _get_db()
+    try:
+        from cmbagent.database.models import WorkflowRun
+        run = db.query(WorkflowRun).filter(WorkflowRun.id == task_id).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if request.task is not None:
+            run.task_description = request.task
+        if request.data_description is not None:
+            meta = dict(run.meta or {})
+            meta["data_description"] = request.data_description
+            run.meta = meta
+            work_dir = meta.get("work_dir") or _get_work_dir(task_id)
+            desc_path = os.path.join(work_dir, "input_files", "data_description.md")
+            os.makedirs(os.path.dirname(desc_path), exist_ok=True)
+            with open(desc_path, 'w', encoding='utf-8') as f:
+                f.write(request.data_description)
+        db.commit()
+        return {"status": "updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+async def _run_file_analysis(task_id: str, work_dir: str, buf_key: str):
+    """Background: inspect each uploaded file, build LLM prompt, write data_context.md."""
+    import concurrent.futures
+
+    def _do_analysis():
+        input_dir = os.path.join(work_dir, "input_files")
+        if not os.path.isdir(input_dir):
+            return "No input_files directory found."
+
+        file_infos = []
+        for entry in sorted(os.listdir(input_dir)):
+            if entry in _AUTO_GENERATED_FILES or entry in _AUTO_GENERATED_DIRS:
+                continue
+            full_path = os.path.join(input_dir, entry)
+            if not os.path.isfile(full_path):
+                continue
+            file_infos.append((entry, full_path))
+
+        if not file_infos:
+            return "No user-uploaded data files found to analyze."
+
+        with _console_lock:
+            _console_buffers[buf_key].append(
+                f"Found {len(file_infos)} file(s). Extracting metadata..."
+            )
+
+        summaries = []
+        for name, path in file_infos:
+            with _console_lock:
+                _console_buffers[buf_key].append(f"  \u2192 Inspecting: {name}")
+
+            size = os.path.getsize(path)
+            size_str = (
+                f"{size}B" if size < 1024
+                else f"{size/1024:.1f}KB" if size < 1024 * 1024
+                else f"{size/1024/1024:.1f}MB"
+            )
+            ext = os.path.splitext(name)[1].lower()
+            info = [f"### File: `{name}` ({size_str})", f"**Path:** `{path}`"]
+
+            try:
+                if ext in ('.csv', '.tsv'):
+                    import csv as _csv
+                    delim = '\t' if ext == '.tsv' else ','
+                    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                        reader = _csv.reader(f, delimiter=delim)
+                        rows = []
+                        for i, row in enumerate(reader):
+                            if i >= 35:
+                                rows.append(['...'])
+                                break
+                            rows.append(row)
+                    if rows:
+                        info.append(f"Format: {'TSV' if ext == '.tsv' else 'CSV'}, {len(rows[0])} columns")
+                        info.append(f"Columns: {', '.join(rows[0])}")
+                        info.append(f"Preview ({min(5, len(rows)-1)} data rows):")
+                        info.append("```")
+                        info.append(', '.join(str(v) for v in rows[0]))
+                        for r in rows[1:6]:
+                            info.append(', '.join(str(v) for v in r))
+                        info.append("```")
+
+                elif ext == '.json':
+                    import json as _json
+                    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                        raw = f.read(100_000)
+                    try:
+                        data = _json.loads(raw)
+                        if isinstance(data, list):
+                            info.append(f"Format: JSON array with {len(data)} items")
+                            if data and isinstance(data[0], dict):
+                                info.append(f"Item keys: {list(data[0].keys())}")
+                                info.append("```json")
+                                info.append(_json.dumps(data[0], indent=2)[:600])
+                                info.append("```")
+                        elif isinstance(data, dict):
+                            info.append(f"Format: JSON object, keys: {list(data.keys())}")
+                            info.append("```json")
+                            info.append(_json.dumps({k: data[k] for k in list(data)[:10]}, indent=2)[:600])
+                            info.append("```")
+                    except _json.JSONDecodeError:
+                        info.append("Note: file does not parse as valid JSON")
+
+                elif ext in ('.txt', '.md', '.dat'):
+                    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                        preview = [f.readline() for _ in range(50)]
+                    preview = [l.rstrip('\n') for l in preview if l]
+                    info.append(f"Format: text ({len(preview)} lines shown):")
+                    info.append("```")
+                    info.extend(preview)
+                    info.append("```")
+
+                elif ext in ('.fits', '.fit', '.fts'):
+                    try:
+                        import astropy.io.fits as fits
+                        with fits.open(path) as hdul:
+                            info.append(f"Format: FITS with {len(hdul)} HDU(s):")
+                            for i, hdu in enumerate(hdul):
+                                shape = hdu.data.shape if hdu.data is not None else None
+                                info.append(f"  HDU {i} ({type(hdu).__name__}): shape={shape}")
+                                if hasattr(hdu, 'columns') and hdu.columns:
+                                    info.append(f"    Columns: {', '.join(hdu.columns.names)}")
+                                interesting = [
+                                    'BUNIT', 'CRVAL1', 'CRVAL2', 'OBJECT',
+                                    'TELESCOP', 'INSTRUME', 'DATE-OBS',
+                                ]
+                                if hdu.header:
+                                    hdr_items = [(k, v) for k, v in hdu.header.items()
+                                                 if k in interesting and v]
+                                    if hdr_items:
+                                        info.append("    Key header: " +
+                                                    ', '.join(f'{k}={v}' for k, v in hdr_items))
+                    except ImportError:
+                        info.append("Format: FITS (astropy not available)")
+                    except Exception as e:
+                        info.append(f"Format: FITS (read error: {e})")
+
+                elif ext in ('.hdf5', '.h5', '.he5'):
+                    try:
+                        import h5py
+                        with h5py.File(path, 'r') as f:
+                            info.append("Format: HDF5, structure:")
+                            def _visit(name, obj):
+                                if name.count('/') >= 4:
+                                    return
+                                if isinstance(obj, h5py.Dataset):
+                                    info.append(f"  Dataset /{name}: shape={obj.shape}, dtype={obj.dtype}")
+                                elif isinstance(obj, h5py.Group):
+                                    info.append(f"  Group   /{name}/")
+                            f.visititems(_visit)
+                    except ImportError:
+                        info.append("Format: HDF5 (h5py not available)")
+                    except Exception as e:
+                        info.append(f"Format: HDF5 (read error: {e})")
+
+                elif ext == '.npy':
+                    try:
+                        import numpy as np
+                        arr = np.load(path, allow_pickle=False)
+                        info.append(f"Format: NumPy array, shape={arr.shape}, dtype={arr.dtype}")
+                        if arr.size > 0:
+                            info.append(f"  min={float(arr.min()):.4g}, "
+                                        f"max={float(arr.max()):.4g}, "
+                                        f"mean={float(arr.mean()):.4g}")
+                    except Exception as e:
+                        info.append(f"Format: NumPy array (read error: {e})")
+
+                elif ext == '.npz':
+                    try:
+                        import numpy as np
+                        data = np.load(path, allow_pickle=False)
+                        info.append(f"Format: NumPy archive, {len(data.files)} arrays:")
+                        for key in data.files:
+                            arr = data[key]
+                            info.append(f"  '{key}': shape={arr.shape}, dtype={arr.dtype}")
+                    except Exception as e:
+                        info.append(f"Format: NumPy archive (read error: {e})")
+
+                elif ext == '.pdf':
+                    try:
+                        import pdfplumber
+                        with pdfplumber.open(path) as pdf:
+                            info.append(f"Format: PDF, {len(pdf.pages)} pages")
+                            text = (pdf.pages[0].extract_text() or "")[:800]
+                            info.append(f"First page text:\n```\n{text}\n```")
+                    except ImportError:
+                        try:
+                            import pypdf
+                            reader = pypdf.PdfReader(path)
+                            info.append(f"Format: PDF, {len(reader.pages)} pages")
+                            text = (reader.pages[0].extract_text() or "")[:800]
+                            info.append(f"First page text:\n```\n{text}\n```")
+                        except ImportError:
+                            info.append("Format: PDF (no parser available)")
+                    except Exception as e:
+                        info.append(f"Format: PDF (read error: {e})")
+
+                else:
+                    info.append(f"Format: binary ({ext or 'unknown extension'}), {size_str}")
+
+            except Exception as e:
+                info.append(f"Error inspecting file: {e}")
+
+            summaries.append("\n".join(info))
+
+        files_section = "\n\n".join(summaries)
+        with _console_lock:
+            _console_buffers[buf_key].append(
+                "Sending file metadata to LLM for scientific analysis..."
+            )
+
+        from cmbagent.utils import get_api_keys_from_env
+        from openai import OpenAI
+        api_keys = get_api_keys_from_env()
+        client = OpenAI(api_key=api_keys.get("openai"))
+
+        prompt = (
+            "You are an expert research data analyst. Analyze the following research data files "
+            "and produce a comprehensive, structured data context document.\n\n"
+            "This context will be used by an AI research assistant to:\n"
+            "1. Generate research ideas grounded in what the data can actually support\n"
+            "2. Design methodologies that reference correct variable names, file paths, "
+            "and data structures\n"
+            "3. Write experiment code that correctly reads and processes these exact files\n\n"
+            f"## Uploaded Research Files\n\n{files_section}\n\n"
+            "## Instructions\n"
+            "Generate a structured **Research Data Context** document covering:\n"
+            "1. **Dataset Overview** - What dataset(s) are these? Source, survey, instrument, "
+            "origin if identifiable.\n"
+            "2. **File Inventory** - For each file: purpose, format, key contents, and the "
+            "absolute path for use in code.\n"
+            "3. **Key Variables & Columns** - Important variables with exact names, physical "
+            "units, expected ranges, scientific meaning.\n"
+            "4. **Data Dimensions & Scale** - Number of rows/samples, time range, spatial "
+            "coverage, spectral range, etc.\n"
+            "5. **Relationships Between Files** - How files relate to each other, join keys, "
+            "shared indices.\n"
+            "6. **Scientific Context** - What scientific questions this dataset is suited to "
+            "answer.\n"
+            "7. **Analysis Notes** - Known quirks, missing values, coordinate systems, "
+            "calibration status, caveats.\n\n"
+            "Be specific and factual. Use exact variable/column names from the files. "
+            "Use markdown formatting.\n"
+            "Output ONLY the data context document - no preamble, no explanation."
+        )
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=4000,
+        )
+        return response.choices[0].message.content
+
+    try:
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            context_text = await loop.run_in_executor(executor, _do_analysis)
+
+        ctx_path = os.path.join(work_dir, "input_files", "data_context.md")
+        with open(ctx_path, 'w', encoding='utf-8') as f:
+            f.write(context_text)
+
+        with _console_lock:
+            _console_buffers[buf_key].append("\u2713 Analysis complete. Data context saved.")
+            _console_buffers[buf_key].append("__ANALYZE_DONE__")
+        logger.info("deepresearch_analyze_complete task_id=%s", task_id)
+    except Exception as e:
+        logger.error("deepresearch_analyze_failed task_id=%s error=%s", task_id, e, exc_info=True)
+        with _console_lock:
+            _console_buffers[buf_key].append(f"Error: {e}")
+            _console_buffers[buf_key].append("__ANALYZE_ERROR__")
+    finally:
+        _running_analyses.pop(task_id, None)
+
+
+# =============================================================================
+# GET /api/deepresearch/{task_id}/stages/{num}/console  (REST fallback for console)
 # =============================================================================
 
 @router.get("/{task_id}/stages/{stage_num}/console")
@@ -993,20 +1470,20 @@ async def get_stage_console(task_id: str, stage_num: int, since: int = 0):
 
 
 # =============================================================================
-# GET /api/denario/recent  (must be before /{task_id} to avoid route conflict)
+# GET /api/deepresearch/recent  (must be before /{task_id} to avoid route conflict)
 # =============================================================================
 
-@router.get("/recent", response_model=list[DenarioRecentTaskResponse])
+@router.get("/recent", response_model=list[DeepresearchRecentTaskResponse])
 async def list_recent_tasks():
-    """List incomplete Denario tasks for the resume flow."""
+    """List incomplete Deepresearch tasks for the resume flow."""
     db = _get_db()
     try:
         from cmbagent.database.models import WorkflowRun
-        # Find denario runs that are not completed/failed
+        # Find deepresearch runs that are not completed/failed
         runs = (
             db.query(WorkflowRun)
             .filter(
-                WorkflowRun.mode == "denario-research",
+                WorkflowRun.mode == "deepresearch-research",
                 WorkflowRun.parent_run_id.is_(None),  # Only parent runs
                 WorkflowRun.status.in_(["executing", "draft", "planning"]),
             )
@@ -1026,7 +1503,7 @@ async def list_recent_tasks():
                     current_stage = s.stage_number
                     break
 
-            result.append(DenarioRecentTaskResponse(
+            result.append(DeepresearchRecentTaskResponse(
                 task_id=run.id,
                 task=run.task_description or "",
                 status=run.status,
@@ -1041,12 +1518,12 @@ async def list_recent_tasks():
 
 
 # =============================================================================
-# POST /api/denario/{task_id}/stop
+# POST /api/deepresearch/{task_id}/stop
 # =============================================================================
 
 @router.post("/{task_id}/stop")
 async def stop_task(task_id: str):
-    """Stop a running Denario task.
+    """Stop a running Deepresearch task.
 
     Cancels any executing background stage and marks it as failed.
     """
@@ -1083,12 +1560,12 @@ async def stop_task(task_id: str):
 
 
 # =============================================================================
-# DELETE /api/denario/{task_id}
+# DELETE /api/deepresearch/{task_id}
 # =============================================================================
 
 @router.delete("/{task_id}")
 async def delete_task(task_id: str):
-    """Delete a Denario task, its DB records, and its work directory.
+    """Delete a Deepresearch task, its DB records, and its work directory.
 
     Running stages are cancelled first.
     """
@@ -1134,16 +1611,156 @@ async def delete_task(task_id: str):
         try:
             shutil.rmtree(work_dir)
         except Exception as exc:
-            logger.warning("denario_delete_workdir_failed path=%s error=%s", work_dir, exc)
+            logger.warning("deepresearch_delete_workdir_failed path=%s error=%s", work_dir, exc)
 
     return {"status": "deleted", "task_id": task_id}
 
 
 # =============================================================================
-# GET /api/denario/{task_id}
+# POST /api/deepresearch/{task_id}/ai-edit-tex
 # =============================================================================
 
-@router.get("/{task_id}", response_model=DenarioTaskStateResponse)
+@router.post("/{task_id}/ai-edit-tex", response_model=AiEditTexResponse)
+async def ai_edit_tex(task_id: str, request: AiEditTexRequest):
+    """Use an LLM to apply a natural-language edit instruction to a .tex file.
+
+    Returns the edited LaTeX source. The caller is responsible for saving it
+    (via PUT /api/files/content) before compiling.
+    """
+    import concurrent.futures
+
+    tex_path = os.path.abspath(request.tex_path)
+    if not os.path.isfile(tex_path):
+        raise HTTPException(status_code=404, detail="TeX file not found")
+
+    try:
+        with open(tex_path, "r", encoding="utf-8") as f:
+            original = f.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read TeX file: {e}")
+
+    system_prompt = (
+        "You are an expert LaTeX editor. The user will give you a LaTeX source document "
+        "and an instruction describing modifications to make. "
+        "Apply the instruction carefully and return ONLY the complete modified LaTeX source, "
+        "with no additional commentary, markdown fences, or explanations."
+    )
+    user_prompt = (
+        f"--- INSTRUCTION ---\n{request.instruction}\n\n"
+        f"--- CURRENT LATEX SOURCE ---\n{original}"
+    )
+
+    try:
+        def _call_llm():
+            from cmbagent.utils import get_api_keys_from_env
+            from openai import OpenAI
+            api_keys = get_api_keys_from_env()
+            client = OpenAI(api_key=api_keys.get("openai"))
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=8192,
+                temperature=0.2,
+            )
+            return response.choices[0].message.content
+
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            edited = await loop.run_in_executor(executor, _call_llm)
+
+        return AiEditTexResponse(edited_content=edited or original)
+    except Exception as e:
+        logger.error("deepresearch_ai_edit_tex_failed task=%s error=%s", task_id, e)
+        raise HTTPException(status_code=500, detail=f"AI edit failed: {e}")
+
+
+# =============================================================================
+# POST /api/deepresearch/{task_id}/compile-tex
+# =============================================================================
+
+@router.post("/{task_id}/compile-tex", response_model=CompileTexResponse)
+async def compile_tex(task_id: str, request: CompileTexRequest):
+    """Compile a .tex file to PDF using xelatex.
+
+    The .tex file must already be saved on disk before calling this endpoint.
+    Returns the path to the generated PDF and the compiler log.
+    """
+    import concurrent.futures
+    import subprocess
+    import shutil
+
+    tex_path = os.path.abspath(request.tex_path)
+    if not os.path.isfile(tex_path):
+        raise HTTPException(status_code=404, detail="TeX file not found")
+
+    tex_dir = os.path.dirname(tex_path)
+    tex_name = os.path.basename(tex_path)
+    tex_stem = os.path.splitext(tex_name)[0]
+    pdf_path = os.path.join(tex_dir, f"{tex_stem}.pdf")
+    bib_path = os.path.join(tex_dir, "bibliography.bib")
+
+    def _compile():
+        log_lines = []
+
+        def run_xelatex():
+            result = subprocess.run(
+                ["xelatex", "-interaction=nonstopmode", "-file-line-error", tex_name],
+                cwd=tex_dir,
+                input="\n",
+                capture_output=True,
+                text=True,
+            )
+            log_lines.append(result.stdout[-4000:] if result.stdout else "")
+            return result.returncode == 0
+
+        def run_bibtex():
+            subprocess.run(
+                ["bibtex", tex_stem],
+                cwd=tex_dir,
+                capture_output=True,
+                text=True,
+            )
+
+        ok = run_xelatex()
+        if os.path.exists(bib_path):
+            run_bibtex()
+            run_xelatex()
+            run_xelatex()
+        else:
+            run_xelatex()
+
+        # Clean auxiliary files
+        for ext in ("aux", "log", "out", "bbl", "blg", "synctex.gz"):
+            aux = os.path.join(tex_dir, f"{tex_stem}.{ext}")
+            if os.path.exists(aux):
+                os.remove(aux)
+
+        success = os.path.exists(pdf_path)
+        return success, "\n".join(log_lines)
+
+    try:
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            success, log = await loop.run_in_executor(executor, _compile)
+
+        return CompileTexResponse(
+            pdf_path=pdf_path if success else None,
+            success=success,
+            log=log,
+        )
+    except Exception as e:
+        logger.error("deepresearch_compile_tex_failed task=%s error=%s", task_id, e)
+        raise HTTPException(status_code=500, detail=f"Compilation failed: {e}")
+
+
+# =============================================================================
+# GET /api/deepresearch/{task_id}
+# =============================================================================
+
+@router.get("/{task_id}", response_model=DeepresearchTaskStateResponse)
 async def get_task_state(task_id: str):
     """Get full task state for resume - all stages, costs, and progress."""
     db = _get_db()
@@ -1179,7 +1796,7 @@ async def get_task_state(task_id: str):
                     current_stage = s.stage_number
                     break
 
-        return DenarioTaskStateResponse(
+        return DeepresearchTaskStateResponse(
             task_id=task_id,
             task=parent.task_description or "",
             status=parent.status,

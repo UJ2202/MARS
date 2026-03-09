@@ -48,16 +48,16 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
     await ws_handler(websocket, task_id, execute_cmbagent_task)
 
 
-# WebSocket endpoint for Denario stage execution
-@app.websocket("/ws/denario/{task_id}/{stage_num}")
-async def denario_websocket_endpoint(websocket: WebSocket, task_id: str, stage_num: int):
-    """WebSocket endpoint for streaming Denario stage execution output.
+# WebSocket endpoint for Deepresearch stage execution
+@app.websocket("/ws/deepresearch/{task_id}/{stage_num}")
+async def deepresearch_websocket_endpoint(websocket: WebSocket, task_id: str, stage_num: int):
+    """WebSocket endpoint for streaming Deepresearch stage execution output.
 
     Streams console output from the shared buffer in real-time and sends
     stage_completed/stage_failed events when the phase finishes.
     """
     import asyncio
-    from routers.denario import _get_console_lines, _clear_console_buffer
+    from routers.deepresearch import _get_console_lines, _clear_console_buffer
 
     await websocket.accept()
 
@@ -87,7 +87,7 @@ async def denario_websocket_endpoint(websocket: WebSocket, task_id: str, stage_n
                 from cmbagent.database.base import get_db_session
                 db = get_db_session()
                 try:
-                    from routers.denario import _get_session_id_for_task, _get_stage_repo
+                    from routers.deepresearch import _get_session_id_for_task, _get_stage_repo
                     session_id = _get_session_id_for_task(task_id, db)
                     repo = _get_stage_repo(db, session_id=session_id)
                     stages = repo.list_stages(parent_run_id=task_id)

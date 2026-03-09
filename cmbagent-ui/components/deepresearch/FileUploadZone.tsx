@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useRef } from 'react'
 import { Upload, X, FileIcon, CheckCircle, AlertCircle, Loader2 } from 'lucide-react'
-import type { UploadedFile } from '@/types/denario'
+import type { UploadedFile } from '@/types/deepresearch'
 
 interface FileUploadZoneProps {
   files: UploadedFile[]

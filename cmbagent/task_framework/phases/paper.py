@@ -1,6 +1,6 @@
-"""Denario Paper Generation Phase.
+"""Deepresearch Paper Generation Phase.
 
-Source: Denario/denario/denario.py:get_paper()
+Source: Deepresearch/deepresearch/deepresearch.py:get_paper()
 Key details:
   - Uses LangGraph build_graph() from paper_agents/agents_graph.py
   - MUST use await graph.ainvoke() (citations_node is async)
@@ -27,11 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class DenarioPaperPhaseConfig(PhaseConfig):
-    """Configuration for Denario paper generation phase."""
-    phase_type: str = "denario_paper"
+class DeepresearchPaperPhaseConfig(PhaseConfig):
+    """Configuration for Deepresearch paper generation phase."""
+    phase_type: str = "deepresearch_paper"
 
-    # Paper config (from denario.py:793-797)
+    # Paper config (from deepresearch.py:793-797)
     llm_model: str = "gemini-2.5-flash"
     llm_temperature: float = 0.7
     llm_max_output_tokens: int = 65536
@@ -48,28 +48,28 @@ class DenarioPaperPhaseConfig(PhaseConfig):
     api_keys: Any = None
 
 
-@PhaseRegistry.register("denario_paper")
-class DenarioPaperPhase(Phase):
+@PhaseRegistry.register("deepresearch_paper")
+class DeepresearchPaperPhase(Phase):
     """Generate research paper using LangGraph pipeline.
 
-    Mirrors Denario/denario/denario.py:get_paper() exactly.
+    Mirrors Deepresearch/deepresearch/deepresearch.py:get_paper() exactly.
     """
 
-    config_class = DenarioPaperPhaseConfig
+    config_class = DeepresearchPaperPhaseConfig
 
-    def __init__(self, config: DenarioPaperPhaseConfig = None):
+    def __init__(self, config: DeepresearchPaperPhaseConfig = None):
         if config is None:
-            config = DenarioPaperPhaseConfig()
+            config = DeepresearchPaperPhaseConfig()
         super().__init__(config)
-        self.config: DenarioPaperPhaseConfig = config
+        self.config: DeepresearchPaperPhaseConfig = config
 
     @property
     def phase_type(self) -> str:
-        return "denario_paper"
+        return "deepresearch_paper"
 
     @property
     def display_name(self) -> str:
-        return "Denario Paper Generation"
+        return "Deepresearch Paper Generation"
 
     def get_required_agents(self) -> List[str]:
         return []  # LangGraph manages its own nodes
@@ -102,18 +102,28 @@ class DenarioPaperPhase(Phase):
             elif isinstance(keys, dict):
                 keys = KeyManager(**keys)
 
-            # LangGraph config (denario.py:827)
+            # Auto-disable citations when no Perplexity key is available.
+            # Mirrors original Deepresearch behaviour: citations only run when the
+            # PERPLEXITY_API_KEY is set.
+            add_citations = self.config.add_citations
+            if add_citations and not keys.PERPLEXITY:
+                logger.info(
+                    "PERPLEXITY_API_KEY not set — skipping citation step (add_citations=False)"
+                )
+                add_citations = False
+
+            # LangGraph config (deepresearch.py:827)
             # MUST include thread_id for checkpointer
             config = {
                 "configurable": {"thread_id": "1"},
                 "recursion_limit": 100,
             }
 
-            # Build graph (denario.py:833)
+            # Build graph (deepresearch.py:833)
             graph = build_graph(mermaid_diagram=False)
 
             # Build GraphState -- MUST match paper_agents/parameters.py GraphState exactly
-            # Source: denario.py:836-845
+            # Source: deepresearch.py:836-845
             input_state = {
                 "files": {"Folder": project_dir},
                 "llm": {
@@ -123,7 +133,7 @@ class DenarioPaperPhase(Phase):
                 },
                 "paper": {
                     "journal": journal,
-                    "add_citations": self.config.add_citations,
+                    "add_citations": add_citations,
                     "cmbagent_keywords": self.config.cmbagent_keywords,
                 },
                 "keys": keys,
@@ -161,16 +171,27 @@ class DenarioPaperPhase(Phase):
 
             manager.complete_step(1, "Research paper generated")
 
+            # Collect all paper versions that were generated
+            paper_artifacts = {}
+            if os.path.exists(paper_dir):
+                for version in [
+                    "paper_v1_preliminary",
+                    "paper_v2_no_citations",
+                    "paper_v3_citations",
+                    "paper_v4_final",
+                ]:
+                    for ext in ("tex", "pdf"):
+                        fpath = os.path.join(paper_dir, f"{version}.{ext}")
+                        if os.path.exists(fpath):
+                            paper_artifacts[f"{version}.{ext}"] = fpath
+
             return manager.complete(output_data={
                 'shared': {
                     'paper_dir': paper_dir,
                     'paper_pdf': paper_pdf,
                     'paper_tex': paper_tex,
                 },
-                'artifacts': {
-                    'paper/': paper_dir,
-                    'paper_pdf': paper_pdf,
-                },
+                'artifacts': paper_artifacts,
             })
 
         except Exception as e:

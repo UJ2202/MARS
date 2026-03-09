@@ -37,7 +37,7 @@
 
 ### Test Current State
 ```bash
-cd /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui
+cd /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui
 npm run build
 ```
 
@@ -737,7 +737,7 @@ cmbagent-ui/
 ## Testing Commands
 
 ```bash
-cd /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui
+cd /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui
 npm run build
 npx tsc --noEmit
 npm run dev  # Visual verification

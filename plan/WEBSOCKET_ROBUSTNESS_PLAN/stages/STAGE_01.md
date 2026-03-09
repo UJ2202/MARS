@@ -41,7 +41,7 @@ ls -la ~/.cmbagent/cmbagent.db
 echo $CMBAGENT_DATABASE_URL
 
 # Test connection
-cd /srv/projects/mas/mars/denario/cmbagent
+cd /srv/projects/mas/mars/deepresearch/cmbagent
 python -c "from cmbagent.database import get_db_session; db = get_db_session(); print('DB OK')"
 ```
 
@@ -187,7 +187,7 @@ def downgrade():
 
 **Commands:**
 ```bash
-cd /srv/projects/mas/mars/denario/cmbagent
+cd /srv/projects/mas/mars/deepresearch/cmbagent
 
 # Check current migration status
 alembic current

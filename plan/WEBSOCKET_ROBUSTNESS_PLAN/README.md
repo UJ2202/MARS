@@ -27,7 +27,7 @@ This plan addresses critical issues in the CMBAgent WebSocket and session manage
 ### Resuming Implementation:
 When resuming, provide:
 - Current stage number (from `PROGRESS.md`)
-- This README file location: `/srv/projects/mas/mars/denario/cmbagent/WEBSOCKET_ROBUSTNESS_PLAN/README.md`
+- This README file location: `/srv/projects/mas/mars/deepresearch/cmbagent/WEBSOCKET_ROBUSTNESS_PLAN/README.md`
 - Any blockers encountered
 
 ## Stage Overview
@@ -205,15 +205,15 @@ Phase 5 (Testing & Deployment)
 
 ```bash
 # Run backend
-cd /srv/projects/mas/mars/denario/cmbagent/backend
+cd /srv/projects/mas/mars/deepresearch/cmbagent/backend
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 # Run frontend
-cd /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui
+cd /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui
 npm run dev
 
 # Run migrations
-cd /srv/projects/mas/mars/denario/cmbagent
+cd /srv/projects/mas/mars/deepresearch/cmbagent
 alembic upgrade head
 
 # Run tests

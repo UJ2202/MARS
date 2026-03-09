@@ -263,7 +263,7 @@ def downgrade():
 
 **Commands:**
 ```bash
-cd /srv/projects/mas/mars/denario/cmbagent
+cd /srv/projects/mas/mars/deepresearch/cmbagent
 
 # Check current state
 alembic current

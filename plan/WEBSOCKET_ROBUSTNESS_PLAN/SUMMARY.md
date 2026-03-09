@@ -175,7 +175,7 @@ Week 4: Testing + Deploy
 
 ```bash
 # Navigate to project
-cd /srv/projects/mas/mars/denario/cmbagent
+cd /srv/projects/mas/mars/deepresearch/cmbagent
 
 # Run backend
 cd backend && uvicorn main:app --reload --port 8000

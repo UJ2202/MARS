@@ -180,10 +180,10 @@ Update any "cmbagent" references to "MARS" and apply MARS styling tokens.
 
 ```bash
 grep -rn "CMBAGENT\|CMBAgent\|cmbagent" --include="*.tsx" --include="*.ts" --include="*.css" --include="*.json" \
-  /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui/app/ \
-  /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui/components/ \
-  /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui/lib/ \
-  /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui/types/
+  /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui/app/ \
+  /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui/components/ \
+  /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui/lib/ \
+  /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui/types/
 ```
 
 For each match:

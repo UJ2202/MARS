@@ -125,6 +125,29 @@ async def get_file_content(path: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.put("/content")
+async def save_file_content(path: str, body: dict):
+    """Save text content to a file."""
+    try:
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        if not os.path.isfile(abs_path):
+            raise HTTPException(status_code=400, detail="Path is not a file")
+        content = body.get("content")
+        if content is None:
+            raise HTTPException(status_code=400, detail="Missing 'content' in request body")
+        with open(abs_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"path": abs_path, "size": os.path.getsize(abs_path)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/clear-directory")
 async def clear_directory(path: str):
     """Clear all contents of a directory."""
@@ -262,6 +285,45 @@ async def serve_image(path: str):
         raise HTTPException(status_code=500, detail=f"Error serving image: {str(e)}")
 
 
+@router.get("/serve")
+async def serve_file(path: str):
+    """Serve a file inline with its proper MIME type (for browser viewing)."""
+    try:
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        mime_type = mimetypes.guess_type(abs_path)[0] or "application/octet-stream"
+        return FileResponse(abs_path, media_type=mime_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/download")
+async def download_file(path: str):
+    """Download a file as an attachment."""
+    try:
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path) or not os.path.isfile(abs_path):
+            raise HTTPException(status_code=404, detail="File not found")
+        mime_type = mimetypes.guess_type(abs_path)[0] or "application/octet-stream"
+        filename = os.path.basename(abs_path)
+        return FileResponse(
+            abs_path,
+            media_type=mime_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/find")
 async def find_file(directory: str, filename: str):
     """Recursively search for a file by name within a directory."""
@@ -323,9 +385,9 @@ async def upload_file(
     task_id: str = Form(...),
     subfolder: str = Form("input_files"),
 ):
-    """Upload a file for a Denario research task.
+    """Upload a file for a Deepresearch research task.
 
-    Files are stored in {work_dir}/denario_tasks/{task_id}/{subfolder}/.
+    Files are stored in {work_dir}/deepresearch_tasks/{task_id}/{subfolder}/.
     """
     # Validate extension
     ext = os.path.splitext(file.filename or "")[1].lower()
@@ -347,7 +409,7 @@ async def upload_file(
 
     # Build target directory
     base_work_dir = os.path.expanduser(settings.default_work_dir)
-    target_dir = os.path.join(base_work_dir, "denario_tasks", task_id, safe_subfolder)
+    target_dir = os.path.join(base_work_dir, "deepresearch_tasks", task_id, safe_subfolder)
     os.makedirs(target_dir, exist_ok=True)
 
     target_path = os.path.join(target_dir, safe_name)

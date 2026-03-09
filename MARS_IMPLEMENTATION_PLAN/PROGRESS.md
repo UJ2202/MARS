@@ -112,8 +112,8 @@ None
 ## Notes and Observations
 
 ### General Notes
-- Project base path: `/srv/projects/mas/mars/denario/cmbagent/cmbagent-ui`
-- Plan location: `/srv/projects/mas/mars/denario/cmbagent/MARS_IMPLEMENTATION_PLAN/`
+- Project base path: `/srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui`
+- Plan location: `/srv/projects/mas/mars/deepresearch/cmbagent/MARS_IMPLEMENTATION_PLAN/`
 - Backend runs on `http://localhost:8000`
 - WebSocket connects to `ws://localhost:8000/ws/{taskId}`
 

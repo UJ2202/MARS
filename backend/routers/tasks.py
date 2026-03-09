@@ -47,26 +47,26 @@ async def submit_task(request: TaskRequest):
     Returns a task_id that can be used to connect via WebSocket
     for real-time updates.
 
-    Supports task_type="denario-research" for multi-stage research paper workflows.
+    Supports task_type="deepresearch-research" for multi-stage research paper workflows.
     """
     task_id = str(uuid.uuid4())
 
-    if request.task_type == TaskType.DENARIO_RESEARCH:
-        # Store denario task with mode set for WebSocket handler
+    if request.task_type == TaskType.DEEPRESEARCH_RESEARCH:
+        # Store deepresearch task with mode set for WebSocket handler
         config = {
             **request.config,
-            "mode": "denario-research",
+            "mode": "deepresearch-research",
             "data_description": request.data_description,
         }
         task_storage[task_id] = {
             'task_id': task_id,
-            'task_type': TaskType.DENARIO_RESEARCH.value,
+            'task_type': TaskType.DEEPRESEARCH_RESEARCH.value,
             'status': 'submitted',
             'created_at': datetime.now().isoformat(),
             'description': request.task,
             'config': config,
         }
-        logger.info("denario_task_submitted", task_id=task_id)
+        logger.info("deepresearch_task_submitted", task_id=task_id)
     else:
         # Standard task - store minimal info
         task_storage[task_id] = {
@@ -166,7 +166,7 @@ async def get_task_config(task_id: str):
 async def get_task_status(task_id: str):
     """Get the status and results of a task.
 
-    For denario-research tasks, includes stage progress information
+    For deepresearch-research tasks, includes stage progress information
     from the database when available.
     """
     if task_id not in task_storage:
@@ -186,8 +186,8 @@ async def get_task_status(task_id: str):
         updated_at=task.get('updated_at'),
     )
 
-    # For denario tasks, try to enrich with stage data from database
-    if task_type == TaskType.DENARIO_RESEARCH.value:
+    # For deepresearch tasks, try to enrich with stage data from database
+    if task_type == TaskType.DEEPRESEARCH_RESEARCH.value:
         try:
             from cmbagent.database import get_db_session
             db = get_db_session()
@@ -228,7 +228,7 @@ async def get_task_status(task_id: str):
 async def list_stages(task_id: str):
     """List all stages for a task workflow.
 
-    Returns stage information from the database for multi-stage (denario) tasks.
+    Returns stage information from the database for multi-stage (deepresearch) tasks.
     """
     try:
         from cmbagent.database import get_db_session

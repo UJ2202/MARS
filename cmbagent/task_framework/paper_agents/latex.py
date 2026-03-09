@@ -213,7 +213,7 @@ def save_paper(state: GraphState, paper_name: str):
 
     journaldict: LatexPresets = journal_dict[state['paper']['journal']]
 
-    author = "Denario"
+    author = "Deepresearch"
     affiliation = r"Anthropic, Gemini \& OpenAI servers. Planet Earth."
 
     paper = rf"""\documentclass[{journaldict.layout}]{{{journaldict.article}}}

@@ -5,21 +5,21 @@ import { ArrowLeft, Square, Trash2 } from 'lucide-react'
 import { Button } from '@/components/core'
 import Stepper from '@/components/core/Stepper'
 import type { StepperStep } from '@/components/core/Stepper'
-import { useDenarioTask } from '@/hooks/useDenarioTask'
-import { DENARIO_STEP_LABELS, WIZARD_STEP_TO_STAGE } from '@/types/denario'
-import type { DenarioWizardStep } from '@/types/denario'
-import SetupPanel from '@/components/denario/SetupPanel'
-import ReviewPanel from '@/components/denario/ReviewPanel'
-import ExecutionPanel from '@/components/denario/ExecutionPanel'
-import PaperPanel from '@/components/denario/PaperPanel'
+import { useDeepresearchTask } from '@/hooks/useDeepresearchTask'
+import { DEEPRESEARCH_STEP_LABELS, WIZARD_STEP_TO_STAGE } from '@/types/deepresearch'
+import type { DeepresearchWizardStep } from '@/types/deepresearch'
+import SetupPanel from '@/components/deepresearch/SetupPanel'
+import ReviewPanel from '@/components/deepresearch/ReviewPanel'
+import ExecutionPanel from '@/components/deepresearch/ExecutionPanel'
+import PaperPanel from '@/components/deepresearch/PaperPanel'
 
-interface DenarioResearchTaskProps {
+interface DeepresearchResearchTaskProps {
   onBack: () => void
   resumeTaskId?: string | null
 }
 
-export default function DenarioResearchTask({ onBack, resumeTaskId }: DenarioResearchTaskProps) {
-  const hook = useDenarioTask()
+export default function DeepresearchResearchTask({ onBack, resumeTaskId }: DeepresearchResearchTaskProps) {
+  const hook = useDeepresearchTask()
   const {
     taskId,
     taskState,
@@ -42,7 +42,7 @@ export default function DenarioResearchTask({ onBack, resumeTaskId }: DenarioRes
   }, [resumeTaskId, resumeTask])
 
   // Build stepper steps from taskState
-  const stepperSteps: StepperStep[] = DENARIO_STEP_LABELS.map((label, idx) => {
+  const stepperSteps: StepperStep[] = DEEPRESEARCH_STEP_LABELS.map((label, idx) => {
     const stageNum = WIZARD_STEP_TO_STAGE[idx]
     let status: StepperStep['status'] = 'pending'
 
@@ -72,13 +72,13 @@ export default function DenarioResearchTask({ onBack, resumeTaskId }: DenarioRes
 
   const goNext = useCallback(() => {
     if (currentStep < 4) {
-      setCurrentStep((currentStep + 1) as DenarioWizardStep)
+      setCurrentStep((currentStep + 1) as DeepresearchWizardStep)
     }
   }, [currentStep, setCurrentStep])
 
   const goBack = useCallback(() => {
     if (currentStep > 0 && !isExecuting) {
-      setCurrentStep((currentStep - 1) as DenarioWizardStep)
+      setCurrentStep((currentStep - 1) as DeepresearchWizardStep)
     }
   }, [currentStep, isExecuting, setCurrentStep])
 
@@ -108,13 +108,13 @@ export default function DenarioResearchTask({ onBack, resumeTaskId }: DenarioRes
             className="text-2xl font-semibold"
             style={{ color: 'var(--mars-color-text)' }}
           >
-            Research Paper
+            Deep Scientific Research
           </h2>
           <p
             className="text-sm mt-0.5"
             style={{ color: 'var(--mars-color-text-secondary)' }}
           >
-            Generate a research paper through interactive stages
+            Generate a deep scientific research paper through interactive stages
           </p>
         </div>
         {taskState?.total_cost_usd != null && taskState.total_cost_usd > 0 && (

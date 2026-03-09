@@ -3,20 +3,21 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { getApiUrl, getWsUrl } from '@/lib/config'
 import type {
-  DenarioTaskState,
-  DenarioStageContent,
-  DenarioCreateResponse,
-  DenarioRefineResponse,
+  DeepresearchTaskState,
+  DeepresearchStageContent,
+  DeepresearchCreateResponse,
+  DeepresearchRefineResponse,
   RefinementMessage,
   UploadedFile,
-  DenarioWizardStep,
-} from '@/types/denario'
+  DeepresearchWizardStep,
+  DeepresearchStageConfig,
+} from '@/types/deepresearch'
 
-interface UseDenarioTaskReturn {
+interface UseDeepresearchTaskReturn {
   // State
   taskId: string | null
-  taskState: DenarioTaskState | null
-  currentStep: DenarioWizardStep
+  taskState: DeepresearchTaskState | null
+  currentStep: DeepresearchWizardStep
   isLoading: boolean
   error: string | null
 
@@ -29,14 +30,28 @@ interface UseDenarioTaskReturn {
   // Files
   uploadedFiles: UploadedFile[]
 
+  // File context (data understanding)
+  fileContextOutput: string[]
+  fileContextStatus: 'idle' | 'running' | 'done' | 'error'
+  fileContext: string
+
+  // Stage config
+  taskConfig: DeepresearchStageConfig
+  setTaskConfig: (config: DeepresearchStageConfig) => void
+
   // Actions
-  createTask: (task: string, dataDescription?: string, config?: Record<string, unknown>) => Promise<void>
-  executeStage: (stageNum: number) => Promise<void>
-  fetchStageContent: (stageNum: number) => Promise<DenarioStageContent | null>
+  autoCreateTask: () => Promise<string | null>
+  createTask: (task: string, dataDescription?: string, config?: DeepresearchStageConfig) => Promise<string | null>
+  executeStage: (stageNum: number, overrideId?: string) => Promise<void>
+  fetchStageContent: (stageNum: number) => Promise<DeepresearchStageContent | null>
   saveStageContent: (stageNum: number, content: string, field: string) => Promise<void>
   refineContent: (stageNum: number, message: string, content: string) => Promise<string | null>
   uploadFile: (file: File) => Promise<void>
-  setCurrentStep: (step: DenarioWizardStep) => void
+  analyzeFiles: () => Promise<void>
+  refineFileContext: (message: string, content: string) => Promise<string | null>
+  saveFileContext: (content: string) => Promise<void>
+  setFileContext: (content: string) => void
+  setCurrentStep: (step: DeepresearchWizardStep) => void
   setEditableContent: (content: string) => void
   resumeTask: (taskId: string) => Promise<void>
   stopTask: () => Promise<void>
@@ -44,10 +59,10 @@ interface UseDenarioTaskReturn {
   clearError: () => void
 }
 
-export function useDenarioTask(): UseDenarioTaskReturn {
+export function useDeepresearchTask(): UseDeepresearchTaskReturn {
   const [taskId, setTaskId] = useState<string | null>(null)
-  const [taskState, setTaskState] = useState<DenarioTaskState | null>(null)
-  const [currentStep, setCurrentStep] = useState<DenarioWizardStep>(0)
+  const [taskState, setTaskState] = useState<DeepresearchTaskState | null>(null)
+  const [currentStep, setCurrentStep] = useState<DeepresearchWizardStep>(0)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,11 +71,25 @@ export function useDenarioTask(): UseDenarioTaskReturn {
   const [consoleOutput, setConsoleOutput] = useState<string[]>([])
   const [isExecuting, setIsExecuting] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  const [taskConfig, setTaskConfig] = useState<DeepresearchStageConfig>({})
+
+  // File context (data understanding)
+  const [fileContextOutput, setFileContextOutput] = useState<string[]>([])
+  const [fileContextStatus, setFileContextStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [fileContext, setFileContext] = useState('')
 
   const wsRef = useRef<WebSocket | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const consolePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const analyzeConsolePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const consoleIndexRef = useRef(0)
+
+  // Stable refs to avoid stale closures for auto-create
+  const taskIdRef = useRef<string | null>(null)
+  const autoCreateLockRef = useRef<Promise<string | null> | null>(null)
+
+  // Keep taskIdRef in sync with taskId state
+  useEffect(() => { taskIdRef.current = taskId }, [taskId])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -68,6 +97,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
       wsRef.current?.close()
       if (pollRef.current) clearInterval(pollRef.current)
       if (consolePollRef.current) clearInterval(consolePollRef.current)
+      if (analyzeConsolePollRef.current) clearInterval(analyzeConsolePollRef.current)
     }
   }, [])
 
@@ -90,7 +120,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
   // ---- Task lifecycle ----
 
   const loadTaskState = useCallback(async (id: string) => {
-    const state: DenarioTaskState = await apiFetch(`/api/denario/${id}`)
+    const state: DeepresearchTaskState = await apiFetch(`/api/deepresearch/${id}`)
     setTaskState(state)
     return state
   }, [apiFetch])
@@ -98,33 +128,39 @@ export function useDenarioTask(): UseDenarioTaskReturn {
   const createTask = useCallback(async (
     task: string,
     dataDescription?: string,
-    config?: Record<string, unknown>,
+    config?: DeepresearchStageConfig,
   ) => {
     setIsLoading(true)
     setError(null)
     try {
-      const resp: DenarioCreateResponse = await apiFetch('/api/denario/create', {
+      // If a task was already auto-created, just update its description
+      const existingId = taskIdRef.current
+      if (existingId) {
+        await apiFetch(`/api/deepresearch/${existingId}/description`, {
+          method: 'PATCH',
+          body: JSON.stringify({ task, data_description: dataDescription }),
+        })
+        if (config) setTaskConfig(config)
+        return existingId
+      }
+
+      // Otherwise create fresh
+      const resp: DeepresearchCreateResponse = await apiFetch('/api/deepresearch/create', {
         method: 'POST',
         body: JSON.stringify({ task, data_description: dataDescription, config }),
       })
       setTaskId(resp.task_id)
-
-      // Upload any pending files
-      for (const f of uploadedFiles) {
-        if (f.status === 'pending') {
-          // File is already staged in uploadedFiles, actual upload happens here
-          // (file objects no longer accessible here - upload happens in uploadFile)
-        }
-      }
-
-      // Load full task state
+      taskIdRef.current = resp.task_id
+      if (config) setTaskConfig(config)
       await loadTaskState(resp.task_id)
+      return resp.task_id
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to create task')
+      return null
     } finally {
       setIsLoading(false)
     }
-  }, [apiFetch, loadTaskState, uploadedFiles])
+  }, [apiFetch, loadTaskState])
 
   // ---- Stage execution ----
 
@@ -154,7 +190,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     consolePollRef.current = setInterval(async () => {
       try {
         const resp = await fetch(
-          getApiUrl(`/api/denario/${id}/stages/${stageNum}/console?since=${consoleIndexRef.current}`)
+          getApiUrl(`/api/deepresearch/${id}/stages/${stageNum}/console?since=${consoleIndexRef.current}`)
         )
         if (!resp.ok) return
         const data = await resp.json()
@@ -170,7 +206,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
 
   const connectWs = useCallback((id: string, stageNum: number) => {
     wsRef.current?.close()
-    const url = getWsUrl(`/ws/denario/${id}/${stageNum}`)
+    const url = getWsUrl(`/ws/deepresearch/${id}/${stageNum}`)
     const ws = new WebSocket(url)
     wsRef.current = ws
 
@@ -201,35 +237,54 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     ws.onclose = () => {}
   }, [loadTaskState])
 
-  const executeStage = useCallback(async (stageNum: number) => {
-    if (!taskId) return
+  const executeStage = useCallback(async (stageNum: number, overrideId?: string) => {
+    const id = overrideId ?? taskId
+    if (!id) return
     setIsExecuting(true)
     setError(null)
     setConsoleOutput([])
 
+    // Build config_overrides from stored taskConfig, filtered by stage
+    const cfg = taskConfig
+    let config_overrides: Record<string, unknown> = {}
+    if (stageNum <= 3) {
+      // Stages 1-3 use stage_helpers which ignores unknown keys
+      const { llm_model, writer, add_citations, ...sharedCfg } = cfg
+      void llm_model; void writer; void add_citations
+      config_overrides = Object.fromEntries(
+        Object.entries(sharedCfg).filter(([, v]) => v !== undefined && v !== '')
+      )
+    } else {
+      // Stage 4 (paper) uses DeepresearchPaperPhaseConfig — only pass valid fields
+      const paperKeys: Array<keyof DeepresearchStageConfig> = ['llm_model', 'writer', 'journal', 'add_citations']
+      for (const k of paperKeys) {
+        if (cfg[k] !== undefined) config_overrides[k] = cfg[k]
+      }
+    }
+
     try {
-      await apiFetch(`/api/denario/${taskId}/stages/${stageNum}/execute`, {
+      await apiFetch(`/api/deepresearch/${id}/stages/${stageNum}/execute`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({ config_overrides }),
       })
 
       // Connect WS + start polling (status + console)
-      connectWs(taskId, stageNum)
-      startPolling(taskId, stageNum)
-      startConsolePoll(taskId, stageNum)
+      connectWs(id, stageNum)
+      startPolling(id, stageNum)
+      startConsolePoll(id, stageNum)
       setConsoleOutput([`Stage ${stageNum} execution started...`])
     } catch (e: unknown) {
       setIsExecuting(false)
       setError(e instanceof Error ? e.message : 'Failed to execute stage')
     }
-  }, [taskId, apiFetch, connectWs, startPolling, startConsolePoll])
+  }, [taskId, taskConfig, apiFetch, connectWs, startPolling, startConsolePoll])
 
   // ---- Content ----
 
-  const fetchStageContent = useCallback(async (stageNum: number): Promise<DenarioStageContent | null> => {
+  const fetchStageContent = useCallback(async (stageNum: number): Promise<DeepresearchStageContent | null> => {
     if (!taskId) return null
     try {
-      const content: DenarioStageContent = await apiFetch(`/api/denario/${taskId}/stages/${stageNum}/content`)
+      const content: DeepresearchStageContent = await apiFetch(`/api/deepresearch/${taskId}/stages/${stageNum}/content`)
       // Always update editable content — use content from response,
       // or empty string as fallback (content may be null/undefined/empty)
       setEditableContent(content.content ?? '')
@@ -242,7 +297,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
   const saveStageContent = useCallback(async (stageNum: number, content: string, field: string) => {
     if (!taskId) return
     try {
-      await apiFetch(`/api/denario/${taskId}/stages/${stageNum}/content`, {
+      await apiFetch(`/api/deepresearch/${taskId}/stages/${stageNum}/content`, {
         method: 'PUT',
         body: JSON.stringify({ content, field }),
       })
@@ -268,7 +323,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     setRefinementMessages(prev => [...prev, userMsg])
 
     try {
-      const resp: DenarioRefineResponse = await apiFetch(`/api/denario/${taskId}/stages/${stageNum}/refine`, {
+      const resp: DeepresearchRefineResponse = await apiFetch(`/api/deepresearch/${taskId}/stages/${stageNum}/refine`, {
         method: 'POST',
         body: JSON.stringify({ message, content }),
       })
@@ -290,6 +345,27 @@ export function useDenarioTask(): UseDenarioTaskReturn {
 
   // ---- File upload ----
 
+  // Auto-create a task silently so files can be uploaded immediately.
+  // Uses a lock to prevent double-creation on concurrent calls.
+  const autoCreateTask = useCallback(async (): Promise<string | null> => {
+    if (taskIdRef.current) return taskIdRef.current
+    if (autoCreateLockRef.current) return autoCreateLockRef.current
+    const p = apiFetch('/api/deepresearch/create', {
+      method: 'POST',
+      body: JSON.stringify({ task: '' }),
+    }).then((resp: DeepresearchCreateResponse) => {
+      taskIdRef.current = resp.task_id
+      setTaskId(resp.task_id)
+      autoCreateLockRef.current = null
+      return resp.task_id as string | null
+    }).catch((): null => {
+      autoCreateLockRef.current = null
+      return null
+    })
+    autoCreateLockRef.current = p
+    return p
+  }, [apiFetch])
+
   const uploadFile = useCallback(async (file: File) => {
     const entry: UploadedFile = {
       name: file.name,
@@ -298,8 +374,12 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     }
     setUploadedFiles(prev => [...prev, entry])
 
-    // If no taskId yet, we can't upload - mark as pending
-    if (!taskId) {
+    // Ensure task exists before uploading
+    let id = taskIdRef.current
+    if (!id) {
+      id = await autoCreateTask()
+    }
+    if (!id) {
       setUploadedFiles(prev =>
         prev.map(f => f.name === file.name ? { ...f, status: 'pending' as const } : f)
       )
@@ -308,7 +388,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
 
     const formData = new FormData()
     formData.append('file', file)
-    formData.append('task_id', taskId)
+    formData.append('task_id', id)
     formData.append('subfolder', 'input_files')
 
     try {
@@ -330,23 +410,105 @@ export function useDenarioTask(): UseDenarioTaskReturn {
         } : f)
       )
     }
-  }, [taskId])
+  }, [autoCreateTask])
+
+  // ---- File context (data understanding) ----
+
+  const analyzeFiles = useCallback(async () => {
+    const id = taskIdRef.current
+    if (!id) return
+    setFileContextStatus('running')
+    setFileContextOutput([])
+
+    try {
+      await apiFetch(`/api/deepresearch/${id}/analyze-files`, { method: 'POST' })
+    } catch (e: unknown) {
+      setFileContextStatus('error')
+      setFileContextOutput([e instanceof Error ? e.message : 'Failed to start analysis'])
+      return
+    }
+
+    // Poll for progress
+    let idx = 0
+    if (analyzeConsolePollRef.current) clearInterval(analyzeConsolePollRef.current)
+    analyzeConsolePollRef.current = setInterval(async () => {
+      try {
+        const resp = await fetch(
+          getApiUrl(`/api/deepresearch/${id}/analyze-files/console?since=${idx}`)
+        )
+        if (!resp.ok) return
+        const data = await resp.json()
+        if (data.lines?.length > 0) {
+          setFileContextOutput(prev => [...prev, ...data.lines])
+          idx = data.next_index
+        }
+        if (data.is_done) {
+          if (analyzeConsolePollRef.current) clearInterval(analyzeConsolePollRef.current)
+          analyzeConsolePollRef.current = null
+          if (data.has_error) {
+            setFileContextStatus('error')
+          } else {
+            setFileContext(data.context_text || '')
+            setFileContextStatus('done')
+          }
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    }, 2000)
+  }, [apiFetch])
+
+  const refineFileContext = useCallback(async (
+    message: string,
+    content: string,
+  ): Promise<string | null> => {
+    const id = taskIdRef.current
+    if (!id) return null
+    try {
+      const resp = await apiFetch(`/api/deepresearch/${id}/refine-context`, {
+        method: 'POST',
+        body: JSON.stringify({ message, content }),
+      })
+      setFileContext(resp.refined_content)
+      return resp.refined_content
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Context refinement failed')
+      return null
+    }
+  }, [apiFetch])
+
+  const saveFileContext = useCallback(async (content: string) => {
+    const id = taskIdRef.current
+    if (!id) return
+    try {
+      await apiFetch(`/api/deepresearch/${id}/context`, {
+        method: 'PUT',
+        body: JSON.stringify({ message: '', content }),
+      })
+      setFileContext(content)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save context')
+    }
+  }, [apiFetch])
 
   // ---- Resume ----
 
   const resumeTask = useCallback(async (id: string) => {
     setIsLoading(true)
     setError(null)
+    // Set ref synchronously so any concurrent autoCreateTask calls see this ID
+    // and bail out immediately instead of creating a new empty task
+    taskIdRef.current = id
     try {
       setTaskId(id)
       const state = await loadTaskState(id)
 
       // Find the right step to resume at
-      let resumeStep: DenarioWizardStep = 0
+      let resumeStep: DeepresearchWizardStep = 0
       for (const stage of state.stages) {
         if (stage.status === 'running') {
           // Stage is running - go to that step and reconnect
-          resumeStep = stage.stage_number as DenarioWizardStep
+          resumeStep = stage.stage_number as DeepresearchWizardStep
           setIsExecuting(true)
           connectWs(id, stage.stage_number)
           startPolling(id, stage.stage_number)
@@ -355,15 +517,29 @@ export function useDenarioTask(): UseDenarioTaskReturn {
         }
         if (stage.status === 'completed') {
           // Completed - advance past it
-          resumeStep = Math.min(stage.stage_number + 1, 4) as DenarioWizardStep
+          resumeStep = Math.min(stage.stage_number + 1, 4) as DeepresearchWizardStep
         } else {
           // Pending or failed - stop here
-          resumeStep = stage.stage_number as DenarioWizardStep
+          resumeStep = stage.stage_number as DeepresearchWizardStep
           break
         }
       }
 
       setCurrentStep(resumeStep)
+
+      // Restore file context if it was previously analysed
+      try {
+        const ctxResp = await fetch(getApiUrl(`/api/deepresearch/${id}/analyze-files/console?since=0`))
+        if (ctxResp.ok) {
+          const ctxData = await ctxResp.json()
+          if (ctxData.is_done && ctxData.context_text) {
+            setFileContext(ctxData.context_text)
+            setFileContextStatus('done')
+          }
+        }
+      } catch {
+        // not critical — context panel just stays empty
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to resume task')
     } finally {
@@ -376,7 +552,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
   const stopTask = useCallback(async () => {
     if (!taskId) return
     try {
-      await apiFetch(`/api/denario/${taskId}/stop`, { method: 'POST' })
+      await apiFetch(`/api/deepresearch/${taskId}/stop`, { method: 'POST' })
       setIsExecuting(false)
       wsRef.current?.close()
       if (pollRef.current) clearInterval(pollRef.current)
@@ -392,7 +568,7 @@ export function useDenarioTask(): UseDenarioTaskReturn {
   const deleteTask = useCallback(async () => {
     if (!taskId) return
     try {
-      await apiFetch(`/api/denario/${taskId}`, { method: 'DELETE' })
+      await apiFetch(`/api/deepresearch/${taskId}`, { method: 'DELETE' })
       // Reset all state
       setTaskId(null)
       setTaskState(null)
@@ -423,13 +599,23 @@ export function useDenarioTask(): UseDenarioTaskReturn {
     consoleOutput,
     isExecuting,
     uploadedFiles,
+    fileContextOutput,
+    fileContextStatus,
+    fileContext,
+    taskConfig,
+    setTaskConfig,
+    autoCreateTask,
     createTask,
     executeStage,
     fetchStageContent,
     saveStageContent,
     refineContent,
     uploadFile,
-    setCurrentStep: setCurrentStep as (step: DenarioWizardStep) => void,
+    analyzeFiles,
+    refineFileContext,
+    saveFileContext,
+    setFileContext,
+    setCurrentStep: setCurrentStep as (step: DeepresearchWizardStep) => void,
     setEditableContent,
     resumeTask,
     stopTask,

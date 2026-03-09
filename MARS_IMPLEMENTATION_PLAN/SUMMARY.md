@@ -232,7 +232,7 @@ Stage 1 ──→ Stage 2 ──→ Stage 3
 
 ```bash
 # Navigate to project
-cd /srv/projects/mas/mars/denario/cmbagent/cmbagent-ui
+cd /srv/projects/mas/mars/deepresearch/cmbagent/cmbagent-ui
 
 # Start dev server
 npm run dev

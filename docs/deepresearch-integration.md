@@ -1,4 +1,4 @@
-# Denario Research Paper Workflow — End-to-End Documentation
+# Deepresearch Research Paper Workflow — End-to-End Documentation
 
 ## Table of Contents
 
@@ -47,14 +47,14 @@
 
 ## 1. Overview
 
-Denario is a **4-stage interactive research paper generation workflow** integrated into CMBAgent as a first-class task mode. It automates the full research pipeline:
+Deepresearch is a **4-stage interactive research paper generation workflow** integrated into CMBAgent as a first-class task mode. It automates the full research pipeline:
 
 1. **Idea Generation** — AI agents brainstorm and refine research ideas
 2. **Method Development** — A methodology is designed for the selected idea
 3. **Experiment Execution** — Code is generated and executed to produce results and plots
 4. **Paper Generation** — A complete academic paper (PDF + LaTeX) is produced
 
-Each stage is human-in-the-loop: users can review, edit, and refine the AI output before proceeding to the next stage. The system is registered under the mode `"denario-research"` and appears in the UI as "Research Paper".
+Each stage is human-in-the-loop: users can review, edit, and refine the AI output before proceeding to the next stage. The system is registered under the mode `"deepresearch-research"` and appears in the UI as "Research Paper".
 
 **Key technologies:**
 - **Backend:** Python, FastAPI, SQLAlchemy, asyncio
@@ -72,26 +72,26 @@ Each stage is human-in-the-loop: users can review, edit, and refine the AI outpu
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         FRONTEND (React/Next.js)                    │
 │                                                                     │
-│  TaskList.tsx ──► DenarioResearchTask.tsx (5-step wizard)           │
+│  TaskList.tsx ──► DeepresearchResearchTask.tsx (5-step wizard)           │
 │                    ├── SetupPanel.tsx        (Step 0)               │
 │                    ├── ReviewPanel.tsx       (Steps 1, 2)           │
 │                    ├── ExecutionPanel.tsx    (Step 3)               │
 │                    └── PaperPanel.tsx        (Step 4)               │
 │                                                                     │
-│  useDenarioTask.ts ── state management, API calls, WebSocket       │
+│  useDeepresearchTask.ts ── state management, API calls, WebSocket       │
 └───────────┬──────────────────────────────────┬──────────────────────┘
             │ REST API                         │ WebSocket
             ▼                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        BACKEND (FastAPI)                            │
 │                                                                     │
-│  routers/denario.py ── REST endpoints + direct execution engine     │
+│  routers/deepresearch.py ── REST endpoints + direct execution engine     │
 │    Stages 1-3: calls planning_and_control_context_carryover()       │
 │                directly with full callbacks (CostCollector,         │
 │                EventRepository, print callbacks)                    │
-│    Stage 4:    delegates to DenarioPaperPhase (LangGraph)           │
-│  main.py            ── WebSocket /ws/denario/{task_id}/{stage_num} │
-│  routers/__init__.py── registers denario_router                    │
+│    Stage 4:    delegates to DeepresearchPaperPhase (LangGraph)           │
+│  main.py            ── WebSocket /ws/deepresearch/{task_id}/{stage_num} │
+│  routers/__init__.py── registers deepresearch_router                    │
 │  routers/files.py   ── file upload endpoint                        │
 └───────────┬──────────────────────────────────┬──────────────────────┘
             │                                  │
@@ -107,7 +107,7 @@ Each stage is human-in-the-loop: users can review, edit, and refine the AI outpu
 │  TaskStageRepository   │    │      processing, file I/O)            │
 │  CostRepository        │    │                                       │
 │  EventRepository       │    │  Stage 4:                             │
-└────────────────────────┘    │    DenarioPaperPhase (LangGraph)      │
+└────────────────────────┘    │    DeepresearchPaperPhase (LangGraph)      │
                               │    build_graph() pipeline              │
                               │    (preprocess → keywords → abstract  │
                               │     → intro → methods → results       │
@@ -128,10 +128,10 @@ cmbagent/
 │   │   ├── app.py                           # App factory
 │   │   └── config.py                        # Settings (default_work_dir, etc.)
 │   ├── models/
-│   │   └── denario_schemas.py               # Pydantic request/response schemas
+│   │   └── deepresearch_schemas.py               # Pydantic request/response schemas
 │   ├── routers/
 │   │   ├── __init__.py                      # Router registration
-│   │   ├── denario.py                       # Denario REST API (808 lines)
+│   │   ├── deepresearch.py                       # Deepresearch REST API (808 lines)
 │   │   └── files.py                         # File upload/download API
 │   ├── services/
 │   │   └── session_manager.py               # Backend session lifecycle
@@ -159,9 +159,9 @@ cmbagent/
 │       ├── stage_helpers.py                 # Pure functions for stages 1-3 (prompts, extraction, file I/O)
 │       ├── key_manager.py                   # KeyManager (API keys)
 │       ├── phases/
-│       │   └── paper.py                     # DenarioPaperPhase (only phase class retained)
+│       │   └── paper.py                     # DeepresearchPaperPhase (only phase class retained)
 │       ├── prompts/
-│       │   └── denario/
+│       │   └── deepresearch/
 │       │       ├── __init__.py
 │       │       ├── idea.py                  # idea_planner_prompt
 │       │       ├── method.py                # method_planner_prompt, method_researcher_prompt
@@ -178,13 +178,13 @@ cmbagent/
 │
 ├── cmbagent-ui/
 │   ├── app/tasks/page.tsx                   # Task routing page
-│   ├── types/denario.ts                     # TypeScript type definitions
-│   ├── hooks/useDenarioTask.ts              # React hook for Denario state management
+│   ├── types/deepresearch.ts                     # TypeScript type definitions
+│   ├── hooks/useDeepresearchTask.ts              # React hook for Deepresearch state management
 │   ├── components/
 │   │   ├── tasks/
 │   │   │   ├── TaskList.tsx                 # Task catalog (lists "Research Paper")
-│   │   │   └── DenarioResearchTask.tsx      # Main wizard container
-│   │   └── denario/
+│   │   │   └── DeepresearchResearchTask.tsx      # Main wizard container
+│   │   └── deepresearch/
 │   │       ├── SetupPanel.tsx               # Step 0: Research description + file upload
 │   │       ├── ReviewPanel.tsx              # Steps 1-2: Edit/preview + refinement chat
 │   │       ├── ExecutionPanel.tsx           # Step 3: Live console output
@@ -195,12 +195,12 @@ cmbagent/
 │   └── lib/config.ts                        # getApiUrl(), getWsUrl()
 │
 ├── tests/
-│   ├── test_denario_api.py                  # REST endpoint tests
-│   ├── test_denario_phases.py               # Stage helper unit tests + paper phase tests
-│   └── test_denario_integration.py          # Full context flow integration tests
+│   ├── test_deepresearch_api.py                  # REST endpoint tests
+│   ├── test_deepresearch_phases.py               # Stage helper unit tests + paper phase tests
+│   └── test_deepresearch_integration.py          # Full context flow integration tests
 │
 └── cmbagent_workdir/
-    └── denario_tasks/
+    └── deepresearch_tasks/
         └── {task_id}/                       # Per-task working directory
             ├── input_files/
             │   ├── data_description.md
@@ -226,7 +226,7 @@ cmbagent/
 ### 4.1 Phase 1 — Idea Generation
 
 **Helper functions:** `cmbagent/task_framework/stage_helpers.py`
-**Invoked from:** `backend/routers/denario.py` → `_run_planning_control_stage()`
+**Invoked from:** `backend/routers/deepresearch.py` → `_run_planning_control_stage()`
 
 **What it does:**
 Uses a multi-agent debate pattern to generate and refine research ideas. Called directly via `planning_and_control_context_carryover()` with full callback infrastructure (no phase wrapper class).
@@ -267,7 +267,7 @@ Uses a multi-agent debate pattern to generate and refine research ideas. Called 
 ### 4.2 Phase 2 — Method Development
 
 **Helper functions:** `cmbagent/task_framework/stage_helpers.py`
-**Invoked from:** `backend/routers/denario.py` → `_run_planning_control_stage()`
+**Invoked from:** `backend/routers/deepresearch.py` → `_run_planning_control_stage()`
 
 **What it does:**
 Develops a detailed research methodology based on the idea from Phase 1.
@@ -307,7 +307,7 @@ Develops a detailed research methodology based on the idea from Phase 1.
 ### 4.3 Phase 3 — Experiment Execution
 
 **Helper functions:** `cmbagent/task_framework/stage_helpers.py`
-**Invoked from:** `backend/routers/denario.py` → `_run_planning_control_stage()`
+**Invoked from:** `backend/routers/deepresearch.py` → `_run_planning_control_stage()`
 
 **What it does:**
 Executes the research experiments: generates and runs code, produces plots and quantitative results.
@@ -354,13 +354,13 @@ Executes the research experiments: generates and runs code, produces plots and q
 ### 4.4 Phase 4 — Paper Generation (LangGraph)
 
 **File:** `cmbagent/task_framework/phases/paper.py`
-**Phase class:** `DenarioPaperPhase`
-**Registered as:** `denario_paper`
+**Phase class:** `DeepresearchPaperPhase`
+**Registered as:** `deepresearch_paper`
 
 **What it does:**
-Generates a complete academic paper using a LangGraph state machine. Unlike Stages 1-3 which call `planning_and_control_context_carryover()` directly via `stage_helpers`, Stage 4 uses a `Phase` subclass (`DenarioPaperPhase`) with a dedicated LangGraph pipeline. This is the only Denario stage that uses the Phase framework.
+Generates a complete academic paper using a LangGraph state machine. Unlike Stages 1-3 which call `planning_and_control_context_carryover()` directly via `stage_helpers`, Stage 4 uses a `Phase` subclass (`DeepresearchPaperPhase`) with a dedicated LangGraph pipeline. This is the only Deepresearch stage that uses the Phase framework.
 
-**Configuration (`DenarioPaperPhaseConfig`):**
+**Configuration (`DeepresearchPaperPhaseConfig`):**
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -387,7 +387,7 @@ See [Section 9](#9-langgraph-paper-pipeline) for detailed LangGraph pipeline doc
 
 ## 5. Shared State & Context Flow
 
-The Denario workflow uses a **cumulative shared state** pattern. Each phase reads context from all previous phases and adds its own output:
+The Deepresearch workflow uses a **cumulative shared state** pattern. Each phase reads context from all previous phases and adds its own output:
 
 ```
 Phase 1 (Idea)
@@ -412,7 +412,7 @@ Phase 4 (Paper)
 
 **How shared state is reconstructed between stages:**
 
-The function `build_shared_state()` in `routers/denario.py:100-113` reconstructs the cumulative shared state before each phase execution:
+The function `build_shared_state()` in `routers/deepresearch.py:100-113` reconstructs the cumulative shared state before each phase execution:
 
 ```python
 def build_shared_state(task_id, up_to_stage, db, session_id):
@@ -436,15 +436,15 @@ This means each stage's `output_data["shared"]` is merged into a single dictiona
 
 ### 6.1 REST Endpoints
 
-All endpoints are prefixed with `/api/denario/`.
+All endpoints are prefixed with `/api/deepresearch/`.
 
-**Source:** `backend/routers/denario.py`
+**Source:** `backend/routers/deepresearch.py`
 
-#### `POST /api/denario/create`
+#### `POST /api/deepresearch/create`
 
-Creates a new Denario research task with 4 pending stages.
+Creates a new Deepresearch research task with 4 pending stages.
 
-**Request body (`DenarioCreateRequest`):**
+**Request body (`DeepresearchCreateRequest`):**
 ```json
 {
   "task": "Research description / pitch",
@@ -453,11 +453,11 @@ Creates a new Denario research task with 4 pending stages.
 }
 ```
 
-**Response (`DenarioCreateResponse`):**
+**Response (`DeepresearchCreateResponse`):**
 ```json
 {
   "task_id": "uuid",
-  "work_dir": "/path/to/denario_tasks/{task_id}",
+  "work_dir": "/path/to/deepresearch_tasks/{task_id}",
   "stages": [
     { "stage_number": 1, "stage_name": "idea_generation", "status": "pending", ... },
     { "stage_number": 2, "stage_name": "method_development", "status": "pending", ... },
@@ -469,19 +469,19 @@ Creates a new Denario research task with 4 pending stages.
 
 **What it does internally:**
 1. Generates a UUID for the task
-2. Creates the work directory: `{default_work_dir}/denario_tasks/{task_id}/input_files/`
-3. Creates a `Session` via `SessionManager` with `mode="denario-research"`
-4. Creates a `WorkflowRun` record with `mode="denario-research"`, `status="executing"`
+2. Creates the work directory: `{default_work_dir}/deepresearch_tasks/{task_id}/input_files/`
+3. Creates a `Session` via `SessionManager` with `mode="deepresearch-research"`
+4. Creates a `WorkflowRun` record with `mode="deepresearch-research"`, `status="executing"`
 5. Creates 4 `TaskStage` records (one per phase) with `status="pending"`
 6. Writes `data_description.md` to `input_files/`
 
 ---
 
-#### `POST /api/denario/{task_id}/stages/{stage_num}/execute`
+#### `POST /api/deepresearch/{task_id}/stages/{stage_num}/execute`
 
-Triggers background execution of a single Denario phase.
+Triggers background execution of a single Deepresearch phase.
 
-**Request body (`DenarioExecuteRequest`, optional):**
+**Request body (`DeepresearchExecuteRequest`, optional):**
 ```json
 {
   "config_overrides": {}
@@ -509,7 +509,7 @@ Triggers background execution of a single Denario phase.
 4. Marks the stage as `"running"` in the database
 5. Launches the appropriate background task as an `asyncio.Task`:
    - **Stages 1-3:** `_run_planning_control_stage()` — calls `planning_and_control_context_carryover()` directly with full callbacks
-   - **Stage 4:** `_run_paper_stage()` — delegates to `DenarioPaperPhase`
+   - **Stage 4:** `_run_paper_stage()` — delegates to `DeepresearchPaperPhase`
 6. Returns immediately
 
 **Background execution (Stages 1-3 — `_run_planning_control_stage()`):**
@@ -532,17 +532,17 @@ Triggers background execution of a single Denario phase.
 **Background execution (Stage 4 — `_run_paper_stage()`):**
 1. Creates a `PhaseContext` with the accumulated shared state
 2. Captures stdout/stderr via `_ConsoleCapture`
-3. Calls `DenarioPaperPhase().execute(context)` (awaited)
+3. Calls `DeepresearchPaperPhase().execute(context)` (awaited)
 4. On success: updates stage status to `"completed"` with `output_data`
 5. On failure: updates stage status to `"failed"` with `error_message`
 
 ---
 
-#### `GET /api/denario/{task_id}/stages/{stage_num}/content`
+#### `GET /api/deepresearch/{task_id}/stages/{stage_num}/content`
 
 Gets the output content for a completed stage.
 
-**Response (`DenarioStageContentResponse`):**
+**Response (`DeepresearchStageContentResponse`):**
 ```json
 {
   "stage_number": 1,
@@ -560,11 +560,11 @@ Gets the output content for a completed stage.
 
 ---
 
-#### `PUT /api/denario/{task_id}/stages/{stage_num}/content`
+#### `PUT /api/deepresearch/{task_id}/stages/{stage_num}/content`
 
 Saves user edits to a stage's content.
 
-**Request body (`DenarioContentUpdateRequest`):**
+**Request body (`DeepresearchContentUpdateRequest`):**
 ```json
 {
   "content": "Updated markdown content",
@@ -579,11 +579,11 @@ Saves user edits to a stage's content.
 
 ---
 
-#### `POST /api/denario/{task_id}/stages/{stage_num}/refine`
+#### `POST /api/deepresearch/{task_id}/stages/{stage_num}/refine`
 
 Uses an LLM to refine stage content based on user instruction.
 
-**Request body (`DenarioRefineRequest`):**
+**Request body (`DeepresearchRefineRequest`):**
 ```json
 {
   "message": "Make the methodology section more specific",
@@ -591,7 +591,7 @@ Uses an LLM to refine stage content based on user instruction.
 }
 ```
 
-**Response (`DenarioRefineResponse`):**
+**Response (`DeepresearchRefineResponse`):**
 ```json
 {
   "refined_content": "The refined version...",
@@ -605,7 +605,7 @@ Uses an LLM to refine stage content based on user instruction.
 
 ---
 
-#### `GET /api/denario/{task_id}/stages/{stage_num}/console`
+#### `GET /api/deepresearch/{task_id}/stages/{stage_num}/console`
 
 Gets console output lines for a running stage (REST polling fallback).
 
@@ -615,7 +615,7 @@ Gets console output lines for a running stage (REST polling fallback).
 **Response:**
 ```json
 {
-  "lines": ["Starting idea_generation...", "Phase denario_idea initialized..."],
+  "lines": ["Starting idea_generation...", "Phase deepresearch_idea initialized..."],
   "next_index": 42,
   "stage_num": 1
 }
@@ -623,11 +623,11 @@ Gets console output lines for a running stage (REST polling fallback).
 
 ---
 
-#### `GET /api/denario/recent`
+#### `GET /api/deepresearch/recent`
 
-Lists incomplete Denario tasks for the resume flow.
+Lists incomplete Deepresearch tasks for the resume flow.
 
-**Response:** Array of `DenarioRecentTaskResponse`:
+**Response:** Array of `DeepresearchRecentTaskResponse`:
 ```json
 [
   {
@@ -643,17 +643,17 @@ Lists incomplete Denario tasks for the resume flow.
 
 ---
 
-#### `GET /api/denario/{task_id}`
+#### `GET /api/deepresearch/{task_id}`
 
 Gets full task state including all stages, costs, and progress.
 
-**Response (`DenarioTaskStateResponse`):**
+**Response (`DeepresearchTaskStateResponse`):**
 ```json
 {
   "task_id": "uuid",
   "task": "Research description",
   "status": "executing",
-  "work_dir": "/path/to/denario_tasks/{task_id}",
+  "work_dir": "/path/to/deepresearch_tasks/{task_id}",
   "created_at": "2025-01-15T10:30:00Z",
   "stages": [ ... ],
   "current_stage": 2,
@@ -666,7 +666,7 @@ Gets full task state including all stages, costs, and progress.
 
 ### 6.2 WebSocket Endpoint
 
-**URL:** `ws://host/ws/denario/{task_id}/{stage_num}`
+**URL:** `ws://host/ws/deepresearch/{task_id}/{stage_num}`
 
 **Source:** `backend/main.py:52-128`
 
@@ -693,21 +693,21 @@ Streams real-time console output from the shared buffer and sends completion/fai
 
 ### 6.3 Pydantic Schemas
 
-**Source:** `backend/models/denario_schemas.py`
+**Source:** `backend/models/deepresearch_schemas.py`
 
 | Schema | Type | Description |
 |---|---|---|
-| `DenarioStageStatus` | Enum | `pending`, `running`, `completed`, `failed` |
-| `DenarioCreateRequest` | Request | `task`, `data_description?`, `config?` |
-| `DenarioExecuteRequest` | Request | `config_overrides?` |
-| `DenarioContentUpdateRequest` | Request | `content`, `field` |
-| `DenarioRefineRequest` | Request | `message`, `content` |
-| `DenarioStageResponse` | Response | `stage_number`, `stage_name`, `status`, timing, `error` |
-| `DenarioCreateResponse` | Response | `task_id`, `work_dir`, `stages[]` |
-| `DenarioStageContentResponse` | Response | `stage_number`, `status`, `content`, `shared_state`, `output_files` |
-| `DenarioRefineResponse` | Response | `refined_content`, `message` |
-| `DenarioTaskStateResponse` | Response | Full task state with stages, progress, cost |
-| `DenarioRecentTaskResponse` | Response | Summary for resume flow |
+| `DeepresearchStageStatus` | Enum | `pending`, `running`, `completed`, `failed` |
+| `DeepresearchCreateRequest` | Request | `task`, `data_description?`, `config?` |
+| `DeepresearchExecuteRequest` | Request | `config_overrides?` |
+| `DeepresearchContentUpdateRequest` | Request | `content`, `field` |
+| `DeepresearchRefineRequest` | Request | `message`, `content` |
+| `DeepresearchStageResponse` | Response | `stage_number`, `stage_name`, `status`, timing, `error` |
+| `DeepresearchCreateResponse` | Response | `task_id`, `work_dir`, `stages[]` |
+| `DeepresearchStageContentResponse` | Response | `stage_number`, `status`, `content`, `shared_state`, `output_files` |
+| `DeepresearchRefineResponse` | Response | `refined_content`, `message` |
+| `DeepresearchTaskStateResponse` | Response | Full task state with stages, progress, cost |
+| `DeepresearchRecentTaskResponse` | Response | Summary for resume flow |
 
 ---
 
@@ -719,13 +719,13 @@ Streams real-time console output from the shared buffer and sends completion/fai
 
 #### WorkflowRun
 
-The parent record for a Denario task.
+The parent record for a Deepresearch task.
 
-| Column | Type | Denario Usage |
+| Column | Type | Deepresearch Usage |
 |---|---|---|
 | `id` | String (UUID) | Task ID |
 | `session_id` | String (FK) | Links to Session |
-| `mode` | String | `"denario-research"` |
+| `mode` | String | `"deepresearch-research"` |
 | `agent` | String | `"planner"` |
 | `model` | String | `"gpt-4o"` |
 | `status` | String | `"executing"` → `"completed"` / `"failed"` |
@@ -783,17 +783,17 @@ Individual stage tracking within a multi-stage task.
 
 **Source:** `backend/services/session_manager.py`
 
-When a Denario task is created, a session is created via `SessionManager.create_session()`:
+When a Deepresearch task is created, a session is created via `SessionManager.create_session()`:
 
 ```python
 session_id = sm.create_session(
-    mode="denario-research",
+    mode="deepresearch-research",
     config={"task_id": task_id, "work_dir": work_dir},
-    name=f"Denario: {request.task[:60]}",
+    name=f"Deepresearch: {request.task[:60]}",
 )
 ```
 
-The session groups all workflow runs, cost records, and stages for a single Denario task. It supports:
+The session groups all workflow runs, cost records, and stages for a single Deepresearch task. It supports:
 - `save_session_state()` / `load_session_state()` for state persistence
 - `suspend_session()` / `resume_session()` for task resumption
 - Background cleanup of expired sessions
@@ -814,12 +814,12 @@ The session groups all workflow runs, cost records, and stages for a single Dena
 
 #### PhaseContext
 
-The context object used by `DenarioPaperPhase` (Stage 4 only):
+The context object used by `DeepresearchPaperPhase` (Stage 4 only):
 
 ```python
 @dataclass
 class PhaseContext:
-    workflow_id: str       # "denario-{task_id}"
+    workflow_id: str       # "deepresearch-{task_id}"
     run_id: str            # task_id
     phase_id: str          # "stage-{N}"
     task: str              # User's research description
@@ -833,7 +833,7 @@ class PhaseContext:
 
 #### PhaseResult
 
-Returned by `DenarioPaperPhase.execute()`:
+Returned by `DeepresearchPaperPhase.execute()`:
 
 ```python
 @dataclass
@@ -848,11 +848,11 @@ class PhaseResult:
 
 **Source:** `cmbagent/phases/registry.py`
 
-Only `DenarioPaperPhase` is registered:
+Only `DeepresearchPaperPhase` is registered:
 
 ```python
-@PhaseRegistry.register("denario_paper")
-class DenarioPaperPhase(Phase):
+@PhaseRegistry.register("deepresearch_paper")
+class DeepresearchPaperPhase(Phase):
     ...
 ```
 
@@ -862,7 +862,7 @@ The registry provides:
 - `PhaseRegistry.list_all()` — Lists all registered phases
 - `PhaseRegistry.is_registered(phase_type)` — Checks registration
 
-The router uses `DenarioPaperPhase` directly (imported) for Stage 4 only. Stages 1-3 bypass the Phase framework entirely.
+The router uses `DeepresearchPaperPhase` directly (imported) for Stage 4 only. Stages 1-3 bypass the Phase framework entirely.
 
 ---
 
@@ -1013,7 +1013,7 @@ Loads keys from environment variables via `get_keys_from_env()`:
 
 ## 10. Prompt Templates
 
-**Source:** `cmbagent/task_framework/prompts/denario/`
+**Source:** `cmbagent/task_framework/prompts/deepresearch/`
 
 ### Idea Phase (`idea.py`)
 
@@ -1048,18 +1048,18 @@ Three prompts, all injected with `{research_idea}` and `{methodology}`:
 
 ### 11.1 Type Definitions
 
-**Source:** `cmbagent-ui/types/denario.ts`
+**Source:** `cmbagent-ui/types/deepresearch.ts`
 
 Key types:
 
 ```typescript
-type DenarioStageStatus = 'pending' | 'running' | 'completed' | 'failed'
-type DenarioWizardStep = 0 | 1 | 2 | 3 | 4
+type DeepresearchStageStatus = 'pending' | 'running' | 'completed' | 'failed'
+type DeepresearchWizardStep = 0 | 1 | 2 | 3 | 4
 // 0=Setup, 1=Idea Review, 2=Method Review, 3=Experiment, 4=Paper
 
-interface DenarioTaskState {
+interface DeepresearchTaskState {
   task_id: string
-  stages: DenarioStage[]
+  stages: DeepresearchStage[]
   current_stage?: number
   progress_percent: number
   total_cost_usd?: number
@@ -1077,15 +1077,15 @@ STAGE_SHARED_KEYS = { 1: 'research_idea', 2: 'methodology', 3: 'results' }
 
 ### 11.2 State Management Hook
 
-**Source:** `cmbagent-ui/hooks/useDenarioTask.ts`
+**Source:** `cmbagent-ui/hooks/useDeepresearchTask.ts`
 
-The `useDenarioTask()` hook encapsulates all Denario client-side logic:
+The `useDeepresearchTask()` hook encapsulates all Deepresearch client-side logic:
 
 | Returned State | Type | Description |
 |---|---|---|
 | `taskId` | `string \| null` | Current task UUID |
-| `taskState` | `DenarioTaskState \| null` | Full task state from API |
-| `currentStep` | `DenarioWizardStep` | Current wizard step (0-4) |
+| `taskState` | `DeepresearchTaskState \| null` | Full task state from API |
+| `currentStep` | `DeepresearchWizardStep` | Current wizard step (0-4) |
 | `isLoading` | `boolean` | Task creation in progress |
 | `error` | `string \| null` | Current error message |
 | `editableContent` | `string` | Editor content for review panels |
@@ -1096,7 +1096,7 @@ The `useDenarioTask()` hook encapsulates all Denario client-side logic:
 
 | Returned Action | Description |
 |---|---|
-| `createTask(task, dataDesc?, config?)` | POST to `/api/denario/create` |
+| `createTask(task, dataDesc?, config?)` | POST to `/api/deepresearch/create` |
 | `executeStage(stageNum)` | POST to execute, connect WS + polls |
 | `fetchStageContent(stageNum)` | GET stage content, populate editor |
 | `saveStageContent(stageNum, content, field)` | PUT updated content |
@@ -1113,7 +1113,7 @@ The `useDenarioTask()` hook encapsulates all Denario client-side logic:
 
 ### 11.3 Wizard Container
 
-**Source:** `cmbagent-ui/components/tasks/DenarioResearchTask.tsx`
+**Source:** `cmbagent-ui/components/tasks/DeepresearchResearchTask.tsx`
 
 The main component renders a 5-step wizard using a `Stepper` component:
 
@@ -1131,7 +1131,7 @@ The stepper dynamically reflects real stage statuses from `taskState`.
 
 ### 11.4 Panel Components
 
-**Source:** `cmbagent-ui/components/denario/`
+**Source:** `cmbagent-ui/components/deepresearch/`
 
 #### SetupPanel (`SetupPanel.tsx`)
 
@@ -1177,7 +1177,7 @@ AI-powered chat sidebar for content editing:
 - Chat-style interface (user messages right-aligned, assistant left-aligned)
 - Each assistant message has an "Apply to editor" button
 - Auto-scrolls to newest message
-- Sends refinement requests to `POST /api/denario/{task_id}/stages/{num}/refine`
+- Sends refinement requests to `POST /api/deepresearch/{task_id}/stages/{num}/refine`
 
 #### FileUploadZone (`FileUploadZone.tsx`)
 
@@ -1207,7 +1207,7 @@ Console output display:
 
 Accepts multipart form data with:
 - `file`: The file to upload
-- `task_id`: The Denario task ID
+- `task_id`: The Deepresearch task ID
 - `subfolder`: Target subfolder (typically `"input_files"`)
 
 **Security measures:**
@@ -1247,7 +1247,7 @@ This ensures LLM agents know about available data files and can reference them b
 
 ### Capture Mechanism
 
-**Source:** `backend/routers/denario.py:192-233`
+**Source:** `backend/routers/deepresearch.py:192-233`
 
 The `_ConsoleCapture` class intercepts stdout/stderr during phase execution:
 
@@ -1271,12 +1271,12 @@ Key design decisions:
 Two parallel channels deliver console output to the UI:
 
 1. **REST polling** (primary for console lines):
-   - `GET /api/denario/{task_id}/stages/{num}/console?since=N`
+   - `GET /api/deepresearch/{task_id}/stages/{num}/console?since=N`
    - Frontend polls every 2 seconds via `startConsolePoll()`
    - Uses `since` parameter for incremental fetching
 
 2. **WebSocket** (primary for completion events):
-   - `ws://host/ws/denario/{task_id}/{stage_num}`
+   - `ws://host/ws/deepresearch/{task_id}/{stage_num}`
    - Sends `console_output` events every 1 second
    - Sends `stage_completed` / `stage_failed` when done
    - Flushes remaining buffer before closing
@@ -1287,14 +1287,14 @@ The frontend uses REST polling for console output to avoid duplication, and WebS
 
 ## 14. Task Resumption
 
-**Source:** `cmbagent-ui/hooks/useDenarioTask.ts:335-370`
+**Source:** `cmbagent-ui/hooks/useDeepresearchTask.ts:335-370`
 
-Denario tasks can be resumed after page reloads or interruptions:
+Deepresearch tasks can be resumed after page reloads or interruptions:
 
-1. `GET /api/denario/recent` lists incomplete tasks
+1. `GET /api/deepresearch/recent` lists incomplete tasks
 2. User selects a task to resume
 3. `resumeTask(taskId)` is called, which:
-   - Loads the full task state from `GET /api/denario/{task_id}`
+   - Loads the full task state from `GET /api/deepresearch/{task_id}`
    - Determines the correct wizard step based on stage statuses:
      - If a stage is `"running"`: go to that step, reconnect WS + polls
      - If a stage is `"completed"`: advance past it
@@ -1314,10 +1314,10 @@ Cost tracking for Stages 1-3 uses `CostCollector` (from `backend/execution/cost_
 1. **Per-LLM-call tracking:** `CostCollector.collect_from_callback()` is invoked via the `on_cost_update` callback during execution
 2. **Safety net:** `CostCollector.collect_from_work_dir()` scans the stage work directory post-execution for any cost logs that callbacks missed
 3. **DB persistence:** Each cost entry is written to `CostRecord` via `CostRepository.record_cost()`
-4. **Aggregation:** `GET /api/denario/{task_id}` returns `total_cost_usd` aggregated across all stages
+4. **Aggregation:** `GET /api/deepresearch/{task_id}` returns `total_cost_usd` aggregated across all stages
 
 The frontend displays running costs in:
-- The header bar of `DenarioResearchTask` (top-right)
+- The header bar of `DeepresearchResearchTask` (top-right)
 - The stats bar in `ExecutionPanel` (timer + cost)
 - The "Cost Summary" section in `PaperPanel` (final total)
 
@@ -1351,10 +1351,10 @@ merged = merge_callbacks(create_print_callbacks(), workflow_callbacks)
 kwargs["callbacks"] = merged
 ```
 
-This gives Denario the same observability as the standard `task_executor.py` flow.
+This gives Deepresearch the same observability as the standard `task_executor.py` flow.
 
-> **Note:** `DAGTracker` is intentionally skipped for Denario — it requires a WebSocket in its
-> constructor, and Denario stages are linear (tracked by `TaskStage` rows rather than a DAG).
+> **Note:** `DAGTracker` is intentionally skipped for Deepresearch — it requires a WebSocket in its
+> constructor, and Deepresearch stages are linear (tracked by `TaskStage` rows rather than a DAG).
 
 ---
 
@@ -1362,18 +1362,18 @@ This gives Denario the same observability as the standard `task_executor.py` flo
 
 **Source:** `tests/`
 
-### test_denario_api.py
+### test_deepresearch_api.py
 
 Tests the REST API layer:
-- Task creation (standard vs denario-research tasks)
+- Task creation (standard vs deepresearch-research tasks)
 - Task status retrieval with correct `task_type` and `mode`
 - Stage listing (returns TaskStage objects with correct structure)
 - Stage detail retrieval (output_data, output_files)
 - 404 handling for non-existent stages
 
-### test_denario_phases.py
+### test_deepresearch_phases.py
 
-Unit tests for `stage_helpers` (pure functions) and `DenarioPaperPhase`:
+Unit tests for `stage_helpers` (pure functions) and `DeepresearchPaperPhase`:
 
 **Stage helper tests (stages 1-3):**
 - `TestBuildIdeaKwargs` — kwargs structure, default models, config overrides, work dir creation, parent_run_id
@@ -1390,16 +1390,16 @@ Unit tests for `stage_helpers` (pure functions) and `DenarioPaperPhase`:
 - `TestBuildExperimentOutput` — full context preservation
 - `TestDefaultModelConstants` — exact model assignments for all 3 stages
 
-**DenarioPaperPhase (stage 4):**
+**DeepresearchPaperPhase (stage 4):**
 - Calls `graph.ainvoke()` (async, not sync)
 - Finds paper artifacts (prefers v4 > v3 > v2 > v1)
 - Validates `input_files/` directory required
 - Phase properties (`phase_type`, `display_name`)
 
 **Config defaults:**
-- Verifies `DenarioPaperPhaseConfig` default values (model, temperature, writer, etc.)
+- Verifies `DeepresearchPaperPhaseConfig` default values (model, temperature, writer, etc.)
 
-### test_denario_integration.py
+### test_deepresearch_integration.py
 
 Integration tests for the full context flow using `stage_helpers` chained together:
 - **`test_idea_to_method_to_experiment`:** 3-stage flow with mock PCC, verifying shared state accumulation and prompt injection
@@ -1451,7 +1451,7 @@ REFEREE_FILE = "referee.md"
 
 ### Stage Definition Table
 
-Defined in `STAGE_DEFS` (`routers/denario.py`):
+Defined in `STAGE_DEFS` (`routers/deepresearch.py`):
 
 | Stage | Name | Execution Method | Shared Key | Output File |
 |---|---|---|---|---|
@@ -1461,27 +1461,27 @@ Defined in `STAGE_DEFS` (`routers/denario.py`):
 | 4 | `paper_generation` | `_run_paper_stage()` | `None` | `None` |
 
 > Stages 1-3 no longer have a `phase_type` key — they call `planning_and_control_context_carryover()`
-> directly via `stage_helpers`. Only Stage 4 uses `DenarioPaperPhase`.
+> directly via `stage_helpers`. Only Stage 4 uses `DeepresearchPaperPhase`.
 
 ---
 
 ## 18. End-to-End User Flow
 
-Here is the complete user journey through the Denario workflow:
+Here is the complete user journey through the Deepresearch workflow:
 
 ### Step 0: Setup
 
 1. User navigates to the Tasks page and selects **"Research Paper"**
-2. `DenarioResearchTask` mounts with `SetupPanel`
+2. `DeepresearchResearchTask` mounts with `SetupPanel`
 3. User enters:
    - **Research Description** (required): "Investigate the correlation between galaxy morphology and dark matter halo properties using SDSS data"
    - **Data Description** (optional): "SDSS DR16 galaxy catalog with photometric and spectroscopic measurements"
    - **File uploads** (optional): Drag-and-drop data files (`.csv`, `.fits`, etc.)
 4. User clicks **"Generate Ideas"**
-5. `createTask()` → `POST /api/denario/create`
+5. `createTask()` → `POST /api/deepresearch/create`
 6. Backend creates:
-   - Work directory: `cmbagent_workdir/denario_tasks/{uuid}/input_files/`
-   - Session with `mode="denario-research"`
+   - Work directory: `cmbagent_workdir/deepresearch_tasks/{uuid}/input_files/`
+   - Session with `mode="deepresearch-research"`
    - WorkflowRun + 4 TaskStage records (all `"pending"`)
    - Writes `data_description.md`
 7. Frontend advances to Step 1
@@ -1490,7 +1490,7 @@ Here is the complete user journey through the Denario workflow:
 
 1. `ReviewPanel` mounts (stageNum=1, sharedKey="research_idea")
 2. Stage is `"pending"` → auto-triggers `executeStage(1)`
-3. `POST /api/denario/{id}/stages/1/execute` → `_run_planning_control_stage()` background task
+3. `POST /api/deepresearch/{id}/stages/1/execute` → `_run_planning_control_stage()` background task
 4. Backend:
    - Sets up `CostCollector` + `EventRepository` + `WorkflowCallbacks`
    - Calls `stage_helpers.build_idea_kwargs()` with data_description and work_dir
@@ -1542,7 +1542,7 @@ Here is the complete user journey through the Denario workflow:
 
 1. `PaperPanel` mounts (stageNum=4)
 2. Auto-triggers `executeStage(4)`
-3. `DenarioPaperPhase`:
+3. `DeepresearchPaperPhase`:
    - `build_graph()` creates the LangGraph pipeline
    - `graph.ainvoke()` runs the paper generation:
      - `preprocess_node`: Initialize, load input files
@@ -1568,7 +1568,7 @@ The user can download their generated research paper. The task remains in the da
 
 ### Overview
 
-Denario stages can fail for three broad reasons:
+Deepresearch stages can fail for three broad reasons:
 
 1. **LLM output failures** — The model returned an empty, malformed, or unparseable response
 2. **Infrastructure failures** — Network timeouts, API rate limits, missing environment variables
@@ -1649,7 +1649,7 @@ Planning produced 0 steps. The planner did not generate any plan steps...
 1. **Check `planning/final_plan.json`** in the stage's work directory:
    ```bash
    # Path pattern: {work_dir}/planning/final_plan.json
-   # E.g.: cmbagent_workdir/denario_tasks/{id}/experiment_generation_output/planning/final_plan.json
+   # E.g.: cmbagent_workdir/deepresearch_tasks/{id}/experiment_generation_output/planning/final_plan.json
    cat planning/final_plan.json
    # If it shows {"sub_tasks": []}, the planner ran but produced no steps.
    ```
@@ -1676,7 +1676,7 @@ All stage failures are:1. Stored in `TaskStage.error_message` (truncated to fit 
 
 For detailed diagnostics, inspect the stage's `error_message` via:
 ```bash
-curl http://localhost:8000/api/denario/{task_id}/stages/{stage_num}/content
+curl http://localhost:8000/api/deepresearch/{task_id}/stages/{stage_num}/content
 ```
 or query the DB directly:
 ```sql

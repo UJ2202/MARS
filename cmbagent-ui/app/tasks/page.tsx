@@ -7,12 +7,12 @@ import AIWeeklyTaskEnhanced from '@/components/tasks/AIWeeklyTaskEnhanced'
 import ReleaseNotesTask from '@/components/tasks/ReleaseNotesTask'
 import CodeReviewTask from '@/components/tasks/CodeReviewTask'
 import ProductDiscoveryTask from '@/components/tasks/ProductDiscoveryTask'
-import DenarioResearchTask from '@/components/tasks/DenarioResearchTask'
+import DeepresearchResearchTask from '@/components/tasks/DeepresearchResearchTask'
 import { getApiUrl } from '@/lib/config'
 
-type ActiveTask = 'ai-weekly' | 'release-notes' | 'code-review' | 'product-discovery' | 'denario-research' | null
+type ActiveTask = 'ai-weekly' | 'release-notes' | 'code-review' | 'product-discovery' | 'deepresearch-research' | null
 
-interface RecentDenarioTask {
+interface RecentDeepresearchTask {
   task_id: string
   task: string
   status: string
@@ -31,15 +31,15 @@ const STAGE_NAMES: Record<number, string> = {
 export default function TasksPage() {
   const [activeTask, setActiveTask] = useState<ActiveTask>(null)
   const [resumeTaskId, setResumeTaskId] = useState<string | null>(null)
-  const [recentTasks, setRecentTasks] = useState<RecentDenarioTask[]>([])
+  const [recentTasks, setRecentTasks] = useState<RecentDeepresearchTask[]>([])
   const [loadingRecent, setLoadingRecent] = useState(false)
 
   const fetchRecentTasks = useCallback(async () => {
     setLoadingRecent(true)
     try {
-      const resp = await fetch(getApiUrl('/api/denario/recent'))
+      const resp = await fetch(getApiUrl('/api/deepresearch/recent'))
       if (resp.ok) {
-        const data: RecentDenarioTask[] = await resp.json()
+        const data: RecentDeepresearchTask[] = await resp.json()
         setRecentTasks(data)
       }
     } catch {
@@ -58,7 +58,7 @@ export default function TasksPage() {
 
   const handleResume = useCallback((taskId: string) => {
     setResumeTaskId(taskId)
-    setActiveTask('denario-research')
+    setActiveTask('deepresearch-research')
   }, [])
 
   const handleBack = useCallback(() => {
@@ -70,7 +70,7 @@ export default function TasksPage() {
     e.stopPropagation() // Don't trigger the resume click
     if (!confirm('Delete this task? This will remove all data and files.')) return
     try {
-      await fetch(getApiUrl(`/api/denario/${taskId}`), { method: 'DELETE' })
+      await fetch(getApiUrl(`/api/deepresearch/${taskId}`), { method: 'DELETE' })
       setRecentTasks(prev => prev.filter(t => t.task_id !== taskId))
     } catch {
       // ignore — user can retry
@@ -90,9 +90,9 @@ export default function TasksPage() {
   if (activeTask === 'product-discovery') {
     return <ProductDiscoveryTask onBack={handleBack} />
   }
-  if (activeTask === 'denario-research') {
+  if (activeTask === 'deepresearch-research') {
     return (
-      <DenarioResearchTask
+      <DeepresearchResearchTask
         onBack={handleBack}
         resumeTaskId={resumeTaskId}
       />
@@ -117,7 +117,7 @@ export default function TasksPage() {
         </p>
       </div>
 
-      {/* In-progress Denario tasks banner */}
+      {/* In-progress Deepresearch tasks banner */}
       {!loadingRecent && recentTasks.length > 0 && (
         <div className="mb-6 space-y-2">
           <h3
@@ -147,7 +147,7 @@ export default function TasksPage() {
                   className="text-sm font-medium truncate"
                   style={{ color: 'var(--mars-color-text)' }}
                 >
-                  Research Paper
+                  Deep Scientific Research
                   {task.task ? ` — ${task.task}` : ''}
                 </p>
                 <p

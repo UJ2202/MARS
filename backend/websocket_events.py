@@ -67,7 +67,7 @@ class WebSocketEventType(str, Enum):
     # Error events
     ERROR_OCCURRED = "error_occurred"
 
-    # Task stage events (Denario integration)
+    # Task stage events (Deepresearch integration)
     TASK_STAGE_STARTED = "task_stage_started"
     TASK_STAGE_COMPLETED = "task_stage_completed"
     TASK_STAGE_FAILED = "task_stage_failed"

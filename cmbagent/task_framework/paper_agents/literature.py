@@ -1,8 +1,11 @@
 import re
+import logging
 import requests
 from typing import List, Tuple
 
 from ..key_manager import KeyManager
+
+logger = logging.getLogger(__name__)
 
 def _execute_query(payload, keys: KeyManager):
     """
@@ -61,8 +64,14 @@ Your answear should not have the formating marks <TEXT> and </TEXT>, just the te
     "search_domain_filter": ["arxiv.org"],
     }
     perplexity_response = _execute_query(payload, keys)
+    if "choices" not in perplexity_response:
+        logger.warning(
+            "Perplexity API returned no 'choices'. Response: %s",
+            perplexity_response,
+        )
+        return (para, [])
     content = perplexity_response["choices"][0]["message"]["content"]
-    citations = perplexity_response["citations"]
+    citations = perplexity_response.get("citations", [])
     cleaned_response = re.sub(r'<think>.*?</think>\s*', '', content, flags=re.DOTALL)
 
     def citation_repl(match):
@@ -118,15 +127,18 @@ def process_tex_file_with_references(text, keys: KeyManager, nparagraphs=None):
         
         # Try to process the paragraph using perplexity function (placeholder shown here)
         for attempt in range(2):
-            # Replace the following line with your actual perplexity call if needed.
-            # new_para, citations = para, []  # e.g., new_para, citations = perplexity(para)
-            new_para, citations = perplexity(para, keys)
+            try:
+                new_para, citations = perplexity(para, keys)
+            except Exception as exc:
+                logger.warning("perplexity call failed for paragraph (attempt %d): %s", attempt + 1, exc)
+                new_para = None
+                citations = []
             if new_para is not None:
-                break  # exit the retry loop if successful
-            else:
-                # Skip this paragraph if processing fails after two attempts
-                count += 1
-                continue
+                break
+        else:
+            # Both attempts failed — leave paragraph unchanged
+            count += 1
+            continue
         
         # Replace citation markers in the paragraph and update the BibTeX content
         new_para, str_bib = _replace_references_with_cite(new_para, citations, str_bib)

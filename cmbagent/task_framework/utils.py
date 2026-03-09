@@ -1,4 +1,4 @@
-"""Utilities for Denario task integration."""
+"""Utilities for Deepresearch task integration."""
 
 import os
 import re
@@ -14,7 +14,7 @@ MD_CODE_BLOCK_PATTERN = r"```(?:markdown)?\s*\n([\s\S]*?)```"
 def get_task_result(chat_history: list, name: str) -> str:
     """Extract the last result from a specific agent in chat history.
 
-    Copied from Denario/denario/utils.py:62-68. Iterates backwards through
+    Copied from Deepresearch/deepresearch/utils.py:62-68. Iterates backwards through
     chat history to find the last message from the named agent.
 
     Args:
@@ -36,7 +36,7 @@ def get_task_result(chat_history: list, name: str) -> str:
 def format_prompt(template: str, **kwargs) -> str:
     """Format a prompt template with named parameters.
 
-    Uses Python's str.format() — same pattern Denario uses.
+    Uses Python's str.format() — same pattern Deepresearch uses.
 
     Args:
         template: Prompt string with {placeholder} syntax
@@ -66,7 +66,7 @@ def format_prompt_safe(template: str, **kwargs) -> str:
 
 
 def extract_markdown_content(text: str) -> str:
-    """Extract markdown content from code blocks (Denario's post-processing pattern).
+    """Extract markdown content from code blocks (Deepresearch's post-processing pattern).
 
     Used after experiment stage to extract clean markdown from agent response.
     """
@@ -77,10 +77,10 @@ def extract_markdown_content(text: str) -> str:
 
 
 def create_work_dir(work_dir: str | Path, name: str) -> Path:
-    """Create stage-specific working directory (Denario pattern).
+    """Create stage-specific working directory (Deepresearch pattern).
 
     Each stage creates '<name>_generation_output' subdirectory.
-    Source: Denario/denario/utils.py:79-84
+    Source: Deepresearch/deepresearch/utils.py:79-84
 
     Args:
         work_dir: Parent working directory path
@@ -97,7 +97,7 @@ def create_work_dir(work_dir: str | Path, name: str) -> Path:
 def extract_clean_markdown(text: str) -> str:
     """Extract markdown from code blocks and strip HTML comments.
 
-    Exact regex from Denario method.py:71-73 and experiment.py:109-111.
+    Exact regex from Deepresearch method.py:71-73 and experiment.py:109-111.
     Falls back to original text if no code block found.
 
     Args:
@@ -119,7 +119,7 @@ def input_check(str_input: str) -> str:
     """Check if input is string content or path to .md file.
 
     If path ends with .md, reads the file. Otherwise returns string as-is.
-    Source: Denario/denario/utils.py:8-18
+    Source: Deepresearch/deepresearch/utils.py:8-18
 
     Args:
         str_input: Either raw string content or a path to a .md file
@@ -144,7 +144,7 @@ def extract_file_paths(content: str) -> list[str]:
 
     Finds patterns that look like absolute file paths (starting with /).
     Helper for check_file_paths().
-    Source: Denario/denario/utils.py:61-77
+    Source: Deepresearch/deepresearch/utils.py:61-77
 
     Args:
         content: Text content that may contain file path references
@@ -162,7 +162,7 @@ def check_file_paths(content: str) -> None:
     Warns about hallucination risk if paths are wrong. Should be called
     early in the pipeline to catch invalid data references before stages
     attempt to use them.
-    Source: Denario/denario/utils.py:61-77
+    Source: Deepresearch/deepresearch/utils.py:61-77
 
     Args:
         content: Data description text containing file path references

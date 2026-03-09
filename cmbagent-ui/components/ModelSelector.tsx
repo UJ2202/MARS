@@ -14,18 +14,22 @@ interface ModelSelectorProps {
 const MODEL_INFO = {
   // OpenAI Models
   'gpt-4.1-2025-04-14': { name: 'GPT-4.1', provider: 'openai' as const },
+  'gpt-4.1-mini': { name: 'GPT-4.1 Mini', provider: 'openai' as const },
   'gpt-4o': { name: 'GPT-4o', provider: 'openai' as const },
-  'gpt-4o-mini': { name: 'GPT-4o Mini', provider: 'openai' as const },
+  'gpt-4o-mini-2024-07-18': { name: 'GPT-4o Mini', provider: 'openai' as const },
+  'gpt-4.5-preview-2025-02-27': { name: 'GPT-4.5 Preview', provider: 'openai' as const },
   'gpt-5-2025-08-07': { name: 'GPT-5', provider: 'openai' as const },
   'o3-mini-2025-01-31': { name: 'o3-mini', provider: 'openai' as const },
-  
+
   // Anthropic Models
   'claude-sonnet-4-20250514': { name: 'Claude Sonnet 4', provider: 'anthropic' as const },
   'claude-3.5-sonnet-20241022': { name: 'Claude 3.5 Sonnet', provider: 'anthropic' as const },
   'claude-3-haiku-20240307': { name: 'Claude 3 Haiku', provider: 'anthropic' as const },
-  
+
   // Gemini Models
   'gemini-2.5-pro': { name: 'Gemini 2.5 Pro', provider: 'gemini' as const },
+  'gemini-2.5-flash': { name: 'Gemini 2.5 Flash', provider: 'gemini' as const },
+  'gemini-2.0-flash': { name: 'Gemini 2.0 Flash', provider: 'gemini' as const },
   'gemini-1.5-pro': { name: 'Gemini 1.5 Pro', provider: 'gemini' as const },
   'gemini-1.5-flash': { name: 'Gemini 1.5 Flash', provider: 'gemini' as const },
 };

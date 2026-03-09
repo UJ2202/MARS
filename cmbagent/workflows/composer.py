@@ -575,16 +575,16 @@ DEEP_RESEARCH_EXTENDED_WORKFLOW = WorkflowDefinition(
     is_system=True,
 )
 
-# Denario multi-stage research paper workflow
-DENARIO_WORKFLOW = WorkflowDefinition(
-    id="denario_research_paper",
-    name="Denario Research Paper",
+# Deepresearch multi-stage research paper workflow
+DEEPRESEARCH_WORKFLOW = WorkflowDefinition(
+    id="deepresearch_research_paper",
+    name="Deepresearch Research Paper",
     description="Multi-stage research paper workflow: idea → method → experiment → paper",
     phases=[
-        {"type": "denario_idea", "config": {}},
-        {"type": "denario_method", "config": {}},
-        {"type": "denario_experiment", "config": {}},
-        {"type": "denario_paper", "config": {}},
+        {"type": "deepresearch_idea", "config": {}},
+        {"type": "deepresearch_method", "config": {}},
+        {"type": "deepresearch_experiment", "config": {}},
+        {"type": "deepresearch_paper", "config": {}},
     ],
     is_system=True,
 )
@@ -613,8 +613,8 @@ SYSTEM_WORKFLOWS: Dict[str, WorkflowDefinition] = {
         COPILOT_SIMPLE_WORKFLOW,
         # Extended research
         DEEP_RESEARCH_EXTENDED_WORKFLOW,
-        # Denario research paper
-        DENARIO_WORKFLOW,
+        # Deepresearch research paper
+        DEEPRESEARCH_WORKFLOW,
     ]
 }
 

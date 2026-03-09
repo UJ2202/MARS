@@ -154,6 +154,7 @@ def _record_status_chat_mode(current_status, current_plan_step_number, current_s
                            agent=context_variables["agent_for_sub_task"],
                            attempts=n_attempts)
             context_variables["current_status"] = "completed"
+            context_variables["n_attempts"] = 0
             agent_to_transfer_to = admin
         elif context_variables["agent_for_sub_task"] == "engineer":
             agent_to_transfer_to = cmbagent_instance.get_agent_from_name('engineer')
@@ -260,8 +261,7 @@ def _record_status_default_mode(current_status, current_plan_step_number, curren
             agent_to_transfer_to = terminator
         else:
             agent_to_transfer_to = control
-            if cmbagent_instance.mode != "planning_and_control_context_carryover":
-                context_variables["n_attempts"] = 0
+        context_variables["n_attempts"] = 0
 
     if "failed" in context_variables["current_status"]:
         n_attempts = context_variables.get("n_attempts", 0) + 1
@@ -274,6 +274,7 @@ def _record_status_default_mode(current_status, current_plan_step_number, curren
                            agent=context_variables["agent_for_sub_task"],
                            attempts=n_attempts)
             context_variables["current_status"] = "completed"
+            context_variables["n_attempts"] = 0
             agent_to_transfer_to = terminator
         elif context_variables["agent_for_sub_task"] == "engineer":
             agent_to_transfer_to = cmbagent_instance.get_agent_from_name('engineer')

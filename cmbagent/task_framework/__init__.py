@@ -1,5 +1,5 @@
 """
-Denario task integration framework.
+Deepresearch task integration framework.
 
 Provides utilities, stage helpers, and phase classes for the multi-stage
 research paper workflow (idea -> method -> experiment -> paper).
