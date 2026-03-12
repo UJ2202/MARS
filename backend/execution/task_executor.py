@@ -12,6 +12,7 @@ import concurrent.futures
 import contextvars
 import glob
 import os
+import re
 import shutil
 import sys
 import time
@@ -41,6 +42,61 @@ _workflow_service = None
 _execution_service = None
 _session_manager_loaded = False
 _session_manager = None
+
+
+def _sanitize_ai_weekly_markdown(content: str) -> str:
+    """Remove tool/log/code noise from generated markdown reports."""
+    if not content:
+        return content
+
+    # Remove fenced code blocks that often contain Python/tool output.
+    cleaned = re.sub(r"```[\s\S]*?```", "", content)
+
+    drop_prefixes = (
+        "python ",
+        "Traceback (most recent call last):",
+        "File \"",
+        "INFO:",
+        "DEBUG:",
+        "WARNING:",
+        "$ ",
+        ">>> ",
+    )
+
+    lines = []
+    seen_urls = set()
+    shortfall_patterns = (
+        "shortfall note:",
+        "fewer than",
+        "included the best verified item and noted the shortfall",
+        "limited significant developments found in this category",
+    )
+
+    url_pattern = re.compile(r"https?://[^\s)]+")
+
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if any(stripped.startswith(prefix) for prefix in drop_prefixes):
+            continue
+        if stripped.startswith("import ") or stripped.startswith("from "):
+            continue
+        if any(pattern in stripped.lower() for pattern in shortfall_patterns):
+            continue
+
+        # Remove repeated bullet/table entries that point to the same URL.
+        urls = url_pattern.findall(stripped)
+        if urls and (stripped.startswith("-") or stripped.startswith("|")):
+            canonical = urls[0].rstrip("/)").lower()
+            if canonical in seen_urls:
+                continue
+            seen_urls.add(canonical)
+
+        lines.append(line)
+
+    cleaned = "\n".join(lines)
+    # Collapse excessive blank lines.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip() + "\n"
+    return cleaned
 
 
 def _check_services():
@@ -1057,17 +1113,30 @@ async def execute_cmbagent_task(
                 report_output_dir = os.path.expanduser(report_output_dir)
                 os.makedirs(report_output_dir, exist_ok=True)
                 pattern = config.get("reportFilenamePattern", "*.md")
+                is_aiweekly_target = report_output_dir.rstrip("/").endswith("backend/aiweeklyreport")
                 # Search recursively in task work dir for matching files
                 found_files = glob.glob(os.path.join(task_work_dir, "**", pattern), recursive=True)
                 # Also search for any ai_weekly_report_*.md as fallback
                 if not found_files:
                     found_files = glob.glob(os.path.join(task_work_dir, "**", "ai_weekly_report_*.md"), recursive=True)
                 # Also check the codebase subdirectory specifically
-                if not found_files:
+                if not found_files and not is_aiweekly_target:
                     found_files = glob.glob(os.path.join(task_work_dir, "codebase", "*.md"))
                 for src_path in found_files:
+                    if is_aiweekly_target and not os.path.basename(src_path).startswith("ai_weekly_report_"):
+                        continue
+
                     dst_path = os.path.join(report_output_dir, os.path.basename(src_path))
-                    shutil.copy2(src_path, dst_path)
+
+                    if is_aiweekly_target and src_path.endswith(".md"):
+                        with open(src_path, "r", encoding="utf-8", errors="ignore") as rf:
+                            raw_content = rf.read()
+                        cleaned_content = _sanitize_ai_weekly_markdown(raw_content)
+                        with open(dst_path, "w", encoding="utf-8") as wf:
+                            wf.write(cleaned_content)
+                    else:
+                        shutil.copy2(src_path, dst_path)
+
                     logger.info("Copied report file %s -> %s", src_path, dst_path)
                     await send_ws_event(
                         websocket, "output",

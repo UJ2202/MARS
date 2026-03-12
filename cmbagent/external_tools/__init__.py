@@ -46,8 +46,11 @@ from .langchain_tools import (
 )
 from .news_tools import (
     announcements_noauth,
+    curated_ai_sources_catalog,
+    curated_ai_sources_search,
     newsapi_search,
     gnews_search,
+    multi_engine_web_search,
     rss_company_announcements,
     prwire_search,
 )
@@ -91,8 +94,11 @@ __all__ = [
 
     # News and announcement tools
     'announcements_noauth',
+    'curated_ai_sources_catalog',
+    'curated_ai_sources_search',
     'newsapi_search',
     'gnews_search',
+    'multi_engine_web_search',
     'rss_company_announcements',
     'prwire_search',
 ]

@@ -17,16 +17,26 @@ import structlog
 from typing import List, Dict, Any, Optional
 import warnings
 import re
-from .news_tools import newsapi_search, gnews_search, rss_company_announcements, prwire_search, announcements_noauth
+from .news_tools import (
+    announcements_noauth,
+    curated_ai_sources_catalog,
+    curated_ai_sources_search,
+    gnews_search,
+    multi_engine_web_search,
+    newsapi_search,
+    prwire_search,
+    rss_company_announcements,
+)
 
 logger = structlog.get_logger(__name__)
 
 
 def _build_safe_duckduckgo_tool() -> Any:
-    """Create a resilient DuckDuckGo search tool that never raises network exceptions."""
-    from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
+    """Create a resilient web search tool that prefers DuckDuckGo and never raises.
 
-    api_wrapper = DuckDuckGoSearchAPIWrapper()
+    Uses local HTML-based search fallback logic instead of ddgs-backed wrappers
+    to avoid transient provider errors like grokipedia DDGSException.
+    """
 
     def duckduckgo_search(query: str) -> str:
         """Search the web using DuckDuckGo and return text results.
@@ -39,32 +49,45 @@ def _build_safe_duckduckgo_tool() -> Any:
             return "DuckDuckGo search skipped: empty query."
 
         q = str(query).strip()
-        try:
-            return api_wrapper.run(q)
-        except Exception as first_err:
-            # Retry once with wildcard site filters removed, which can trigger
-            # brittle upstream behavior in some search backends.
-            simplified = re.sub(r"site:\S*\*\S*", "", q)
-            simplified = re.sub(r"\s+", " ", simplified).strip()
+        # Retry once with wildcard site filters removed, which can trigger
+        # brittle upstream behavior in some search backends.
+        simplified = re.sub(r"site:\S*\*\S*", "", q)
+        simplified = re.sub(r"\s+", " ", simplified).strip()
 
-            if simplified and simplified != q:
-                try:
-                    return api_wrapper.run(simplified)
-                except Exception as second_err:
-                    logger.warning(
-                        "duckduckgo_search_failed",
-                        query=q,
-                        simplified_query=simplified,
-                        error=str(second_err),
-                    )
-            else:
-                logger.warning("duckduckgo_search_failed", query=q, error=str(first_err))
+        primary = multi_engine_web_search(q, max_results=8)
+        items = primary.get("items") or []
+        if not items and simplified and simplified != q:
+            primary = multi_engine_web_search(simplified, max_results=8)
+            items = primary.get("items") or []
 
-            return (
-                "DuckDuckGo search temporarily unavailable due to upstream network "
-                "errors. Continue with other sources/tools and retry later with a "
-                "simpler query."
+        if items:
+            engines_used = primary.get("engines_used") or []
+            uses_fallback = any(e in {"google", "yahoo", "bing", "brave"} for e in engines_used)
+            header = (
+                "DuckDuckGo failed, using fallback engines (Google/Bing/Yahoo/Brave):"
+                if uses_fallback
+                else "Search results:"
             )
+            lines = [header]
+            for idx, item in enumerate(items, 1):
+                title = item.get("title") or item.get("url") or "Untitled"
+                url = item.get("url") or ""
+                engine = item.get("engine") or "fallback"
+                lines.append(f"{idx}. [{engine}] {title} - {url}")
+            return "\n".join(lines)
+
+        logger.warning(
+            "duckduckgo_search_failed",
+            query=q,
+            simplified_query=simplified if simplified and simplified != q else None,
+            errors=primary.get("errors") or [],
+        )
+
+        return (
+            "DuckDuckGo search temporarily unavailable due to upstream network "
+            "errors and fallback engines returned no parsable results. Continue "
+            "with other sources/tools and retry later with a simpler query."
+        )
 
     duckduckgo_search.__name__ = "duckduckgo_search"
     duckduckgo_search.__doc__ = "Search DuckDuckGo for web results by query string."
@@ -101,6 +124,9 @@ class AG2FreeToolsLoader:
             gnews_search,
             rss_company_announcements,
             prwire_search,
+            multi_engine_web_search,
+            curated_ai_sources_catalog,
+            curated_ai_sources_search,
         ]
         self.loaded_tools['news'] = tools
         logger.info("tool_loaded", tool="Announcements NoAuth (RSS)")
@@ -108,6 +134,9 @@ class AG2FreeToolsLoader:
         logger.info("tool_loaded", tool="GNews")
         logger.info("tool_loaded", tool="Official RSS Announcements")
         logger.info("tool_loaded", tool="PR Wire RSS")
+        logger.info("tool_loaded", tool="Multi-Engine Web Search")
+        logger.info("tool_loaded", tool="Curated AI Sources Catalog")
+        logger.info("tool_loaded", tool="Curated AI Sources Search")
         return tools
 
     def load_langchain_tools(self, tool_names: Optional[List[str]] = None) -> List[Any]:

@@ -67,7 +67,7 @@ export default function AIWeeklyTaskEnhanced({ onBack }: AIWeeklyTaskEnhancedPro
   })
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().split('T')[0])
   const [topics, setTopics] = useState<string[]>(['llm', 'cv'])
-  const [sources, setSources] = useState<string[]>(['github', 'press-releases', 'company-announcements', 'major-releases'])
+  const [sources, setSources] = useState<string[]>(['github', 'press-releases', 'company-announcements', 'major-releases', 'curated-ai-websites'])
   const [style, setStyle] = useState<'concise' | 'detailed' | 'technical'>('concise')
 
   // Advanced options
@@ -89,7 +89,8 @@ export default function AIWeeklyTaskEnhanced({ onBack }: AIWeeklyTaskEnhancedPro
     { id: 'github', label: 'GitHub Releases' },
     { id: 'press-releases', label: 'Press Releases' },
     { id: 'company-announcements', label: 'Company Announcements' },
-    { id: 'major-releases', label: 'Major Product/Model Releases' }
+    { id: 'major-releases', label: 'Major Product/Model Releases' },
+    { id: 'curated-ai-websites', label: 'Curated AI Websites/Blogs' }
   ]
 
   const toggleTopic = (topicId: string) => {
@@ -212,7 +213,8 @@ REPORT TONE: ${reportTone}
       const taskId = `ai-weekly_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
       setTaskId(taskId)
 
-      const reportFilename = `ai_weekly_report_${dateFrom}_to_${dateTo}.md`
+      const timeStamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '_')
+      const reportFilename = `ai_weekly_report_${dateFrom}_to_${dateTo}_${timeStamp}.md`
 
       addConsoleOutput(`✅ Task created: ${taskId}`)
       addConsoleOutput(`📅 Date Range: ${dateFrom} to ${dateTo}`)
@@ -244,7 +246,7 @@ Task Requirements:
 4. Reject any item outside the date range, even if highly relevant
 5. Every item must show an explicit date in YYYY-MM-DD format
 6. Add this exact line near the top of the report: "Coverage Window (Inclusive): ${dateFrom} to ${dateTo}"
-7. Target at least 10 items combined from press releases, company announcements, and major releases; if fewer are available in-range, include the best available verified items and explicitly note the gap
+7. Target at least 10 items combined from press releases, company announcements, and major releases using high-quality verified sources
 8. If 'press-releases' is selected, prioritize official newsroom/press pages and include as many in-range items as available
 9. If 'company-announcements' is selected, prioritize official company announcement/blog channels and include as many in-range items as available
 10. If 'major-releases' is selected, prioritize official release notes/changelogs/product launch pages and include as many in-range items as available
@@ -260,12 +262,37 @@ Task Requirements:
 20. Search for major model/tool/platform releases announced in the date range
 21. Use tool priority for announcements: announcements_noauth first (keyless RSS coverage), then rss_company_announcements, then newsapi_search, then gnews_search, then prwire_search
 22. If a tool fails, continue with remaining tools; do not stop report generation
-23. Each topic should target up to 5 significant items with working source links; if fewer exist in-range, include available verified items and explicitly document the shortfall
+23. Each topic should target up to 5 significant items with working source links; when fewer items exist, deepen analysis of available items instead of adding shortfall boilerplate
 24. Write in professional ${style} style with clear, concise explanations
 25. Include context and business implications for each item
 26. For announcement tools, run a broad pass first (use announcements_noauth with an empty or very short query) to collect in-range items, then run focused queries to refine
 27. Always attempt source-specific passes when needed: rss_company_announcements for openai, google, microsoft, meta, anthropic, and nvidia
-28. Never output a blank template or "no data" report if in-range items were found by tools; include the verified items you have and clearly label any shortfalls
+28. Never output a blank template or "no data" report if in-range items were found by tools; include verified items and provide deeper context instead of shortfall notes
+29. Minimum detail requirement: each major section and each non-empty topic subsection must contain at least 50 words of meaningful analysis
+30. Never include lines such as "Shortfall note", "Fewer than X", or "Limited significant developments found" in the final report
+31. If a section has limited new items, add comparative analysis, implications, and forward-looking commentary based on verified in-range items
+32. Avoid repeated coverage of same model/release (e.g., GPT-5.3/GPT-5.4 duplicates): mention each unique release once and reference it concisely elsewhere if needed
+33. Style-specific word count rules:
+  - concise: each item description and each non-empty topic subsection must contain at least 50 words
+  - detailed: each item description and each non-empty topic subsection must contain 120-150 words
+34. If 'curated-ai-websites' is selected, run deep source discovery using curated_ai_sources_catalog and curated_ai_sources_search, then expand with source-specific web search passes
+35. Agent must go deep and collect from multiple companies (OpenAI, Google, Microsoft, Meta, Anthropic, Nvidia, Hugging Face, and major startups/investors) when in-range updates are available
+36. Use curated websites/blogs to expand coverage:
+  - Axios AI: https://www.axios.com/technology/axios-ai (Breaking news and executive-level insights)
+  - The Batch by Deeplearning.ai: https://www.deeplearning.ai/the-batch (Weekly deep-dive analysis from Andrew Ng)
+  - Last Week in AI: https://lastweekin.ai (Weekly AI news roundup)
+  - State of AI Report: https://www.stateof.ai (Annual comprehensive AI analysis)
+  - Google AI Blog: http://blog.google/technology/ai (Major AI developments from Google)
+  - Anthropic News: https://www.anthropic.com/news (Claude developments and AI safety)
+  - Hugging Face Blog: https://huggingface.co/blog (Open-source AI and model releases)
+  - What did OpenAI do this week?: https://www.whatdidopenaido.com (OpenAI-focused weekly updates)
+  - Stanford AI Index: https://aiindex.stanford.edu/report (Annual AI progress and trends)
+  - Gary Marcus on AI: https://garymarcus.substack.com (Critical AI analysis and research)
+  - Goldman Sachs AI Insights: https://www.goldmansachs.com/insights/topics/ai-generated-insights (Business impact analysis)
+  - Sequoia Capital: https://www.sequoiacap.com/article/generative-ai (Investment trends and startup insights)
+  - Exponential View: https://www.exponentialview.co (AI impact, risks, and regulation)
+  - The Rundown AI: https://www.therundown.ai (Daily AI newsletter, quick summaries)
+  - The Neuron: https://www.theneurondaily.com (Daily AI insights for weekly compilation)
 
 Required Report Structure:
 - Executive Summary
@@ -278,12 +305,38 @@ Required Report Structure:
 - Trends & Strategic Implications
 - Quick Reference Table
 
+MANDATORY OUTPUT FORMAT (MATCH THIS STYLE):
+- Title line must be style-based:
+  - concise: "# Concise AI Weekly Report"
+  - detailed: "# Detailed AI Weekly Report"
+  - technical: "# Technical AI Weekly Report"
+- Next line must be: "Coverage period: ${dateFrom} to ${dateTo}"
+- Use topic section headers as human-readable names, for example:
+  - "## Large Language Models"
+  - "## Computer Vision"
+  - "## Reinforcement Learning"
+  - "## Robotics"
+  - "## ML-Ops & Platforms"
+  - "## Enterprise AI"
+  - "## Ethics & Safety"
+- For every item, use this exact field layout:
+  - "Company Name: ..."
+  - "Release Name: ... | Date: YYYY-MM-DD"
+  - "Brief Description:"
+  - First sentence in bold (one-line key takeaway)
+  - Then a substantive paragraph with business + technical implications
+  - "Reference Link: Primary: https://..."
+- For concise style: each item paragraph must be at least 50 words
+- For detailed style: each item paragraph must be between 120 and 150 words
+- Do not output shortfall/template filler text (no "fewer than", no "shortfall note")
+- Do not repeat the same release/link across multiple sections unless strictly necessary; if referenced again, keep it to one short cross-reference sentence
+
 FILE OUTPUT REQUIREMENTS (CRITICAL):
-- Save the final report to this EXACT ABSOLUTE PATH: "/home/ravi.khapra/MARS/backend/${reportFilename}"
+- Save the final report to this EXACT ABSOLUTE PATH: "/home/ravi.khapra/MARS/backend/aiweeklyreport/${reportFilename}"
 - Use Python's open() function with the absolute path above
-- Example: with open("/home/ravi.khapra/MARS/backend/${reportFilename}", "w") as f: f.write(report)
+- Example: with open("/home/ravi.khapra/MARS/backend/aiweeklyreport/${reportFilename}", "w") as f: f.write(report)
 - Markdown format with proper headers
-- Print confirmation after saving: print(f"Report saved to: /home/ravi.khapra/MARS/backend/${reportFilename}")
+- Print confirmation after saving: print(f"Report saved to: /home/ravi.khapra/MARS/backend/aiweeklyreport/${reportFilename}")
 
 ${specificFocus ? `\nSPECIFIC FOCUS: ${specificFocus}` : ''}
 ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
@@ -306,9 +359,9 @@ ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
         planInstructions: 'Use researcher to gather information from specified sources, then use engineer to analyze and write the report.',
         agent: 'planner',
         workDir: config.workDir,
-        // Tell backend to copy final report to the backend/ directory
-        reportOutputDir: '/home/ravi.khapra/MARS/backend',
-        reportFilenamePattern: `ai_weekly_report_${dateFrom}_to_${dateTo}.md`,
+        // Tell backend to copy final report to backend/aiweeklyreport
+        reportOutputDir: '/home/ravi.khapra/MARS/backend/aiweeklyreport',
+        reportFilenamePattern: `ai_weekly_report_${dateFrom}_to_${dateTo}_*.md`,
         // Disable mandatory approval pauses so report generation proceeds end-to-end.
         approvalMode: 'never',
         requireApprovalBeforeSteps: false,
@@ -369,8 +422,9 @@ ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
       } catch {
         // Also try searching in backend directory
         try {
-          const reportFilename = result.filename || `ai_weekly_report_${dateFrom}_to_${dateTo}.md`
-          const findRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent('/home/ravi.khapra/MARS/backend')}&filename=${encodeURIComponent(reportFilename)}`))
+          const fallbackPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
+          const reportFilename = result.filename || `${fallbackPrefix}*.md`
+          const findRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent('/home/ravi.khapra/MARS/backend/aiweeklyreport')}&filename=${encodeURIComponent(reportFilename)}`))
           const findData = await findRes.json()
           if (findData.count > 0) {
             const contentRes = await fetch(getApiUrl(`/api/files/content?path=${encodeURIComponent(findData.matches[0].path)}`))
@@ -503,18 +557,27 @@ Please regenerate the report incorporating these changes while maintaining all o
       const fetchReport = async () => {
         try {
           addConsoleOutput(`🔍 Searching for generated report file...`)
-          const reportFilename = `ai_weekly_report_${dateFrom}_to_${dateTo}.md`
+          const reportPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
 
           // Search in the backend directory first (where the prompt tells the agent to save)
-          const backendDir = '/home/ravi.khapra/MARS/backend'
+          const backendDir = '/home/ravi.khapra/MARS/backend/aiweeklyreport'
           let findData = { count: 0, matches: [] as any[] }
 
-          const backendRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(backendDir)}&filename=${encodeURIComponent(reportFilename)}`))
-          findData = await backendRes.json()
+          const listRes = await fetch(getApiUrl(`/api/files/list?path=${encodeURIComponent(backendDir)}`))
+          if (listRes.ok) {
+            const listData = await listRes.json()
+            const markdownFiles = (listData.items || [])
+              .filter((f: any) => f.type === 'file' && f.name.endsWith('.md') && f.name.startsWith(reportPrefix))
+              .sort((a: any, b: any) => (b.modified || 0) - (a.modified || 0))
+            if (markdownFiles.length > 0) {
+              findData = { count: markdownFiles.length, matches: markdownFiles }
+            }
+          }
 
           // Fallback: search recursively in the task work directory
           if (findData.count === 0) {
-            const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(results.work_dir)}&filename=${encodeURIComponent(reportFilename)}`))
+            const wildcardName = `${reportPrefix}*.md`
+            const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(results.work_dir)}&filename=${encodeURIComponent(wildcardName)}`))
             findData = await taskRes.json()
           }
 
@@ -529,7 +592,7 @@ Please regenerate the report incorporating these changes while maintaining all o
             if (contentData.content) {
               setResult({
                 fullReport: contentData.content,
-                filename: reportFilename,
+                filename: findData.matches[0].name || foundPath.split('/').pop(),
                 path: foundPath
               })
               setIsReportDownloadReady(true)
@@ -537,7 +600,7 @@ Please regenerate the report incorporating these changes while maintaining all o
             } else {
               setResult({
                 fullReport: null,
-                filename: reportFilename,
+                filename: findData.matches[0].name || foundPath.split('/').pop(),
                 path: foundPath
               })
               addConsoleOutput(`⚠️ Report found but could not read content`)
@@ -546,8 +609,8 @@ Please regenerate the report incorporating these changes while maintaining all o
             addConsoleOutput(`⚠️ Report file not found in task directory. It may still be generating.`)
             setResult({
               fullReport: null,
-              filename: reportFilename,
-              path: `${results.work_dir}/${reportFilename}`
+              filename: `${reportPrefix}*.md`,
+              path: `${results.work_dir}/${reportPrefix}*.md`
             })
           }
 

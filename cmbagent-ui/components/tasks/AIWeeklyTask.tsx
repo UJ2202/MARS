@@ -42,7 +42,7 @@ export default function AIWeeklyTask({ onBack }: AIWeeklyTaskProps) {
   })
   const [dateTo, setDateTo] = useState(() => new Date().toISOString().split('T')[0])
   const [topics, setTopics] = useState<string[]>(['llm', 'cv'])
-  const [sources, setSources] = useState<string[]>(['github', 'press-releases', 'company-announcements', 'major-releases'])
+  const [sources, setSources] = useState<string[]>(['github', 'press-releases', 'company-announcements', 'major-releases', 'curated-ai-websites'])
   const [style, setStyle] = useState<'concise' | 'detailed' | 'technical'>('concise')
 
   const availableTopics = [
@@ -58,7 +58,8 @@ export default function AIWeeklyTask({ onBack }: AIWeeklyTaskProps) {
     { id: 'github', label: 'GitHub Releases' },
     { id: 'press-releases', label: 'Press Releases' },
     { id: 'company-announcements', label: 'Company Announcements' },
-    { id: 'major-releases', label: 'Major Product/Model Releases' }
+    { id: 'major-releases', label: 'Major Product/Model Releases' },
+    { id: 'curated-ai-websites', label: 'Curated AI Websites/Blogs' }
   ]
 
   const toggleTopic = (topicId: string) => {
@@ -131,7 +132,8 @@ export default function AIWeeklyTask({ onBack }: AIWeeklyTaskProps) {
       const taskId = `ai-weekly_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
       setTaskId(taskId)
 
-      const reportFilename = `ai_weekly_report_${dateFrom}_to_${dateTo}.md`
+      const timeStamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '_')
+      const reportFilename = `ai_weekly_report_${dateFrom}_to_${dateTo}_${timeStamp}.md`
 
       addConsoleOutput(`✅ Task created: ${taskId}`)
       addConsoleOutput(`📅 Date Range: ${dateFrom} to ${dateTo}`)
@@ -161,7 +163,7 @@ Task Requirements:
 4. Reject any item outside the date range, even if highly relevant
 5. Every item must show an explicit date in YYYY-MM-DD format
 6. Add this exact line near the top of the report: "Coverage Window (Inclusive): ${dateFrom} to ${dateTo}"
-7. Target at least 10 items combined from press releases, company announcements, and major releases; if fewer are available in-range, include the best available verified items and explicitly note the gap
+7. Target at least 10 items combined from press releases, company announcements, and major releases using high-quality verified sources
 8. If 'press-releases' is selected, prioritize official newsroom/press pages and include as many in-range items as available
 9. If 'company-announcements' is selected, prioritize official company announcement/blog channels and include as many in-range items as available
 10. If 'major-releases' is selected, prioritize official release notes/changelogs/product launch pages and include as many in-range items as available
@@ -176,12 +178,41 @@ Task Requirements:
 19. Search for major model/tool/platform releases announced in the date range
 20. Use tool priority for announcements: announcements_noauth first (keyless RSS coverage), then rss_company_announcements, then newsapi_search, then gnews_search, then prwire_search
 21. If a tool fails, continue with remaining tools; do not stop report generation
-22. Each topic should target up to 5 significant items with working source links; if fewer exist in-range, include available verified items and explicitly document the shortfall
+22. Each topic should target up to 5 significant items with working source links; when fewer items exist, deepen analysis of available items instead of adding shortfall boilerplate
 23. Write in professional ${style} style with clear, concise explanations
 24. Include context and business implications for each item
 25. For announcement tools, run a broad pass first (use announcements_noauth with an empty or very short query) to collect in-range items, then run focused queries to refine
 26. Always attempt source-specific passes when needed: rss_company_announcements for openai, google, microsoft, meta, anthropic, and nvidia
-27. Never output a blank template or "no data" report if in-range items were found by tools; include the verified items you have and clearly label any shortfalls
+27. Never output a blank template or "no data" report if in-range items were found by tools; include verified items and provide deeper context instead of shortfall notes
+28. NO DUPLICATES: De-duplicate strictly by canonical title + organization + date + URL; keep only one best entry when duplicates appear (including model version variants like GPT-5.3 vs GPT-5.4 mentions for the same announcement)
+29. Omit empty topic sections entirely. Do not render a topic header (for example RL) if there are zero verified in-range items for that topic
+30. Style rules by report style:
+  - concise: each item description and each non-empty topic subsection must contain at least 50 words
+  - detailed: each item description and each non-empty topic subsection must contain 120-150 words
+  - technical: keep high technical depth with concrete metrics and implementation notes
+31. Minimum detail requirement: each major section must contain at least 50 words of meaningful analysis
+32. Never include lines such as "Shortfall note", "Fewer than X", or "Limited significant developments found" in the final report
+33. If a section has limited new items, add comparative analysis, implications, and forward-looking commentary based on verified in-range items
+34. Avoid repeated coverage of same model/release (e.g., GPT-5.3/GPT-5.4 duplicates): mention each unique release once and reference it concisely elsewhere if needed
+35. If 'curated-ai-websites' is selected, run deep source discovery using curated_ai_sources_catalog and curated_ai_sources_search, then expand with source-specific web search passes
+36. Agent must go deep and collect from multiple companies (OpenAI, Google, Microsoft, Meta, Anthropic, Nvidia, Hugging Face, and major startups/investors) when in-range updates are available
+37. Use curated sources to expand coverage when needed:
+  - Axios AI: https://www.axios.com/technology/axios-ai (Breaking news and executive-level insights)
+  - The Batch by Deeplearning.ai: https://www.deeplearning.ai/the-batch (Weekly deep-dive analysis from Andrew Ng)
+  - Last Week in AI: https://lastweekin.ai (Weekly AI news roundup)
+  - State of AI Report: https://www.stateof.ai (Annual comprehensive AI analysis)
+  - Google AI Blog: http://blog.google/technology/ai (Major AI developments from Google)
+  - Anthropic News: https://www.anthropic.com/news (Claude developments and AI safety)
+  - Hugging Face Blog: https://huggingface.co/blog (Open-source AI and model releases)
+  - What did OpenAI do this week?: https://www.whatdidopenaido.com (OpenAI-focused weekly updates)
+  - Stanford AI Index: https://aiindex.stanford.edu/report (Annual AI progress and trends)
+  - Gary Marcus on AI: https://garymarcus.substack.com (Critical AI analysis and research)
+  - Goldman Sachs AI Insights: https://www.goldmansachs.com/insights/topics/ai-generated-insights (Business impact analysis)
+  - Sequoia Capital: https://www.sequoiacap.com/article/generative-ai (Investment trends and startup insights)
+  - Exponential View: https://www.exponentialview.co (AI impact, risks, and regulation)
+  - The Rundown AI: https://www.therundown.ai (Daily AI newsletter, quick summaries)
+  - The Neuron: https://www.theneurondaily.com (Daily AI insights for weekly compilation)
+38. Search fallback policy: when DuckDuckGo fails for a query, retry via Google, Bing, Yahoo, and Brave instead of stopping
 
 Required Report Structure (5 items per major section):
 
@@ -277,7 +308,7 @@ CRITICAL QUALITY CHECKLIST:
 ✅ Professional language suitable for executive distribution
 ✅ Explain business/technical value - readers should understand significance without clicking links
 ✅ Add specific details: metrics, names, institutions, funding amounts, performance numbers
-✅ If insufficient real sources available, explicitly state: "Limited significant developments found in this category during the reporting period"
+✅ No shortfall boilerplate lines in final output; provide substantive analysis instead
 
 WRITING STYLE:
 - Each summary should be self-contained and informative
@@ -285,7 +316,33 @@ WRITING STYLE:
 - Explain technical concepts clearly for non-technical readers
 - Balance depth with readability - aim for executive summary quality
 ✅ Clear business context and implications for each item
-✅ If insufficient real sources available, explicitly state: "Limited significant developments found in this category during the reporting period"
+✅ Minimum 50 words for every major section and every non-empty topic subsection
+
+MANDATORY OUTPUT FORMAT (MATCH THIS STYLE):
+- Title line must be style-based:
+  - concise: "# Concise AI Weekly Report"
+  - detailed: "# Detailed AI Weekly Report"
+  - technical: "# Technical AI Weekly Report"
+- Next line must be: "Coverage period: ${dateFrom} to ${dateTo}"
+- Use topic section headers exactly as human-readable names, for example:
+  - "## Large Language Models"
+  - "## Computer Vision"
+  - "## Reinforcement Learning"
+  - "## Robotics"
+  - "## ML-Ops & Platforms"
+  - "## Enterprise AI"
+  - "## Ethics & Safety"
+- For every item, use this exact field layout:
+  - "Company Name: ..."
+  - "Release Name: ... | Date: YYYY-MM-DD"
+  - "Brief Description:"
+  - First sentence in bold (one-line key takeaway)
+  - Then a substantive paragraph with business + technical implications
+  - "Reference Link: Primary: https://..."
+- For concise style: each item paragraph must be at least 50 words
+- For detailed style: each item paragraph must be between 120 and 150 words
+- Do not output shortfall/template filler text (no "fewer than", no "shortfall note")
+- Do not repeat the same release/link across multiple sections unless strictly necessary; if referenced again, keep it to one short cross-reference sentence
 
 FILE OUTPUT REQUIREMENTS (CRITICAL):
 - You MUST save the final report as: "${reportFilename}"
@@ -294,7 +351,7 @@ FILE OUTPUT REQUIREMENTS (CRITICAL):
 - Save in current working directory
 - Print confirmation: print(f"Report saved to: {os.path.abspath('${reportFilename}')}")
 
-Keep each section concise and actionable. Focus on quality over quantity.`
+Keep output structure and tone aligned with the mandatory format above.`
 
       // Create config directly like research mode does
       const taskConfig = {
@@ -312,7 +369,9 @@ Keep each section concise and actionable. Focus on quality over quantity.`
         nPlanReviews: 1,
         planInstructions: 'Use researcher to gather information from specified sources, then use engineer to analyze and write the report.',
         agent: 'planner',
-        workDir: config.workDir
+        workDir: config.workDir,
+        reportOutputDir: '/home/ravi.khapra/MARS/backend/aiweeklyreport',
+        reportFilenamePattern: `ai_weekly_report_${dateFrom}_to_${dateTo}_*.md`
       }
 
       await connect(taskId, enhancedTask, taskConfig)
@@ -411,8 +470,11 @@ Keep each section concise and actionable. Focus on quality over quantity.`
       }
 
       // Prioritize: 1) Exact filename match, 2) Files with 'final', 3) Most recent
-      const expectedFilename = `ai_weekly_report_${dateFrom}_to_${dateTo}.md`
-      let reportFile = markdownFiles.find((f: any) => f.name === expectedFilename)
+      const expectedPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
+      const matchingExpected = markdownFiles
+        .filter((f: any) => f.name.startsWith(expectedPrefix))
+        .sort((a: any, b: any) => (b.modified || 0) - (a.modified || 0))
+      let reportFile = matchingExpected[0]
 
       if (!reportFile) {
         // Try to find file with 'final' in name

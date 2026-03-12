@@ -11,8 +11,9 @@ import os
 import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from html import unescape
 from typing import Dict, List, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse, parse_qs, unquote
 from urllib.request import Request, urlopen
 
 import feedparser
@@ -50,6 +51,84 @@ _DEFAULT_RSS_FEEDS: Dict[str, List[str]] = {
     "nvidia": ["https://nvidianews.nvidia.com/releases?pagetemplate=rss"],
     "prnewswire": ["https://www.prnewswire.com/rss/news-releases-list.rss"],
 }
+
+_CURATED_AI_NEWS_SOURCES: List[Dict[str, str]] = [
+    {
+        "name": "Axios AI",
+        "url": "https://www.axios.com/technology/axios-ai",
+        "focus": "Breaking news and executive-level insights",
+    },
+    {
+        "name": "The Batch by DeepLearning.AI",
+        "url": "https://www.deeplearning.ai/the-batch",
+        "focus": "Weekly deep-dive analysis from Andrew Ng",
+    },
+    {
+        "name": "Last Week in AI",
+        "url": "https://lastweekin.ai",
+        "focus": "Weekly AI news roundup",
+    },
+    {
+        "name": "State of AI Report",
+        "url": "https://www.stateof.ai",
+        "focus": "Annual comprehensive AI analysis",
+    },
+    {
+        "name": "Google AI Blog",
+        "url": "http://blog.google/technology/ai",
+        "focus": "Major AI developments from Google",
+    },
+    {
+        "name": "Anthropic News",
+        "url": "https://www.anthropic.com/news",
+        "focus": "Claude developments and AI safety",
+    },
+    {
+        "name": "Hugging Face Blog",
+        "url": "https://huggingface.co/blog",
+        "focus": "Open-source AI and model releases",
+    },
+    {
+        "name": "What did OpenAI do this week?",
+        "url": "https://www.whatdidopenaido.com",
+        "focus": "OpenAI-focused weekly updates",
+    },
+    {
+        "name": "Stanford AI Index",
+        "url": "https://aiindex.stanford.edu/report",
+        "focus": "Annual AI progress and trends",
+    },
+    {
+        "name": "Gary Marcus on AI",
+        "url": "https://garymarcus.substack.com",
+        "focus": "Critical AI analysis and research",
+    },
+    {
+        "name": "Goldman Sachs AI Insights",
+        "url": "https://www.goldmansachs.com/insights/topics/ai-generated-insights",
+        "focus": "Business impact analysis",
+    },
+    {
+        "name": "Sequoia Capital",
+        "url": "https://www.sequoiacap.com/article/generative-ai",
+        "focus": "Investment trends and startup insights",
+    },
+    {
+        "name": "Exponential View",
+        "url": "https://www.exponentialview.co",
+        "focus": "AI impact, risks, and regulation",
+    },
+    {
+        "name": "The Rundown AI",
+        "url": "https://www.therundown.ai",
+        "focus": "Daily AI newsletter (quick summaries)",
+    },
+    {
+        "name": "The Neuron",
+        "url": "https://www.theneurondaily.com",
+        "focus": "Daily AI insights for weekly compilation",
+    },
+]
 
 
 def _parse_iso_date(value: str) -> Optional[datetime]:
@@ -169,6 +248,190 @@ def _safe_get_json(url: str, params: Dict[str, str], headers: Optional[Dict[str,
     except Exception as err:
         logger.warning("news_api_request_failed", url=full_url, error=str(err))
         return {"error": str(err), "url": full_url}
+
+
+def _safe_get_text(url: str, headers: Optional[Dict[str, str]] = None) -> str:
+    req = Request(url, headers=headers or {})
+    try:
+        with urlopen(req, timeout=_DEFAULT_TIMEOUT_SECONDS) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except Exception as err:
+        logger.warning("web_search_request_failed", url=url, error=str(err))
+        return ""
+
+
+def _extract_search_items(html: str, engine: str) -> List[Dict[str, str]]:
+    items: List[Dict[str, str]] = []
+    seen = set()
+
+    if not html:
+        return items
+
+    if engine == "duckduckgo":
+        pattern = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.I | re.S)
+        for href, title_html in pattern.findall(html):
+            url = unquote(href).strip()
+            title = re.sub(r"<[^>]+>", "", unescape(title_html)).strip()
+            if not url.startswith("http"):
+                continue
+            key = (url.lower(), title.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append({"title": title or url, "url": url, "engine": engine})
+        return items
+
+    # Generic anchor extraction works reasonably well for Google/Bing/Yahoo fallback.
+    for href, title_html in re.findall(r'<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', html, re.I | re.S):
+        candidate = href.strip()
+        if not candidate:
+            continue
+
+        if engine == "google" and candidate.startswith("/url?"):
+            parsed = urlparse(candidate)
+            qs = parse_qs(parsed.query)
+            candidate = (qs.get("q") or [""])[0]
+
+        if candidate.startswith("/"):
+            continue
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            blocked_domains = {
+                "google.com", "www.google.com", "bing.com", "www.bing.com",
+                "search.yahoo.com", "yahoo.com", "duckduckgo.com", "www.duckduckgo.com",
+                "search.brave.com", "brave.com", "www.brave.com",
+            }
+            domain = (urlparse(candidate).netloc or "").lower()
+            if domain in blocked_domains:
+                continue
+
+            title = re.sub(r"<[^>]+>", "", unescape(title_html)).strip()
+            key = (candidate.lower(), title.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append({"title": title or candidate, "url": candidate, "engine": engine})
+
+    return items
+
+
+def multi_engine_web_search(query: str, max_results: int = 10) -> Dict:
+    """Search the web with DuckDuckGo first, then Google/Bing/Yahoo/Brave on failure.
+
+    This gives planner workflows a resilient no-key fallback path when DDG is flaky.
+    """
+    q = (query or "").strip()
+    if not q:
+        return {"provider": "multi_engine_web_search", "query": query, "count": 0, "items": [], "errors": ["empty query"]}
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    }
+
+    engines = [
+        ("duckduckgo", f"https://duckduckgo.com/html/?{urlencode({'q': q})}"),
+        ("google", f"https://www.google.com/search?{urlencode({'q': q})}"),
+        ("bing", f"https://www.bing.com/search?{urlencode({'q': q})}"),
+        ("yahoo", f"https://search.yahoo.com/search?{urlencode({'p': q})}"),
+        ("brave", f"https://search.brave.com/search?{urlencode({'q': q})}"),
+    ]
+
+    aggregated: List[Dict[str, str]] = []
+    seen = set()
+    errors: List[str] = []
+    used_engines: List[str] = []
+
+    # DuckDuckGo first; only fall back if no results were found.
+    ddg_html = _safe_get_text(engines[0][1], headers=headers)
+    ddg_items = _extract_search_items(ddg_html, "duckduckgo")
+    if ddg_items:
+        used_engines.append("duckduckgo")
+        aggregated = ddg_items[: max(1, max_results)]
+    else:
+        if not ddg_html:
+            errors.append("duckduckgo request failed")
+        else:
+            errors.append("duckduckgo returned zero parsable results")
+
+        for engine_name, url in engines[1:]:
+            html = _safe_get_text(url, headers=headers)
+            if not html:
+                errors.append(f"{engine_name} request failed")
+                continue
+            used_engines.append(engine_name)
+            for item in _extract_search_items(html, engine_name):
+                key = ((item.get("url") or "").lower(), (item.get("title") or "").lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                aggregated.append(item)
+                if len(aggregated) >= max(1, max_results):
+                    break
+            if len(aggregated) >= max(1, max_results):
+                break
+
+    return {
+        "provider": "multi_engine_web_search",
+        "query": q,
+        "engines_used": used_engines,
+        "count": len(aggregated),
+        "items": aggregated,
+        "errors": errors,
+    }
+
+
+def curated_ai_sources_catalog() -> Dict:
+    """Return curated AI news sources for planner/researcher tool guidance."""
+    return {
+        "provider": "curated_ai_sources_catalog",
+        "count": len(_CURATED_AI_NEWS_SOURCES),
+        "sources": _CURATED_AI_NEWS_SOURCES,
+    }
+
+
+def curated_ai_sources_search(query: str, limit: int = 40) -> Dict:
+    """Search across curated AI sources with resilient multi-engine fallback."""
+    q = (query or "").strip()
+    results: List[Dict[str, str]] = []
+    seen = set()
+
+    for source in _CURATED_AI_NEWS_SOURCES:
+        source_url = source.get("url", "")
+        domain = (urlparse(source_url).netloc or "").lower().replace("www.", "")
+        if not domain:
+            continue
+        scoped_query = f"site:{domain} {q}".strip()
+        found = multi_engine_web_search(scoped_query, max_results=4)
+
+        for item in found.get("items") or []:
+            item_url = item.get("url") or ""
+            if domain not in (urlparse(item_url).netloc or "").lower():
+                continue
+            key = (item_url.lower(), (item.get("title") or "").lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(
+                {
+                    "title": item.get("title") or item_url,
+                    "url": item_url,
+                    "source": source.get("name"),
+                    "focus": source.get("focus"),
+                    "engine": item.get("engine"),
+                    "source_home": source_url,
+                }
+            )
+            if len(results) >= max(1, min(limit, 100)):
+                break
+        if len(results) >= max(1, min(limit, 100)):
+            break
+
+    return {
+        "provider": "curated_ai_sources_search",
+        "query": q,
+        "count": len(results),
+        "items": results,
+        "sources_considered": len(_CURATED_AI_NEWS_SOURCES),
+    }
 
 
 def _normalize_articles(raw_items: List[Dict], from_date: Optional[str], to_date: Optional[str], source: str) -> List[Dict]:
