@@ -346,10 +346,15 @@ MANDATORY OUTPUT FORMAT (MATCH THIS STYLE):
 
 FILE OUTPUT REQUIREMENTS (CRITICAL):
 - You MUST save the final report as: "${reportFilename}"
-- Use Python's open() function or write_file tool
+- Use ONLY Python's open() function via code execution (do NOT use write_file tool, file_write tool, or any other file tool)
+- The code executor runs in a 'control' subdirectory. Save ONE LEVEL UP so the file lands in the task root:
+  import os
+  output_path = os.path.join(os.path.dirname(os.getcwd()), "${reportFilename}")
+  with open(output_path, "w") as f:
+      f.write(report_content)
+  print(f"Report saved to: {os.path.abspath(output_path)}")
 - Markdown format with proper headers (##, ###) and lists
-- Save in current working directory
-- Print confirmation: print(f"Report saved to: {os.path.abspath('${reportFilename}')}")
+- Do NOT use any hardcoded absolute path
 
 Keep output structure and tone aligned with the mandatory format above.`
 
@@ -370,7 +375,6 @@ Keep output structure and tone aligned with the mandatory format above.`
         planInstructions: 'Use researcher to gather information from specified sources, then use engineer to analyze and write the report.',
         agent: 'planner',
         workDir: config.workDir,
-        reportOutputDir: '/home/ravi.khapra/MARS/backend/aiweeklyreport',
         reportFilenamePattern: `ai_weekly_report_${dateFrom}_to_${dateTo}_*.md`
       }
 
@@ -464,7 +468,32 @@ Keep output structure and tone aligned with the mandatory format above.`
       )
 
       if (markdownFiles.length === 0) {
-        addConsoleOutput('⚠️ No report files found')
+        // Flat list found nothing — try recursive search (file may be in control/ subdir)
+        addConsoleOutput('🔍 Not found at top level, searching recursively...')
+        try {
+          const expectedPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
+          const findRes = await fetch(
+            getApiUrl(`/api/files/find?directory=${encodeURIComponent(workDir)}&filename=${encodeURIComponent(expectedPrefix + '*.md')}`)
+          )
+          if (findRes.ok) {
+            const findData = await findRes.json()
+            if (findData.count > 0) {
+              const foundPath = findData.matches[0].path
+              addConsoleOutput(`📄 Found report at: ${foundPath}`)
+              const contentRes = await fetch(getApiUrl(`/api/files/content?path=${encodeURIComponent(foundPath)}`))
+              if (contentRes.ok) {
+                const contentData = await contentRes.json()
+                if (contentData.content && contentData.type === 'text') {
+                  parseAndSetReport(contentData.content)
+                  addConsoleOutput(`✅ Report loaded: ${findData.matches[0].name}`)
+                  disconnect()
+                  return
+                }
+              }
+            }
+          }
+        } catch (_) { /* fall through to console parse */ }
+        addConsoleOutput('⚠️ No report files found, parsing from console...')
         parseReportFromConsole()
         return
       }

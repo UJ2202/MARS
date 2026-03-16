@@ -332,11 +332,16 @@ MANDATORY OUTPUT FORMAT (MATCH THIS STYLE):
 - Do not repeat the same release/link across multiple sections unless strictly necessary; if referenced again, keep it to one short cross-reference sentence
 
 FILE OUTPUT REQUIREMENTS (CRITICAL):
-- Save the final report to this EXACT ABSOLUTE PATH: "/home/ravi.khapra/MARS/backend/aiweeklyreport/${reportFilename}"
-- Use Python's open() function with the absolute path above
-- Example: with open("/home/ravi.khapra/MARS/backend/aiweeklyreport/${reportFilename}", "w") as f: f.write(report)
-- Markdown format with proper headers
-- Print confirmation after saving: print(f"Report saved to: /home/ravi.khapra/MARS/backend/aiweeklyreport/${reportFilename}")
+- You MUST save the final report as: "${reportFilename}"
+- Use ONLY Python's open() function via code execution (do NOT use write_file tool, file_write tool, or any other file tool)
+- The code executor runs in a 'control' subdirectory. Save ONE LEVEL UP so the file lands in the task root:
+  import os
+  output_path = os.path.join(os.path.dirname(os.getcwd()), "${reportFilename}")
+  with open(output_path, "w") as f:
+      f.write(report_content)
+  print(f"Report saved to: {os.path.abspath(output_path)}")
+- Markdown format with proper headers (##, ###) and lists
+- Do NOT use any hardcoded absolute path
 
 ${specificFocus ? `\nSPECIFIC FOCUS: ${specificFocus}` : ''}
 ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
@@ -359,8 +364,6 @@ ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
         planInstructions: 'Use researcher to gather information from specified sources, then use engineer to analyze and write the report.',
         agent: 'planner',
         workDir: config.workDir,
-        // Tell backend to copy final report to backend/aiweeklyreport
-        reportOutputDir: '/home/ravi.khapra/MARS/backend/aiweeklyreport',
         reportFilenamePattern: `ai_weekly_report_${dateFrom}_to_${dateTo}_*.md`,
         // Disable mandatory approval pauses so report generation proceeds end-to-end.
         approvalMode: 'never',
@@ -420,19 +423,22 @@ ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
           setIsReportDownloadReady(true)
         }
       } catch {
-        // Also try searching in backend directory
+        // Also try searching in work directory
         try {
           const fallbackPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
           const reportFilename = result.filename || `${fallbackPrefix}*.md`
-          const findRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent('/home/ravi.khapra/MARS/backend/aiweeklyreport')}&filename=${encodeURIComponent(reportFilename)}`))
-          const findData = await findRes.json()
-          if (findData.count > 0) {
-            const contentRes = await fetch(getApiUrl(`/api/files/content?path=${encodeURIComponent(findData.matches[0].path)}`))
-            const contentData = await contentRes.json()
-            if (contentData.content) {
-              content = contentData.content
-              setResult({ ...result, fullReport: content, path: findData.matches[0].path })
-              setIsReportDownloadReady(true)
+          const workDir = result.workDir || results?.work_dir
+          if (workDir) {
+            const findRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(workDir)}&filename=${encodeURIComponent(reportFilename)}`))
+            const findData = await findRes.json()
+            if (findData.count > 0) {
+              const contentRes = await fetch(getApiUrl(`/api/files/content?path=${encodeURIComponent(findData.matches[0].path)}`))
+              const contentData = await contentRes.json()
+              if (contentData.content) {
+                content = contentData.content
+                setResult({ ...result, fullReport: content, path: findData.matches[0].path })
+                setIsReportDownloadReady(true)
+              }
             }
           }
         } catch { /* ignore */ }
@@ -559,11 +565,11 @@ Please regenerate the report incorporating these changes while maintaining all o
           addConsoleOutput(`🔍 Searching for generated report file...`)
           const reportPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
 
-          // Search in the backend directory first (where the prompt tells the agent to save)
-          const backendDir = '/home/ravi.khapra/MARS/backend/aiweeklyreport'
+          // Search in the task work directory (where the agent saves files)
           let findData = { count: 0, matches: [] as any[] }
 
-          const listRes = await fetch(getApiUrl(`/api/files/list?path=${encodeURIComponent(backendDir)}`))
+          // First try listing files directly in the task work directory
+          const listRes = await fetch(getApiUrl(`/api/files/list?path=${encodeURIComponent(results.work_dir)}`))
           if (listRes.ok) {
             const listData = await listRes.json()
             const markdownFiles = (listData.items || [])
@@ -578,7 +584,17 @@ Please regenerate the report incorporating these changes while maintaining all o
           if (findData.count === 0) {
             const wildcardName = `${reportPrefix}*.md`
             const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(results.work_dir)}&filename=${encodeURIComponent(wildcardName)}`))
-            findData = await taskRes.json()
+            if (taskRes.ok) {
+              findData = await taskRes.json()
+            }
+          }
+
+          // Second fallback: search for any markdown report file in work dir
+          if (findData.count === 0) {
+            const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(results.work_dir)}&filename=${encodeURIComponent('ai_weekly_report_*.md')}`))
+            if (taskRes.ok) {
+              findData = await taskRes.json()
+            }
           }
 
           if (findData.count > 0) {
@@ -593,7 +609,8 @@ Please regenerate the report incorporating these changes while maintaining all o
               setResult({
                 fullReport: contentData.content,
                 filename: findData.matches[0].name || foundPath.split('/').pop(),
-                path: foundPath
+                path: foundPath,
+                workDir: results.work_dir
               })
               setIsReportDownloadReady(true)
               addConsoleOutput(`✅ Report loaded successfully (${(contentData.size / 1024).toFixed(1)} KB)`)
@@ -601,7 +618,8 @@ Please regenerate the report incorporating these changes while maintaining all o
               setResult({
                 fullReport: null,
                 filename: findData.matches[0].name || foundPath.split('/').pop(),
-                path: foundPath
+                path: foundPath,
+                workDir: results.work_dir
               })
               addConsoleOutput(`⚠️ Report found but could not read content`)
             }

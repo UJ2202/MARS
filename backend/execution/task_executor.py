@@ -1106,6 +1106,29 @@ async def execute_cmbagent_task(
             if "terminator" in dag_tracker.node_statuses:
                 await dag_tracker.update_node_status("terminator", "completed")
 
+        # Promote AI-weekly report files from subdirs (e.g. control/) to task_work_dir root
+        # so the frontend's flat /api/files/list call can find them directly.
+        report_filename_pattern = config.get("reportFilenamePattern", "")
+        if report_filename_pattern and "ai_weekly_report_" in report_filename_pattern:
+            try:
+                found_reports = glob.glob(
+                    os.path.join(task_work_dir, "**", "ai_weekly_report_*.md"), recursive=True
+                )
+                for src in found_reports:
+                    if os.path.dirname(os.path.abspath(src)) != os.path.abspath(task_work_dir):
+                        dst = os.path.join(task_work_dir, os.path.basename(src))
+                        if not os.path.exists(dst):
+                            shutil.copy2(src, dst)
+                            logger.info("Promoted report %s -> %s", src, dst)
+                            await send_ws_event(
+                                websocket, "output",
+                                {"message": f"📄 Report promoted to task root: {os.path.basename(dst)}"},
+                                run_id=task_id,
+                                session_id=session_id
+                            )
+            except Exception as _e:
+                logger.warning("Could not promote report files: %s", _e)
+
         # Copy report files to the configured output directory (e.g. backend/)
         report_output_dir = config.get("reportOutputDir")
         if report_output_dir:
