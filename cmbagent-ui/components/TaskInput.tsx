@@ -168,51 +168,59 @@ Don't suggest to perform any calculations or analyses here. The only goal of thi
   const getExampleTasks = (mode: string) => {
     if (mode === 'idea-generation') {
       return [
-        'Gene expression profiles from Alzheimer\'s patients vs healthy controls',
-        'Seismic activity near tectonic plate boundaries from 2000 to 2024',
-        'Urban heat island temperature measurements across 50 global cities'
+        'Customer transaction history from a retail bank with 50,000 accounts',
+        'Bank loan application dataset with credit scores, income, and default outcomes',
+        'Cross-border payment latency and fee data from correspondent banking networks'
       ]
     } else if (mode === 'hitl-interactive') {
       return [
-        'Solve PDEs modeling 2D fluid flow and visualize the velocity field',
-        'Build an ECG signal classifier to detect atrial fibrillation',
-        'Run a Bayesian parameter estimation for a damped harmonic oscillator'
+        'Build a stress-test model for bank capital under adverse macroeconomic scenarios',
+        'Design a real-time fraud alert system and visualize transaction network patterns',
+        'Develop a customer lifetime value model for a retail banking portfolio'
       ]
     } else if (mode === 'copilot') {
       return [
-        'Explain the key differences between gradient descent variants',
-        'Write a regex to validate IPv6 addresses with edge cases',
-        'Debug this recursive tree traversal and add memoization'
+        'Explain the difference between Basel II and Basel III capital requirements',
+        'Write a Python function to calculate XIRR for a series of loan repayment cash flows',
+        'Debug this credit scoring pipeline and add cross-validation with stratified splits'
       ]
     } else if (mode === 'ocr') {
       return [
-        '/path/to/lab_notebook_scan.pdf',
-        '/path/to/handwritten_equations.png',
-        '/path/to/scanned_field_notes.jpg'
+        '/path/to/bank_statements_scan.pdf',
+        '/path/to/loan_agreement_signed.png',
+        '/path/to/kyc_documents_batch/'
       ]
     } else if (mode === 'arxiv') {
       return [
-        'What are the key findings in https://arxiv.org/abs/2412.07626 on diffusion models?',
-        'Summarize the methodology of https://arxiv.org/abs/2309.02041 on gravitational wave memory',
-        'Explain the approach in https://arxiv.org/abs/2006.11239 and its limitations'
+        'What are the key findings in https://arxiv.org/abs/2412.07626 on credit risk modelling?',
+        'Summarize the methodology of https://arxiv.org/abs/2309.02041 on fraud detection using graph neural networks',
+        'Explain the approach in https://arxiv.org/abs/2006.11239 on systemic risk in interbank networks'
       ]
     } else if (mode === 'enhance-input') {
       return [
-        'Explore topological phases in condensed matter — see https://arxiv.org/abs/1707.05766 — and relate to recent experimental results on Majorana fermions.',
-        'My hypothesis on epigenetic aging clocks combined with the landmark paper at https://arxiv.org/abs/1911.12915 on DNA methylation biomarkers.',
-        'What does this work on neural scaling laws https://arxiv.org/abs/2001.08361 imply for training efficiency at smaller compute budgets?'
+        'Explore ML-based credit scoring models — see https://arxiv.org/abs/2104.03456 — and relate to recent regulatory guidance on explainable AI in lending.',
+        'My hypothesis on BNPL default risk combined with the paper at https://arxiv.org/abs/2203.07651 on consumer credit behaviour during economic shocks.',
+        'What does this work on graph-based AML detection https://arxiv.org/abs/2107.01178 imply for real-time transaction monitoring at scale?'
       ]
     } else if (mode === 'planning-control') {
       return [
-        'Investigate how gut microbiome composition influences mental health outcomes',
-        'Explore the physics and engineering bottlenecks of nuclear fusion reactors',
-        'Research coral reef bleaching causes and evaluate leading restoration strategies'
+        'Investigate the impact of interest rate hikes on mortgage default rates and housing affordability',
+        'Build a comprehensive credit scoring model incorporating alternative data for underbanked populations',
+        'Research the effectiveness of AI-driven anti-money laundering transaction monitoring systems',
+        'Analyze open banking API adoption and its competitive impact on traditional retail banks',
+        'Study Basel III capital requirements and their effect on SME lending capacity',
+        'Evaluate real-time fraud detection strategies in instant payment networks',
+        'Research BNPL risk models and their systemic implications for consumer lending markets'
       ]
     }
+    // one-shot default — banking use cases
     return [
-      'Simulate a double pendulum for 15 seconds and plot the chaotic trajectory',
-      'Compute prime number distribution up to 100,000 and visualize gaps',
-      'Analyze word frequency in Hamlet and plot the top 20 words as a bar chart'
+      'Analyze monthly credit card transaction data and flag anomalies by merchant category',
+      'Calculate loan default probability using logistic regression on customer credit profiles',
+      'Plot mortgage approval rate distribution across zip codes and identify disparity patterns',
+      'Compute Value-at-Risk (VaR) for a retail banking portfolio using historical simulation',
+      'Analyze customer churn in a retail bank dataset and identify the top five risk factors',
+      'Generate a report on ATM usage patterns and optimal cash replenishment schedules'
     ]
   }
 
