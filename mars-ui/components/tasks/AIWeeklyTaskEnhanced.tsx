@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { ArrowLeft, Calendar, Tags, Globe, Sparkles, Download, Loader2, Code, MessageSquare, FileText, Settings, CheckCircle2, AlertCircle } from 'lucide-react'
-import { getApiUrl, config } from '@/lib/config'
+import { config, getApiUrl } from '@/lib/config'
 import { useWebSocketContext } from '@/contexts/WebSocketContext'
 import TaskWorkspaceView from './TaskWorkspaceView'
 import ConsoleOutput from '@/components/ConsoleOutput'
@@ -26,6 +26,7 @@ export default function AIWeeklyTaskEnhanced({ onBack }: AIWeeklyTaskEnhancedPro
     costSummary,
     costTimeSeries,
     results,
+    setResults,
     pendingApproval,
     sendMessage
   } = useWebSocketContext()
@@ -55,6 +56,8 @@ export default function AIWeeklyTaskEnhanced({ onBack }: AIWeeklyTaskEnhancedPro
 
   // Post-execution state
   const fetchStartedRef = useRef(false)
+  const runStartTimestampRef = useRef<number | null>(null)
+  const postDismissedRef = useRef(false)
   const [showPostExecution, setShowPostExecution] = useState(false)
   const [postExecutionFeedback, setPostExecutionFeedback] = useState('')
   const [isRestarting, setIsRestarting] = useState(false)
@@ -204,6 +207,7 @@ REPORT TONE: ${reportTone}
 
     setError(null)
     setResult(null)
+    setResults(null)
     setIsReportDownloadReady(false)
     clearConsole()
     setShowView('execution')
@@ -223,6 +227,7 @@ REPORT TONE: ${reportTone}
       addConsoleOutput(`🎯 Enhanced with user context`)
       addConsoleOutput(``)
 
+      runStartTimestampRef.current = Date.now() / 1000
       setIsRunning(true)
       addConsoleOutput(`🚀 Connecting to workflow engine with HITL enabled...`)
 
@@ -246,7 +251,7 @@ Task Requirements:
 4. Reject any item outside the date range, even if highly relevant
 5. Every item must show an explicit date in YYYY-MM-DD format
 6. Add this exact line near the top of the report: "Coverage Window (Inclusive): ${dateFrom} to ${dateTo}"
-7. Target at least 10 items combined from press releases, company announcements, and major releases using high-quality verified sources
+7. NO ITEM CAP: include ALL verified in-range items discovered across selected sources; do not stop after 10 or any fixed number
 8. If 'press-releases' is selected, prioritize official newsroom/press pages and include as many in-range items as available
 9. If 'company-announcements' is selected, prioritize official company announcement/blog channels and include as many in-range items as available
 10. If 'major-releases' is selected, prioritize official release notes/changelogs/product launch pages and include as many in-range items as available
@@ -260,24 +265,59 @@ Task Requirements:
 18. Search GitHub for trending repos and major releases in AI
 19. Search official press releases and company announcements for AI launches and updates
 20. Search for major model/tool/platform releases announced in the date range
-21. Use tool priority for announcements: announcements_noauth first (keyless RSS coverage), then rss_company_announcements, then newsapi_search, then gnews_search, then prwire_search
-22. If a tool fails, continue with remaining tools; do not stop report generation
-23. Each topic should target up to 5 significant items with working source links; when fewer items exist, deepen analysis of available items instead of adding shortfall boilerplate
+21. MANDATORY FIXED TOOL EXECUTION SEQUENCE — execute ALL of these steps in EXACTLY this order, EVERY run, with NO exceptions:
+  STEP A: Call announcements_noauth(query="", company="", from_date="${dateFrom}", to_date="${dateTo}", limit=300) — broad sweep of ALL RSS feeds. Record every returned item.
+  STEP B: Call rss_company_announcements(company="", from_date="${dateFrom}", to_date="${dateTo}", limit=200) — ensures no feed is missed. Merge with Step A results.
+  STEP C: For EACH of these companies individually, call rss_company_announcements(company=X, from_date="${dateFrom}", to_date="${dateTo}"): openai, google, microsoft, meta, facebook, anthropic, nvidia, amazon, aws, oracle, cisco, uber, ibm, intel, amd, qualcomm, samsung, salesforce, sap, siemens, sony, huggingface, deeplearning_ai, lastweekinai, theneuron, therundownai, exponentialview. Merge ALL results.
+  STEP D: Call curated_ai_sources_catalog() — get the full source list.
+  STEP E: Call curated_ai_sources_search(query="AI news ${dateFrom} to ${dateTo}", limit=60) — sweep curated news aggregators.
+  STEP F: Call newsapi_search(query="artificial intelligence OR machine learning", from_date="${dateFrom}", to_date="${dateTo}", page_size=100) if NEWSAPI_KEY is available.
+  STEP G: Call gnews_search(query="artificial intelligence OR machine learning", from_date="${dateFrom}", to_date="${dateTo}", max_results=100) if GNEWS_API_KEY is available.
+  STEP H: Call prwire_search(query="AI", from_date="${dateFrom}", to_date="${dateTo}", limit=100).
+  STEP I: Call multi_engine_web_search for any company from the core list that returned ZERO results in steps A-H.
+  After ALL steps A-I complete, merge ALL collected items into one master list, de-duplicate by URL+title, and use this master list as the ONLY source for the report.
+22. If any tool call fails or returns an error, log the error and CONTINUE with the next step — never abort the sequence
+23. EVERY item returned by tools A-I that passes date filtering MUST appear in the final report — do not cherry-pick or drop items
 24. Write in professional ${style} style with clear, concise explanations
 25. Include context and business implications for each item
-26. For announcement tools, run a broad pass first (use announcements_noauth with an empty or very short query) to collect in-range items, then run focused queries to refine
-27. Always attempt source-specific passes when needed: rss_company_announcements for openai, google, microsoft, meta, anthropic, and nvidia
+25.1 For EVERY item, open the primary reference URL and extract concrete facts (announcement details, specs, metrics, stakeholders, timelines) before writing the description
+25.2 Do not write generic summaries; each item description must be grounded in source details from the reference link
+26. The broad sweep in Step A+B is non-negotiable — even if focused queries in Step C return data, the broad sweep ensures nothing is missed
+27. The per-company passes in Step C are non-negotiable — even if the broad sweep returned data for that company, the focused pass may catch additional items
 28. Never output a blank template or "no data" report if in-range items were found by tools; include verified items and provide deeper context instead of shortfall notes
 29. Minimum detail requirement: each major section and each non-empty topic subsection must contain at least 50 words of meaningful analysis
 30. Never include lines such as "Shortfall note", "Fewer than X", or "Limited significant developments found" in the final report
 31. If a section has limited new items, add comparative analysis, implications, and forward-looking commentary based on verified in-range items
-32. Avoid repeated coverage of same model/release (e.g., GPT-5.3/GPT-5.4 duplicates): mention each unique release once and reference it concisely elsewhere if needed
-33. Style-specific word count rules:
-  - concise: each item description and each non-empty topic subsection must contain at least 50 words
-  - detailed: each item description and each non-empty topic subsection must contain 120-150 words
-34. If 'curated-ai-websites' is selected, run deep source discovery using curated_ai_sources_catalog and curated_ai_sources_search, then expand with source-specific web search passes
-35. Agent must go deep and collect from multiple companies (OpenAI, Google, Microsoft, Meta, Anthropic, Nvidia, Hugging Face, and major startups/investors) when in-range updates are available
-36. Use curated websites/blogs to expand coverage:
+32. STRICT NO-DUPLICATE RULE:
+  - Each unique release/announcement must appear EXACTLY ONCE in the entire report
+  - Different versions ARE distinct items (e.g. GPT-5.3 and GPT-5.4 are two separate releases — each one can appear once)
+  - But the SAME version must NEVER repeat (e.g. GPT-5.3 must not appear 2, 3, or 4 times — only once)
+  - De-duplicate by: exact release name + organization + URL; if the same release name or URL appears more than once, keep only the first/best entry and delete all others
+  - Before writing the final report, run a MANDATORY FINAL DEDUP PASS: scan the entire report, count occurrences of each release name; if any name appears more than once, remove all but the first occurrence
+  - If the same announcement appears under different headlines, keep only the primary one
+  - This applies to ALL releases from ALL companies: each unique release name gets exactly one entry in the entire report
+33. Accuracy and genuineness rules:
+  - Prefer correctness over volume; never pad with weak or uncertain items
+  - Do not fabricate claims, dates, organizations, metrics, or URLs
+  - Use only verifiable, genuine items from authoritative sources; if verification is weak, skip the item
+  - If a high-priority organization has no verified in-range updates, briefly state unavailable rather than inventing coverage
+34. Style-specific word count rules:
+  - concise: each item description must contain at least 100 words
+  - detailed: each item description must contain at least 150 words — this is a HARD minimum; if a paragraph is shorter, expand it with deeper analysis, implications, competitive context, and technical detail until it reaches 150 words
+35. Topic and title uniqueness rules:
+  - Topic/section headings must be globally unique throughout the full report
+  - Every item title/release name must be globally unique throughout the full report
+  - Any section may contain N items, but each title must be unique
+  - A single news item can appear in only one section (no cross-section repetition)
+36. Organization and topic diversity rules (strong preference, not a hard block):
+  - Do not concentrate mostly on OpenAI/Google/Microsoft
+  - Include coverage from Meta/Facebook, Oracle, Cisco, AWS/Amazon, Uber, IBM, Intel, AMD, Qualcomm when verified in-range updates are available
+  - Include additional global organizations when available: Salesforce, SAP, Siemens, Tencent, Baidu, Alibaba, Samsung, Sony, Toyota, Bosch, Infosys, TCS, Wipro, Reliance Jio, and other global innovators
+  - Broaden scope beyond pure AI/ML: also search for quantum computing, edge AI, neuromorphic computing, AI hardware, AI regulation/policy, and AI-driven scientific breakthroughs
+  - Aim for broad organization and topic diversity, but do not force non-verified items
+37. MANDATORY: Always run curated_ai_sources_catalog and curated_ai_sources_search to discover items from curated AI news sources — this is NOT optional and must happen in EVERY report generation regardless of which source checkboxes are selected
+38. Agent must go deep and collect from multiple companies: OpenAI, Google, Microsoft, Meta/Facebook, Oracle, Cisco, IBM, Intel, AMD, Qualcomm, AWS/Amazon, Uber, Anthropic, Nvidia, Hugging Face, Samsung, Sony, Toyota, Bosch, Infosys, TCS, and major startups/investors. Also search for quantum computing (IBM Quantum, Google Quantum AI, IonQ, Rigetti, D-Wave), AI hardware, edge AI, and AI regulation/policy developments when in-range updates are available
+39. MANDATORY curated sources — search ALL of these in EVERY run (not optional):
   - Axios AI: https://www.axios.com/technology/axios-ai (Breaking news and executive-level insights)
   - The Batch by Deeplearning.ai: https://www.deeplearning.ai/the-batch (Weekly deep-dive analysis from Andrew Ng)
   - Last Week in AI: https://lastweekin.ai (Weekly AI news roundup)
@@ -293,15 +333,17 @@ Task Requirements:
   - Exponential View: https://www.exponentialview.co (AI impact, risks, and regulation)
   - The Rundown AI: https://www.therundown.ai (Daily AI newsletter, quick summaries)
   - The Neuron: https://www.theneurondaily.com (Daily AI insights for weekly compilation)
+  For EACH source above, run a dedicated web search query: "site:<domain> AI news ${dateFrom}..${dateTo}" to pull fresh in-range items. Do NOT skip any source. Merge all results into Key Highlights.
+40. MANDATORY COVERAGE AUDIT BEFORE FINAL SAVE:
+  - Core organizations to explicitly audit in this run: OpenAI, Google, Microsoft, Meta, Anthropic, Nvidia, AWS/Amazon, IBM, Intel, AMD, Qualcomm, Oracle, Cisco, Uber, Salesforce, SAP, Samsung, Sony
+  - For each organization above, run at least one targeted query for the selected date window and selected source types
+  - If verified in-range updates are found, include them in Key Highlights with source-grounded details
+  - If no verified in-range update is found for an organization after targeted queries, add one concise "No verified in-range update found" note in Trends & Strategic Implications (do not fabricate items)
+  - Do not finalize report until this coverage audit pass is completed
 
-Required Report Structure:
+Required Report Structure (FLAT — only two content sections, NO Technical Breakthroughs section):
 - Executive Summary
-- Key Highlights (5 items)
-- Press Releases & Company Announcements (5 items)
-- Major Releases (5 items)
-- Product Launches & Tools (5 items)
-- Technical Breakthroughs by Category (5 per topic)
-- Industry & Business News (5 items)
+- Key Highlights & Developments (ALL items including technical breakthroughs in one flat list, no sub-sections)
 - Trends & Strategic Implications
 - Quick Reference Table
 
@@ -311,14 +353,10 @@ MANDATORY OUTPUT FORMAT (MATCH THIS STYLE):
   - detailed: "# Detailed AI Weekly Report"
   - technical: "# Technical AI Weekly Report"
 - Next line must be: "Coverage period: ${dateFrom} to ${dateTo}"
-- Use topic section headers as human-readable names, for example:
-  - "## Large Language Models"
-  - "## Computer Vision"
-  - "## Reinforcement Learning"
-  - "## Robotics"
-  - "## ML-Ops & Platforms"
-  - "## Enterprise AI"
-  - "## Ethics & Safety"
+- After Executive Summary, put ALL items (including technical breakthroughs) in a single "## Key Highlights & Developments" section — do NOT create a separate "Technical Breakthroughs" section or any other sub-sections
+- Then Trends & Strategic Implications
+- Then Quick Reference Table
+- The report must have exactly 4 sections: Executive Summary, Key Highlights & Developments, Trends & Strategic Implications, Quick Reference Table
 - For every item, use this exact field layout:
   - "Company Name: ..."
   - "Release Name: ... | Date: YYYY-MM-DD"
@@ -326,22 +364,28 @@ MANDATORY OUTPUT FORMAT (MATCH THIS STYLE):
   - First sentence in bold (one-line key takeaway)
   - Then a substantive paragraph with business + technical implications
   - "Reference Link: Primary: https://..."
-- For concise style: each item paragraph must be at least 50 words
-- For detailed style: each item paragraph must be between 120 and 150 words
+- For concise style: each item paragraph must be at least 100 words
+- For detailed style: each item paragraph must be at least 150 words — this is a HARD minimum; expand with deeper analysis, implications, and competitive context until 150 words is reached
 - Do not output shortfall/template filler text (no "fewer than", no "shortfall note")
-- Do not repeat the same release/link across multiple sections unless strictly necessary; if referenced again, keep it to one short cross-reference sentence
+- Every item title/release name must be globally unique throughout the full report
+- Do NOT create sub-headers like "Press Releases", "Major Releases", "Product Launches", "Industry News", "Technical Breakthroughs" anywhere in the report
+- Include diverse organizations beyond OpenAI/Google/Microsoft when verified in-range
+- Diversity is a strong preference, not a blocking requirement; never sacrifice correctness to satisfy diversity
 
 FILE OUTPUT REQUIREMENTS (CRITICAL):
 - You MUST save the final report as: "${reportFilename}"
 - Use ONLY Python's open() function via code execution (do NOT use write_file tool, file_write tool, or any other file tool)
-- The code executor runs in a 'control' subdirectory. Save ONE LEVEL UP so the file lands in the task root:
+- Save the report ONLY to CMBAGENT_DEFAULT_WORK_DIR (do NOT save to project root, task root, or any other directory):
   import os
-  output_path = os.path.join(os.path.dirname(os.getcwd()), "${reportFilename}")
-  with open(output_path, "w") as f:
+  default_dir = os.path.expanduser(os.getenv("CMBAGENT_DEFAULT_WORK_DIR", "~/Desktop/cmbdir"))
+  os.makedirs(default_dir, exist_ok=True)
+  output_path = os.path.join(default_dir, "${reportFilename}")
+  with open(output_path, "w", encoding="utf-8") as f:
       f.write(report_content)
   print(f"Report saved to: {os.path.abspath(output_path)}")
 - Markdown format with proper headers (##, ###) and lists
 - Do NOT use any hardcoded absolute path
+- Do NOT save any copy to os.path.dirname(os.getcwd()) or project root
 
 ${specificFocus ? `\nSPECIFIC FOCUS: ${specificFocus}` : ''}
 ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
@@ -357,13 +401,12 @@ ${excludeTopics ? `\nEXCLUDE: ${excludeTopics}` : ''}
         planReviewerModel: 'gpt-5',
         defaultModel: 'gpt-5',
         defaultFormatterModel: 'gpt-5',
-        maxRounds: 18,
-        maxAttempts: 6,
-        maxPlanSteps: 3,
+        maxRounds: 120,
+        maxAttempts: 8,
+        maxPlanSteps: 2,
         nPlanReviews: 1,
-        planInstructions: 'Use researcher to gather information from specified sources, then use engineer to analyze and write the report.',
+        planInstructions: 'CRITICAL ARCHITECTURE CONSTRAINT: Each plan step runs in a SEPARATE agent session. Tool call results (RSS items, news articles, search hits) from one step are NOT available in the next step — only a brief text summary carries forward. Therefore you MUST create exactly 2 steps: Step 1 (engineer): Execute ALL mandatory tool calls (announcements_noauth, rss_company_announcements broad + per-company for openai google microsoft meta facebook anthropic nvidia amazon aws oracle cisco uber ibm intel amd qualcomm samsung salesforce sap siemens sony huggingface deeplearning_ai lastweekinai theneuron therundownai exponentialview, curated_ai_sources_catalog, curated_ai_sources_search, newsapi_search, gnews_search, prwire_search, multi_engine_web_search for zero-result companies), then from ALL collected results compile and WRITE the final markdown report file using Python open(). Step 2 (engineer): Verify the report file exists and contains all collected items. DO NOT split data collection across multiple steps or the data will be lost.',
         agent: 'planner',
-        workDir: config.workDir,
         reportFilenamePattern: `ai_weekly_report_${dateFrom}_to_${dateTo}_*.md`,
         // Disable mandatory approval pauses so report generation proceeds end-to-end.
         approvalMode: 'never',
@@ -555,91 +598,132 @@ Please regenerate the report incorporating these changes while maintaining all o
     }
   }
 
-  // Fetch report after workflow completion
+  // Fetch report after workflow completion — retries up to 8 times (every 5 s)
+  // so the file-writing step has time to finish.
   useEffect(() => {
     if (results?.work_dir && !result && !isRunning && !fetchStartedRef.current) {
       fetchStartedRef.current = true
 
-      const fetchReport = async () => {
+      const MAX_RETRIES = 8
+      const RETRY_DELAY_MS = 5000
+
+      const searchForReport = async (workDir: string, reportPrefix: string) => {
+        let findData = { count: 0, matches: [] as any[] }
+        const minModified = (runStartTimestampRef.current ?? 0) - 5
+        const keepFreshMatches = (matches: any[]) =>
+          (matches || []).filter((m: any) => {
+            const name = m?.name || (typeof m?.path === 'string' ? m.path.split('/').pop() : '')
+            const modified = Number(m?.modified || 0)
+            return Boolean(name && name.startsWith(reportPrefix) && modified >= minModified)
+          })
+
+        // 1) Direct listing
         try {
-          addConsoleOutput(`🔍 Searching for generated report file...`)
-          const reportPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
-
-          // Search in the task work directory (where the agent saves files)
-          let findData = { count: 0, matches: [] as any[] }
-
-          // First try listing files directly in the task work directory
-          const listRes = await fetch(getApiUrl(`/api/files/list?path=${encodeURIComponent(results.work_dir)}`))
+          const listRes = await fetch(getApiUrl(`/api/files/list?path=${encodeURIComponent(workDir)}`))
           if (listRes.ok) {
             const listData = await listRes.json()
             const markdownFiles = (listData.items || [])
               .filter((f: any) => f.type === 'file' && f.name.endsWith('.md') && f.name.startsWith(reportPrefix))
+              .filter((f: any) => Number(f.modified || 0) >= minModified)
               .sort((a: any, b: any) => (b.modified || 0) - (a.modified || 0))
             if (markdownFiles.length > 0) {
               findData = { count: markdownFiles.length, matches: markdownFiles }
             }
           }
+        } catch (_) { /* continue to fallback */ }
 
-          // Fallback: search recursively in the task work directory
-          if (findData.count === 0) {
+        // 2) Recursive search with exact prefix
+        if (findData.count === 0) {
+          try {
             const wildcardName = `${reportPrefix}*.md`
-            const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(results.work_dir)}&filename=${encodeURIComponent(wildcardName)}`))
+            const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(workDir)}&filename=${encodeURIComponent(wildcardName)}`))
             if (taskRes.ok) {
-              findData = await taskRes.json()
+              const rawData = await taskRes.json()
+              const freshMatches = keepFreshMatches(rawData.matches || [])
+              findData = { ...rawData, matches: freshMatches, count: freshMatches.length }
             }
-          }
-
-          // Second fallback: search for any markdown report file in work dir
-          if (findData.count === 0) {
-            const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(results.work_dir)}&filename=${encodeURIComponent('ai_weekly_report_*.md')}`))
-            if (taskRes.ok) {
-              findData = await taskRes.json()
-            }
-          }
-
-          if (findData.count > 0) {
-            const foundPath = findData.matches[0].path
-            addConsoleOutput(`📄 Found report at: ${foundPath}`)
-
-            // Read the actual file content
-            const contentRes = await fetch(getApiUrl(`/api/files/content?path=${encodeURIComponent(foundPath)}`))
-            const contentData = await contentRes.json()
-
-            if (contentData.content) {
-              setResult({
-                fullReport: contentData.content,
-                filename: findData.matches[0].name || foundPath.split('/').pop(),
-                path: foundPath,
-                workDir: results.work_dir
-              })
-              setIsReportDownloadReady(true)
-              addConsoleOutput(`✅ Report loaded successfully (${(contentData.size / 1024).toFixed(1)} KB)`)
-            } else {
-              setResult({
-                fullReport: null,
-                filename: findData.matches[0].name || foundPath.split('/').pop(),
-                path: foundPath,
-                workDir: results.work_dir
-              })
-              addConsoleOutput(`⚠️ Report found but could not read content`)
-            }
-          } else {
-            addConsoleOutput(`⚠️ Report file not found in task directory. It may still be generating.`)
-            setResult({
-              fullReport: null,
-              filename: `${reportPrefix}*.md`,
-              path: `${results.work_dir}/${reportPrefix}*.md`
-            })
-          }
-
-          setActiveRightTab('results')
-        } catch (err: any) {
-          addConsoleOutput(`⚠️ Could not load report: ${err.message}`)
-          fetchStartedRef.current = false
+          } catch (_) { /* continue */ }
         }
+
+        // 3) Broader fallback
+        if (findData.count === 0) {
+          try {
+            const taskRes = await fetch(getApiUrl(`/api/files/find?directory=${encodeURIComponent(workDir)}&filename=${encodeURIComponent('ai_weekly_report_*.md')}`))
+            if (taskRes.ok) {
+              const rawData = await taskRes.json()
+              const freshMatches = keepFreshMatches(rawData.matches || [])
+              findData = { ...rawData, matches: freshMatches, count: freshMatches.length }
+            }
+          } catch (_) { /* continue */ }
+        }
+
+        return findData
       }
 
-      fetchReport()
+      const fetchReport = async () => {
+        const reportPrefix = `ai_weekly_report_${dateFrom}_to_${dateTo}_`
+        const isUsableReportContent = (content: string) => {
+          const trimmed = (content || '').trim()
+          if (trimmed.length < 200) return false
+          return trimmed.includes('#') || trimmed.includes('##')
+        }
+        // Search both the task work_dir AND the CMBAGENT_DEFAULT_WORK_DIR (where the prompt tells the agent to save)
+        const searchDirs = [results.work_dir]
+        if (config.workDir && config.workDir !== results.work_dir) {
+          searchDirs.push(config.workDir)
+        }
+
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+          addConsoleOutput(`🔍 Searching for report file (attempt ${attempt}/${MAX_RETRIES})...`)
+
+          for (const dir of searchDirs) {
+            const findData = await searchForReport(dir, reportPrefix)
+
+            if (findData.count > 0) {
+              for (const match of findData.matches) {
+                const foundPath = match.path
+                addConsoleOutput(`📄 Found report at: ${foundPath}`)
+
+                try {
+                  const contentRes = await fetch(getApiUrl(`/api/files/content?path=${encodeURIComponent(foundPath)}`))
+                  const contentData = await contentRes.json()
+                  const content = typeof contentData.content === 'string' ? contentData.content : ''
+
+                  if (isUsableReportContent(content)) {
+                    setResult({
+                      fullReport: content,
+                      filename: match.name || foundPath.split('/').pop(),
+                      path: foundPath,
+                      workDir: results.work_dir
+                    })
+                    setIsReportDownloadReady(true)
+                    addConsoleOutput(`✅ Report loaded successfully (${(contentData.size / 1024).toFixed(1)} KB)`)
+                    setActiveRightTab('results')
+                    return
+                  }
+                } catch (_) { /* try next match */ }
+              }
+              addConsoleOutput(`⚠️ Report file exists but content is empty or incomplete, retrying...`)
+            }
+          }
+
+          if (attempt < MAX_RETRIES) {
+            addConsoleOutput(`⏳ Report not ready yet, waiting ${RETRY_DELAY_MS / 1000}s before retry...`)
+            await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+          }
+        }
+
+        // All retries exhausted — do NOT set a fake success result
+        addConsoleOutput(`❌ Report file was not found after ${MAX_RETRIES} attempts.`)
+        addConsoleOutput(`   The file may not have been saved. Check the CMBAGENT_DEFAULT_WORK_DIR directory manually.`)
+        setActiveRightTab('results')
+        // Leave result as null so the UI shows the "processing" state, not a fake success
+      }
+
+      fetchReport().catch(err => {
+        addConsoleOutput(`⚠️ Could not load report: ${err.message}`)
+        fetchStartedRef.current = false
+      })
     }
   }, [results, result, isRunning, dateFrom, dateTo])
 
@@ -647,10 +731,11 @@ Please regenerate the report incorporating these changes while maintaining all o
   useEffect(() => {
     if (isRunning) {
       fetchStartedRef.current = false
+      postDismissedRef.current = false
     }
   }, [isRunning])
 
-  // Monitor workflow completion
+  // Monitor workflow completion — delay post-execution dialog until report fetch resolves
   useEffect(() => {
     if (connected && currentRunId && consoleOutput.length > 0 && isRunning) {
       const lastLog = consoleOutput[consoleOutput.length - 1]
@@ -660,13 +745,29 @@ Please regenerate the report incorporating these changes while maintaining all o
         lastLog.includes('✅ Task completed')) {
         setTimeout(() => {
           setIsRunning(false)
-          if (!showPostExecution) {
-            setShowPostExecution(true)
-          }
         }, 2000)
       }
     }
-  }, [consoleOutput, connected, currentRunId, isRunning, showPostExecution])
+  }, [consoleOutput, connected, currentRunId, isRunning])
+
+  // Show post-execution dialog only after we actually have a result or retries are exhausted
+  useEffect(() => {
+    if (!isRunning && results?.work_dir && !showPostExecution && !postDismissedRef.current) {
+      // If result is loaded (report found), show dialog
+      if (result) {
+        setShowPostExecution(true)
+        return
+      }
+      // If fetch has completed (fetchStartedRef is true and result is still null after guard),
+      // wait a bit then show dialog without the success message
+      if (fetchStartedRef.current) {
+        const timer = setTimeout(() => {
+          if (!result && !postDismissedRef.current) setShowPostExecution(true)
+        }, 45000) // 8 retries × 5s = 40s max; give 5s margin
+        return () => clearTimeout(timer)
+      }
+    }
+  }, [isRunning, results, result, showPostExecution])
 
   return (
     <div className="min-h-screen p-6 pb-24">
@@ -867,19 +968,20 @@ Please regenerate the report incorporating these changes while maintaining all o
                 <div className="flex items-center gap-3 mb-6">
                   <MessageSquare className="w-8 h-8 text-blue-400" />
                   <div>
-                    <h2 className="text-2xl font-bold text-white">Report Generated Successfully!</h2>
-                    <p className="text-gray-400 text-sm">Would you like to modify or regenerate the report?</p>
+                    <h2 className="text-2xl font-bold text-white">{result?.fullReport ? 'Report Generated Successfully!' : 'Workflow Completed'}</h2>
+                    <p className="text-gray-400 text-sm">{result?.fullReport ? 'Would you like to modify or regenerate the report?' : 'The report file could not be loaded automatically.'}</p>
                   </div>
                 </div>
 
-                <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4 mb-6">
+                <div className={`${result?.fullReport ? 'bg-green-500/10 border-green-500/30' : 'bg-yellow-500/10 border-yellow-500/30'} border rounded-lg p-4 mb-6`}>
                   <div className="flex items-start gap-3">
-                    <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+                    <CheckCircle2 className={`w-5 h-5 ${result?.fullReport ? 'text-green-400' : 'text-yellow-400'} flex-shrink-0 mt-0.5`} />
                     <div>
-                      <p className="text-green-400 font-medium mb-1">Workflow Completed</p>
+                      <p className={`${result?.fullReport ? 'text-green-400' : 'text-yellow-400'} font-medium mb-1`}>{result?.fullReport ? 'Workflow Completed' : 'Report Not Found'}</p>
                       <p className="text-gray-300 text-sm">
-                        The AI Weekly Report has been generated and is ready for review.
-                        You can view it in the Results tab.
+                        {result?.fullReport
+                          ? 'The AI Weekly Report has been generated and is ready for review. You can view it in the Results tab.'
+                          : 'The workflow finished but the report file was not found in CMBAGENT_DEFAULT_WORK_DIR. Check the directory manually or try regenerating.'}
                       </p>
                     </div>
                   </div>
@@ -912,6 +1014,7 @@ Please regenerate the report incorporating these changes while maintaining all o
                   <button
                     onClick={() => {
                       setShowPostExecution(false)
+                      postDismissedRef.current = true
                       setPostExecutionFeedback('')
                       setError(null)
                     }}
@@ -1092,8 +1195,8 @@ Please regenerate the report incorporating these changes while maintaining all o
                       <span className="text-blue-400 text-sm font-semibold">1</span>
                     </div>
                     <div>
-                      <h3 className="text-white font-medium mb-1">Context Enrichment</h3>
-                      <p className="text-sm text-gray-400">Answer a few questions to tailor the report to your needs</p>
+                      <h3 className="text-white font-medium mb-1">Stage 1: Context Enrichment</h3>
+                      <p className="text-sm text-gray-400">Capture audience, focus, and depth preferences before execution begins</p>
                     </div>
                   </div>
 
@@ -1102,8 +1205,8 @@ Please regenerate the report incorporating these changes while maintaining all o
                       <span className="text-green-400 text-sm font-semibold">2</span>
                     </div>
                     <div>
-                      <h3 className="text-white font-medium mb-1">Plan Review</h3>
-                      <p className="text-sm text-gray-400">Review and approve the execution plan before proceeding</p>
+                      <h3 className="text-white font-medium mb-1">Stage 2: Plan Coverage Review</h3>
+                      <p className="text-sm text-gray-400">Review the research plan and coverage strategy before collection starts</p>
                     </div>
                   </div>
 
@@ -1112,8 +1215,8 @@ Please regenerate the report incorporating these changes while maintaining all o
                       <span className="text-purple-400 text-sm font-semibold">3</span>
                     </div>
                     <div>
-                      <h3 className="text-white font-medium mb-1">Real-time Progress</h3>
-                      <p className="text-sm text-gray-400">Watch the workflow execute with live console and DAG view</p>
+                      <h3 className="text-white font-medium mb-1">Stage 3: Source Collection and Validation</h3>
+                      <p className="text-sm text-gray-400">Track live collection, verification, deduplication, and coverage audit checks</p>
                     </div>
                   </div>
 
@@ -1122,8 +1225,8 @@ Please regenerate the report incorporating these changes while maintaining all o
                       <span className="text-yellow-400 text-sm font-semibold">4</span>
                     </div>
                     <div>
-                      <h3 className="text-white font-medium mb-1">Final Report</h3>
-                      <p className="text-sm text-gray-400">Comprehensive AI weekly digest ready for distribution</p>
+                      <h3 className="text-white font-medium mb-1">Stage 4: Final Report Assembly</h3>
+                      <p className="text-sm text-gray-400">Generate and review the final source-grounded AI weekly digest</p>
                     </div>
                   </div>
 
@@ -1314,35 +1417,13 @@ Please regenerate the report incorporating these changes while maintaining all o
                             </div>
                           ) : (
                             <div className="space-y-4">
-                              <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-4">
+                              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
                                 <div className="flex items-start gap-3">
-                                  <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+                                  <FileText className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
                                   <div>
-                                    <p className="text-green-400 font-medium mb-1">Report Generated Successfully!</p>
-                                    <p className="text-gray-300 text-sm mb-2">
-                                      The AI Weekly Report has been created and saved to your work directory.
-                                    </p>
-                                    {result.filename && (
-                                      <p className="text-gray-400 text-xs">
-                                        📄 Filename: <span className="text-blue-400 font-mono">{result.filename}</span>
-                                      </p>
-                                    )}
-                                    {result.path && (
-                                      <p className="text-gray-400 text-xs mt-1">
-                                        📁 Location: <span className="text-blue-400 font-mono">{result.path}</span>
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-                                <div className="flex items-start gap-3">
-                                  <FileText className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
-                                  <div>
-                                    <p className="text-blue-400 font-medium mb-1">View Full Report</p>
+                                    <p className="text-yellow-400 font-medium mb-1">Report file found but content could not be loaded</p>
                                     <p className="text-gray-300 text-sm">
-                                      To view and download the full report, check the <strong>Files</strong> tab in the DAG workspace on the left.
+                                      Check your CMBAGENT_DEFAULT_WORK_DIR directory manually, or try regenerating.
                                     </p>
                                   </div>
                                 </div>

@@ -48,9 +48,34 @@ _DEFAULT_RSS_FEEDS: Dict[str, List[str]] = {
     "google": ["https://blog.google/rss/"],
     "microsoft": ["https://blogs.microsoft.com/feed/"],
     "meta": ["https://ai.meta.com/blog/rss/"],
+    "facebook": ["https://about.fb.com/news/feed/"],
     "anthropic": ["https://www.anthropic.com/news/rss.xml"],
     "nvidia": ["https://nvidianews.nvidia.com/releases?pagetemplate=rss"],
+    "amazon": ["https://www.aboutamazon.com/news/rss"],
+    "aws": ["https://aws.amazon.com/blogs/aws/feed/"],
+    "oracle": ["https://www.oracle.com/news/rss/"],
+    "cisco": ["https://newsroom.cisco.com/c/r/newsroom/en/us/rss-feeds.html"],
+    "uber": ["https://www.uber.com/newsroom/rss/"],
+    "ibm": ["https://newsroom.ibm.com/rss"],
+    "intel": ["https://newsroom.intel.com/feed/"],
+    "amd": ["https://ir.amd.com/rss/news-releases.xml"],
+    "qualcomm": ["https://www.qualcomm.com/news/releases/feed"],
+    "samsung": ["https://news.samsung.com/global/feed"],
+    "salesforce": ["https://www.salesforce.com/news/feed/"],
+    "sap": ["https://news.sap.com/feed/"],
+    "siemens": ["https://press.siemens.com/global/en/rss.xml"],
+    "tencent": ["https://www.tencent.com/en-us/articles.rss"],
+    "alibaba": ["https://www.alibabagroup.com/en-US/news/rss"],
+    "baidu": ["https://ir.baidu.com/rss"],
+    "sony": ["https://www.sony.com/en/pressrelease/rss"],
     "prnewswire": ["https://www.prnewswire.com/rss/news-releases-list.rss"],
+    # --- Curated AI news/blog sources (mandatory in every search) ---
+    "deeplearning_ai": ["https://www.deeplearning.ai/the-batch/feed/"],
+    "lastweekinai": ["https://lastweekin.ai/feed"],
+    "huggingface": ["https://huggingface.co/blog/feed.xml"],
+    "therundownai": ["https://www.therundown.ai/feed"],
+    "theneuron": ["https://www.theneurondaily.com/feed"],
+    "exponentialview": ["https://www.exponentialview.co/feed"],
 }
 
 _CURATED_AI_NEWS_SOURCES: List[Dict[str, str]] = [
@@ -221,6 +246,21 @@ def _is_ai_relevant(item: Dict) -> bool:
     if any(keyword in hay for keyword in _NOISE_KEYWORDS):
         return False
     return any(keyword in hay for keyword in _AI_KEYWORDS)
+
+
+def _normalize_title(value: str) -> str:
+    text = (value or "").lower().strip()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", "", text)
+    return text
+
+
+def _canonical_item_key(item: Dict) -> tuple:
+    title = _normalize_title(item.get("title", ""))
+    source = (item.get("source") or "").lower().strip()
+    date_part = (item.get("published_at") or "")[:10]
+    url = (item.get("url") or "").strip().lower()
+    return (title, source, date_part, url)
 
 
 def _in_range(pub_dt: Optional[datetime], from_date: Optional[str], to_date: Optional[str]) -> bool:
@@ -679,11 +719,20 @@ def prwire_search(query: str, from_date: str = "", to_date: str = "", limit: int
             if _query_matches_text(f"{item.get('title', '')} {item.get('summary', '')}", q)
         ]
 
+    deduped: List[Dict] = []
+    seen_keys = set()
+    for item in items:
+        key = _canonical_item_key(item)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(item)
+
     return {
         "provider": "prwire_rss",
         "query": query,
-        "count": len(items),
-        "items": items[: max(1, min(limit, 200))],
+        "count": len(deduped),
+        "items": deduped[: max(1, min(limit, 200))],
     }
 
 
@@ -715,7 +764,7 @@ def announcements_noauth(
     merged: List[Dict] = []
     seen = set()
     for item in rss_items + pr_items:
-        key = ((item.get("url") or "").lower(), (item.get("title") or "").lower())
+        key = _canonical_item_key(item)
         if key in seen:
             continue
         seen.add(key)
