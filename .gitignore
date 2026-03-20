@@ -102,8 +102,6 @@ tests/testdocs/*
 
 cmbdir
 venv
-.env*
-.claude*
 .env
+.claude*
 .env.local
-.env.*.local
