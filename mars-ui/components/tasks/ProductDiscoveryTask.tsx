@@ -172,6 +172,70 @@ function Spinner({ label }: { label: string }) {
   )
 }
 
+// ─── TimerLoader — countdown timer for long-running steps ────────────────────
+const STEP_TIMEOUT_SECONDS = 10 * 60 // 10 minutes
+
+function TimerLoader({ label, onTimeout }: { label: string; onTimeout?: () => void }) {
+  const [elapsed, setElapsed] = useState(0)
+  const onTimeoutRef = useRef(onTimeout)
+  onTimeoutRef.current = onTimeout
+
+  useEffect(() => {
+    const start = Date.now()
+    const id = setInterval(() => {
+      const secs = Math.floor((Date.now() - start) / 1000)
+      setElapsed(secs)
+      if (secs >= STEP_TIMEOUT_SECONDS) {
+        clearInterval(id)
+        onTimeoutRef.current?.()
+      }
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const mins = Math.floor(elapsed / 60)
+  const secs = elapsed % 60
+  const progress = Math.min((elapsed / STEP_TIMEOUT_SECONDS) * 100, 100)
+
+  return (
+    <div className="flex flex-col items-center justify-center py-20">
+      <Loader2
+        className="w-10 h-10 animate-spin mb-4"
+        style={{ color: 'var(--mars-color-primary)' }}
+      />
+      <h3
+        className="text-lg font-semibold mb-1"
+        style={{ color: 'var(--mars-color-text)' }}
+      >
+        {label}
+      </h3>
+      {/* elapsed timer */}
+      <p
+        className="text-2xl font-mono font-bold mt-3"
+        style={{ color: 'var(--mars-color-primary)' }}
+      >
+        {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
+      </p>
+      {/* progress bar */}
+      <div className="w-64 h-2 rounded-full mt-4" style={{ background: 'var(--mars-color-border, #e5e7eb)' }}>
+        <div
+          className="h-full rounded-full transition-all duration-1000"
+          style={{
+            width: `${progress}%`,
+            background: 'var(--mars-color-primary)',
+          }}
+        />
+      </div>
+      <p
+        className="text-sm mt-3"
+        style={{ color: 'var(--mars-color-text-secondary)' }}
+      >
+        This step typically takes 2–10 minutes. Please wait…
+      </p>
+    </div>
+  )
+}
+
 // ─── Notification helper (simple toast replacement) ──────────────────────────
 function notify(msg: string, type: 'success' | 'error' = 'success') {
   // Minimal in-page toast — could be replaced with a proper toast lib later
@@ -1098,16 +1162,30 @@ function ResearchStep({
 }) {
   const [loading, setLoading] = useState(!initialData)
   const [data, setData] = useState<ResearchSummary | null>(initialData ?? null)
+  const [error, setError] = useState<string | null>(null)
   const calledRef = useRef(false)
+
+  const isEmptyResult = (r: ResearchSummary) =>
+    !r.marketTrends.length &&
+    !r.competitorMoves.length &&
+    !r.industryPainPoints.length &&
+    !r.workshopAngles.length
 
   const load = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       const result = await generateResearchSummary(intakeData)
-      setData(result)
-      onComplete(result)
-      notify('Research summary generated')
-    } catch {
+      if (isEmptyResult(result)) {
+        setError('Backend returned empty results. The request may have timed out. Please retry.')
+        setData(null)
+      } else {
+        setData(result)
+        onComplete(result)
+        notify('Research summary generated')
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to generate research summary')
       notify('Failed to generate research summary', 'error')
     } finally {
       setLoading(false)
@@ -1122,8 +1200,39 @@ function ResearchStep({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  if (loading) return <Spinner label="Generating Research Summary" />
-  if (!data) return null
+  if (loading)
+    return (
+      <TimerLoader
+        label="Generating Research Summary"
+        onTimeout={() => {
+          setLoading(false)
+          setError('Request timed out after 10 minutes. Please retry.')
+        }}
+      />
+    )
+
+  if (error || !data)
+    return (
+      <div className="flex flex-col items-center justify-center py-20 space-y-4">
+        <AlertCircle className="w-12 h-12 text-red-500" />
+        <h3
+          className="text-lg font-semibold"
+          style={{ color: 'var(--mars-color-text)' }}
+        >
+          Research Summary Failed
+        </h3>
+        <p
+          className="text-sm text-center max-w-md"
+          style={{ color: 'var(--mars-color-text-secondary)' }}
+        >
+          {error || 'No data returned from backend.'}
+        </p>
+        <Button onClick={load}>
+          <RefreshCw className="w-4 h-4 mr-2" />
+          Retry
+        </Button>
+      </div>
+    )
 
   const sections: {
     key: keyof ResearchSummary
