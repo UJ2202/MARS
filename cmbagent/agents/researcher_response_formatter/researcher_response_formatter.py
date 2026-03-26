@@ -1,4 +1,5 @@
 import os
+import base64
 from cmbagent.base_agent import BaseAgent
 from pydantic import BaseModel, Field
 import re
@@ -42,11 +43,19 @@ class ResearcherResponseFormatterAgent(BaseAgent):
 
             updated_markdown_block = "\n".join(lines)
 
-            # Step 3: Wrap clean block in a single markdown code fence
+            # Step 3: Produce a Python script that saves the content to a file.
+            # The researcher_executor is a code agent that can only execute Python;
+            # wrapping in ```markdown fences causes "unknown language" failures.
+            content_b64 = base64.b64encode(updated_markdown_block.encode()).decode()
+            safe_filename = full_path.replace('\\', '\\\\').replace("'", "\\'")
+
             return (
-    f"**Markdown:**\n\n"
-    f"```markdown\n"
-    f"{updated_markdown_block}\n"
+    f"```python\n"
+    f"import base64\n"
+    f"content = base64.b64decode('{content_b64}').decode()\n"
+    f"with open('{safe_filename}', 'w') as f:\n"
+    f"    f.write(content)\n"
+    f"print('Saved:', '{safe_filename}')\n"
     f"```"
             )
 

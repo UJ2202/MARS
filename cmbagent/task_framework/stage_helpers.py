@@ -236,7 +236,7 @@ def extract_method_result(results: dict) -> str:
     chat_history = results["chat_history"]
 
     task_result = ""
-    for agent_name in ("researcher_response_formatter", "researcher"):
+    for agent_name in ("researcher", "researcher_response_formatter"):
         try:
             candidate = get_task_result(chat_history, agent_name)
             if candidate and candidate.strip():

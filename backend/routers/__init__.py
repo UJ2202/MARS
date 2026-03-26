@@ -20,6 +20,7 @@ from routers.copilot import router as copilot_router
 from routers.sessions import router as sessions_router
 from routers.pda import router as pda_router
 from routers.deepresearch import router as deepresearch_router
+from routers.newspulse import router as newspulse_router
 
 
 def register_routers(app):
@@ -38,6 +39,7 @@ def register_routers(app):
     app.include_router(runs_router)
     app.include_router(nodes_router)
     app.include_router(pda_router)  # Product Discovery Assistant
+    app.include_router(newspulse_router)  # Industry News & Sentiment Pulse
 
 
 __all__ = [

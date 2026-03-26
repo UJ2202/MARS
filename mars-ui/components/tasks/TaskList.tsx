@@ -11,6 +11,7 @@ import {
   ClipboardList,
   Compass,
   FileText,
+  TrendingUp,
 } from 'lucide-react'
 import TaskCard from './TaskCard'
 import { Button, Badge, EmptyState } from '@/components/core'
@@ -82,6 +83,15 @@ const TASKS: TaskData[] = [
     status: 'active',
     icon: <FileText className="w-5 h-5" />,
     color: 'from-violet-500 to-indigo-500',
+  },
+  {
+    id: 'newspulse',
+    name: 'Industry News & Sentiment Pulse',
+    description: 'AI-powered industry news research, sentiment analysis, and executive PDF report generation',
+    mode: 'newspulse',
+    status: 'active',
+    icon: <TrendingUp className="w-5 h-5" />,
+    color: 'from-emerald-500 to-teal-500',
   },
 ]
 
