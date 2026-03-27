@@ -126,7 +126,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
   const heartbeatIntervalRef = useRef<NodeJS.Timeout>();
   const shouldReconnect = useRef<boolean>(false);
-  const lastMessageTimestamp = useRef<number>(Date.now());  
+  const lastMessageTimestamp = useRef<number>(Date.now());
   // Store task and config for reconnection
   const taskDataRef = useRef<{ task: string; config: any } | null>(null);
 
@@ -253,7 +253,6 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       updateDAGNode(data.node_id, data.new_status);
     },
     onApprovalRequested: (data: ApprovalRequestedData) => {
-      console.log('[WebSocket] Approval requested event received:', data);
       setPendingApproval(data);
       sessionFilteredAddConsole(`⏸️ Approval requested: ${data.description || data.message}`);
     },
@@ -295,17 +294,6 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       setAgentMessages(prev => [...prev, data]);
     },
     onCostUpdate: (data: CostUpdateData) => {
-      // Debug: Log all incoming cost updates to investigate "unknown" model
-      console.log('🔍 Cost Update Received:', {
-        model: data.model,
-        step_id: data.step_id,
-        cost_usd: data.cost_usd,
-        total_cost_usd: data.total_cost_usd,
-        tokens: data.tokens,
-        input_tokens: data.input_tokens,
-        output_tokens: data.output_tokens
-      });
-
       // Update cost summary
       setCostSummary(prev => {
         // CostCollector always provides actual token counts from JSON
@@ -315,7 +303,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         // Update model breakdown
         const newModelBreakdown = [...prev.model_breakdown];
         const modelIndex = newModelBreakdown.findIndex(m => m.model === data.model);
-        
+
         if (modelIndex >= 0) {
           // Update existing model entry
           newModelBreakdown[modelIndex] = {
@@ -369,7 +357,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         const newStepBreakdown = [...prev.step_breakdown];
         if (data.step_id) {
           const stepIndex = newStepBreakdown.findIndex(s => s.step_id === data.step_id);
-          
+
           if (stepIndex >= 0) {
             newStepBreakdown[stepIndex] = {
               ...newStepBreakdown[stepIndex],

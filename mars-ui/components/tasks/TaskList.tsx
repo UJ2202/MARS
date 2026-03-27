@@ -93,6 +93,15 @@ const TASKS: TaskData[] = [
     icon: <TrendingUp className="w-5 h-5" />,
     color: 'from-emerald-500 to-teal-500',
   },
+  {
+    id: 'rfp-proposal',
+    name: 'RFP Proposal Generator',
+    description: 'Generate complete technical proposals from RFPs — tools, cloud, architecture, implementation plan, and execution strategy',
+    mode: 'rfp-proposal',
+    status: 'active',
+    icon: <ClipboardList className="w-5 h-5" />,
+    color: 'from-rose-500 to-pink-500',
+  },
 ]
 
 type SortKey = 'name' | 'updated'

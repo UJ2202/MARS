@@ -99,13 +99,10 @@ async def execute_ai_weekly(request: AIWeeklyRequest):
     date_to = params.get('dateTo', '')
     topics = params.get('topics', [])
     sources = params.get('sources', [])
-    style = params.get('style', 'concise')
-
     # Create task description
     description = (
-        f"Generate an AI Weekly report for {date_from} to {date_to}. "
-        f"Topics: {', '.join(topics)}. Sources: {', '.join(sources)}. "
-        f"Style: {style}."
+        f"Generate a Concise AI Weekly report for {date_from} to {date_to}. "
+        f"Topics: {', '.join(topics)}. Sources: {', '.join(sources)}."
     )
 
     # Store task information
@@ -119,13 +116,13 @@ async def execute_ai_weekly(request: AIWeeklyRequest):
         'description': description,
         'config': {
             'mode': 'planning-control',
-            'model': params.get('model', 'gpt-5'),
-            'plannerModel': params.get('plannerModel', 'gpt-5'),
-            'researcherModel': params.get('researcherModel', 'gpt-5'),
-            'engineerModel': params.get('engineerModel', 'gpt-5'),
-            'planReviewerModel': params.get('planReviewerModel', 'gpt-5'),
-            'defaultModel': params.get('defaultModel', 'gpt-5'),
-            'defaultFormatterModel': params.get('defaultFormatterModel', 'gpt-5'),
+            'model': params.get('model', 'gpt4o'),
+            'plannerModel': params.get('plannerModel', 'gpt4o'),
+            'researcherModel': params.get('researcherModel', 'gpt4o'),
+            'engineerModel': params.get('engineerModel', 'gpt4o'),
+            'planReviewerModel': params.get('planReviewerModel', 'gpt4o'),
+            'defaultModel': params.get('defaultModel', 'gpt4o'),
+            'defaultFormatterModel': params.get('defaultFormatterModel', 'gpt4o'),
             'maxRounds': 25,
             'maxAttempts': 6,
             'maxPlanSteps': params.get('maxPlanSteps', 3),

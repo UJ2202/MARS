@@ -22,6 +22,7 @@ from routers.pda import router as pda_router
 from routers.deepresearch import router as deepresearch_router
 from routers.newspulse import router as newspulse_router
 from routers.releasenotes import router as releasenotes_router
+from routers.rfp import router as rfp_router
 
 
 def register_routers(app):
@@ -32,6 +33,7 @@ def register_routers(app):
     app.include_router(copilot_router)  # Copilot mode
     app.include_router(sessions_router)  # Session management (Stage 10)
     app.include_router(deepresearch_router)  # Deepresearch research paper wizard
+    app.include_router(rfp_router)  # RFP Proposal Generator
     app.include_router(files_router)
     app.include_router(credentials_router)
     app.include_router(arxiv_router)

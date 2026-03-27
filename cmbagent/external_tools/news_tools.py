@@ -69,91 +69,32 @@ _DEFAULT_RSS_FEEDS: Dict[str, List[str]] = {
     "baidu": ["https://ir.baidu.com/rss"],
     "sony": ["https://www.sony.com/en/pressrelease/rss"],
     "prnewswire": ["https://www.prnewswire.com/rss/news-releases-list.rss"],
-    # --- Curated AI news/blog sources (mandatory in every search) ---
-    "deeplearning_ai": ["https://www.deeplearning.ai/the-batch/feed/"],
-    "lastweekinai": ["https://lastweekin.ai/feed"],
     "huggingface": ["https://huggingface.co/blog/feed.xml"],
-    "therundownai": ["https://www.therundown.ai/feed"],
-    "theneuron": ["https://www.theneurondaily.com/feed"],
-    "exponentialview": ["https://www.exponentialview.co/feed"],
+    "mit": ["https://news.mit.edu/topic/artificial-intelligence2/rss.xml"],
+    "stanford": ["https://hai.stanford.edu/news/rss.xml"],
+    "cmu": ["https://www.cs.cmu.edu/news/feed"],
+    "berkeley": ["https://bair.berkeley.edu/blog/feed.xml"],
+    "deepmind": ["https://deepmind.google/blog/rss.xml"],
+    "arxiv": ["https://rss.arxiv.org/rss/cs.AI", "https://rss.arxiv.org/rss/cs.LG"],
 }
 
 _CURATED_AI_NEWS_SOURCES: List[Dict[str, str]] = [
-    {
-        "name": "Axios AI",
-        "url": "https://www.axios.com/technology/axios-ai",
-        "focus": "Breaking news and executive-level insights",
-    },
-    {
-        "name": "The Batch by DeepLearning.AI",
-        "url": "https://www.deeplearning.ai/the-batch",
-        "focus": "Weekly deep-dive analysis from Andrew Ng",
-    },
-    {
-        "name": "Last Week in AI",
-        "url": "https://lastweekin.ai",
-        "focus": "Weekly AI news roundup",
-    },
-    {
-        "name": "State of AI Report",
-        "url": "https://www.stateof.ai",
-        "focus": "Annual comprehensive AI analysis",
-    },
-    {
-        "name": "Google AI Blog",
-        "url": "http://blog.google/technology/ai",
-        "focus": "Major AI developments from Google",
-    },
-    {
-        "name": "Anthropic News",
-        "url": "https://www.anthropic.com/news",
-        "focus": "Claude developments and AI safety",
-    },
-    {
-        "name": "Hugging Face Blog",
-        "url": "https://huggingface.co/blog",
-        "focus": "Open-source AI and model releases",
-    },
-    {
-        "name": "What did OpenAI do this week?",
-        "url": "https://www.whatdidopenaido.com",
-        "focus": "OpenAI-focused weekly updates",
-    },
-    {
-        "name": "Stanford AI Index",
-        "url": "https://aiindex.stanford.edu/report",
-        "focus": "Annual AI progress and trends",
-    },
-    {
-        "name": "Gary Marcus on AI",
-        "url": "https://garymarcus.substack.com",
-        "focus": "Critical AI analysis and research",
-    },
-    {
-        "name": "Goldman Sachs AI Insights",
-        "url": "https://www.goldmansachs.com/insights/topics/ai-generated-insights",
-        "focus": "Business impact analysis",
-    },
-    {
-        "name": "Sequoia Capital",
-        "url": "https://www.sequoiacap.com/article/generative-ai",
-        "focus": "Investment trends and startup insights",
-    },
-    {
-        "name": "Exponential View",
-        "url": "https://www.exponentialview.co",
-        "focus": "AI impact, risks, and regulation",
-    },
-    {
-        "name": "The Rundown AI",
-        "url": "https://www.therundown.ai",
-        "focus": "Daily AI newsletter (quick summaries)",
-    },
-    {
-        "name": "The Neuron",
-        "url": "https://www.theneurondaily.com",
-        "focus": "Daily AI insights for weekly compilation",
-    },
+    {"name": "Axios AI", "url": "https://www.axios.com/technology/axios-ai"},
+    {"name": "The Batch", "url": "https://www.deeplearning.ai/the-batch"},
+    {"name": "Last Week in AI", "url": "https://lastweekin.ai"},
+    {"name": "Google AI Blog", "url": "http://blog.google/technology/ai"},
+    {"name": "Anthropic News", "url": "https://www.anthropic.com/news"},
+    {"name": "Hugging Face Blog", "url": "https://huggingface.co/blog"},
+    {"name": "The Rundown AI", "url": "https://www.therundown.ai"},
+    {"name": "MIT AI News", "url": "https://news.mit.edu/topic/artificial-intelligence2"},
+    {"name": "Stanford HAI", "url": "https://hai.stanford.edu/news"},
+    {"name": "Berkeley AI Research", "url": "https://bair.berkeley.edu/blog"},
+    {"name": "DeepMind Blog", "url": "https://deepmind.google/blog"},
+    {"name": "CMU Machine Learning", "url": "https://www.cs.cmu.edu/news"},
+    {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai"},
+    {"name": "TechCrunch AI", "url": "https://techcrunch.com/category/artificial-intelligence"},
+    {"name": "The Verge AI", "url": "https://www.theverge.com/ai-artificial-intelligence"},
+    {"name": "Ars Technica AI", "url": "https://arstechnica.com/ai"},
 ]
 
 
@@ -381,15 +322,27 @@ def _ddgs_text_search(query: str, max_results: int = 10) -> List[Dict[str, str]]
         return []
 
 
-def multi_engine_web_search(query: str, max_results: int = 10) -> Dict:
+def multi_engine_web_search(query: str, max_results: int = 10, from_date: str = "", to_date: str = "") -> Dict:
     """Search the web using the duckduckgo_search SDK, falling back to
     HTML scraping of Bing/Yahoo/Brave when the SDK returns nothing.
+
+    Args:
+        query: Search query string.
+        max_results: Maximum number of results to return.
+        from_date: Optional YYYY-MM-DD start date. Results will be hinted
+            to this range via search operators when possible.
+        to_date: Optional YYYY-MM-DD end date.
 
     This gives planner workflows a resilient no-key fallback path.
     """
     q = (query or "").strip()
     if not q:
         return {"provider": "multi_engine_web_search", "query": query, "count": 0, "items": [], "errors": ["empty query"]}
+
+    # Append date-range hint so search engines prefer items within the window.
+    # DuckDuckGo/Bing understand "after:YYYY-MM-DD before:YYYY-MM-DD" loosely.
+    if from_date and to_date and from_date not in q and to_date not in q:
+        q = f"{q} after:{from_date} before:{to_date}"
 
     errors: List[str] = []
     used_engines: List[str] = []
@@ -460,8 +413,14 @@ def curated_ai_sources_catalog() -> Dict:
 _CURATED_SEARCH_INTER_SOURCE_DELAY = 1.0
 
 
-def curated_ai_sources_search(query: str, limit: int = 40) -> Dict:
+def curated_ai_sources_search(query: str, limit: int = 40, from_date: str = "", to_date: str = "") -> Dict:
     """Search across curated AI sources with resilient multi-engine fallback.
+
+    Args:
+        query: Search query string.
+        limit: Maximum number of results.
+        from_date: Optional YYYY-MM-DD start date for date-range hinting.
+        to_date: Optional YYYY-MM-DD end date.
 
     Uses the duckduckgo_search SDK (preferred) with a short inter-source
     delay to stay within rate limits.  Falls back to HTML scraping when
@@ -486,7 +445,7 @@ def curated_ai_sources_search(query: str, limit: int = 40) -> Dict:
             time.sleep(_CURATED_SEARCH_INTER_SOURCE_DELAY)
 
         scoped_query = f"site:{domain} {q}".strip()
-        found = multi_engine_web_search(scoped_query, max_results=4)
+        found = multi_engine_web_search(scoped_query, max_results=4, from_date=from_date, to_date=to_date)
 
         for item in found.get("items") or []:
             item_url = item.get("url") or ""
@@ -785,4 +744,51 @@ def announcements_noauth(
         "company": company or "all",
         "count": len(merged),
         "items": merged[: max(1, min(limit, 300))],
+    }
+
+
+def verify_url(url: str) -> Dict:
+    """Verify whether a URL is accessible by sending a HEAD request.
+
+    Returns a dict with 'url', 'accessible' (bool), and 'status_code' or 'error'.
+    """
+    if not url or not url.startswith("http"):
+        return {"url": url, "accessible": False, "error": "invalid URL"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    }
+    req = Request(url, method="HEAD", headers=headers)
+    try:
+        with urlopen(req, timeout=_DEFAULT_TIMEOUT_SECONDS) as resp:
+            return {"url": url, "accessible": resp.status < 400, "status_code": resp.status}
+    except Exception:
+        # Some servers reject HEAD; retry with GET and read only headers
+        req_get = Request(url, headers=headers)
+        try:
+            with urlopen(req_get, timeout=_DEFAULT_TIMEOUT_SECONDS) as resp:
+                return {"url": url, "accessible": resp.status < 400, "status_code": resp.status}
+        except Exception as err:
+            return {"url": url, "accessible": False, "error": str(err)}
+
+
+def verify_reference_links(urls: List[str]) -> Dict:
+    """Batch-verify a list of reference URLs for accessibility.
+
+    Returns summary with counts and per-URL results. Use this to validate
+    all reference links before including them in the final report.
+    """
+    if not urls:
+        return {"total": 0, "accessible": 0, "inaccessible": 0, "results": []}
+
+    results: List[Dict] = []
+    for u in urls:
+        results.append(verify_url(u))
+
+    accessible_count = sum(1 for r in results if r.get("accessible"))
+    return {
+        "total": len(results),
+        "accessible": accessible_count,
+        "inaccessible": len(results) - accessible_count,
+        "results": results,
     }

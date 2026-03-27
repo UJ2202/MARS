@@ -14,6 +14,7 @@ export interface StepperProps {
   steps: StepperStep[]
   orientation?: 'horizontal' | 'vertical'
   size?: 'sm' | 'md'
+  onStepClick?: (index: number) => void
 }
 
 const statusConfig: Record<string, { bg: string; border: string; icon?: React.ReactNode }> = {
@@ -42,7 +43,7 @@ const statusConfig: Record<string, { bg: string; border: string; icon?: React.Re
   },
 }
 
-export default function Stepper({ steps, orientation = 'horizontal', size = 'md' }: StepperProps) {
+export default function Stepper({ steps, orientation = 'horizontal', size = 'md', onStepClick }: StepperProps) {
   const isVertical = orientation === 'vertical'
   const dotSize = size === 'sm' ? 'w-6 h-6' : 'w-8 h-8'
 
@@ -65,7 +66,8 @@ export default function Stepper({ steps, orientation = 'horizontal', size = 'md'
               {/* Step Dot */}
               <div
                 className={`${dotSize} flex-shrink-0 rounded-full flex items-center justify-center
-                  text-xs font-medium transition-colors duration-mars-normal`}
+                  text-xs font-medium transition-colors duration-mars-normal
+                  ${onStepClick && (step.status === 'completed' || step.status === 'active' || step.status === 'failed') ? 'cursor-pointer hover:ring-2 hover:ring-offset-1 hover:ring-[var(--mars-color-primary)]' : ''}`}
                 style={{
                   backgroundColor: config.bg,
                   border: `2px solid ${config.border}`,
@@ -77,6 +79,13 @@ export default function Stepper({ steps, orientation = 'horizontal', size = 'md'
                         ? 'var(--mars-color-danger)'
                         : 'var(--mars-color-text-tertiary)',
                 }}
+                onClick={() => {
+                  if (onStepClick && (step.status === 'completed' || step.status === 'active' || step.status === 'failed')) {
+                    onStepClick(index)
+                  }
+                }}
+                role={onStepClick && (step.status === 'completed' || step.status === 'active' || step.status === 'failed') ? 'button' : undefined}
+                tabIndex={onStepClick && (step.status === 'completed' || step.status === 'active' || step.status === 'failed') ? 0 : undefined}
               >
                 {config.icon || (step.status === 'active' ? (
                   <span className="w-2 h-2 rounded-full bg-current" />
@@ -99,7 +108,14 @@ export default function Stepper({ steps, orientation = 'horizontal', size = 'md'
             </div>
 
             {/* Label */}
-            <div className={`${isVertical ? 'ml-3 pb-6' : 'mt-2 text-center'}`}>
+            <div
+              className={`${isVertical ? 'ml-3 pb-6' : 'mt-2 text-center'} ${onStepClick && (step.status === 'completed' || step.status === 'active' || step.status === 'failed') ? 'cursor-pointer' : ''}`}
+              onClick={() => {
+                if (onStepClick && (step.status === 'completed' || step.status === 'active' || step.status === 'failed')) {
+                  onStepClick(index)
+                }
+              }}
+            >
               <p
                 className={`${size === 'sm' ? 'text-xs' : 'text-sm'} font-medium`}
                 style={{

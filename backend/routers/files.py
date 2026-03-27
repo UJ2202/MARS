@@ -446,10 +446,22 @@ async def upload_file(
     with open(target_path, "wb") as f:
         f.write(contents)
 
-    return {
+    # Extract text from PDFs so frontend can auto-populate the RFP content field
+    extracted_text = None
+    if ext == '.pdf':
+        try:
+            from services.pdf_extractor import extract_pdf_content
+            extracted_text = extract_pdf_content(target_path)
+        except Exception:
+            pass
+
+    resp = {
         "filename": safe_name,
         "path": target_path,
         "size": len(contents),
         "task_id": task_id,
         "subfolder": safe_subfolder,
     }
+    if extracted_text is not None:
+        resp["extracted_text"] = extracted_text
+    return resp

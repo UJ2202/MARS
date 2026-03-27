@@ -53,6 +53,8 @@ from .news_tools import (
     multi_engine_web_search,
     rss_company_announcements,
     prwire_search,
+    verify_url,
+    verify_reference_links,
 )
 
 # New AG2 native interoperability functions
@@ -101,6 +103,8 @@ __all__ = [
     'multi_engine_web_search',
     'rss_company_announcements',
     'prwire_search',
+    'verify_url',
+    'verify_reference_links',
 ]
 
 # Add AG2 native interop functions if available

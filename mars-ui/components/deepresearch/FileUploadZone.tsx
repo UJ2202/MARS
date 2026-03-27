@@ -79,7 +79,7 @@ export default function FileUploadZone({ files, onUpload, disabled }: FileUpload
           className="text-xs mt-1"
           style={{ color: 'var(--mars-color-text-tertiary)' }}
         >
-          CSV, JSON, FITS, HDF5, TXT, MD, and more (max 10MB)
+          CSV, JSON, FITS, HDF5, TXT, MD, PDF, and more (max 50MB)
         </p>
         <input
           ref={inputRef}

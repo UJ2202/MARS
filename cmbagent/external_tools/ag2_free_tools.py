@@ -26,6 +26,8 @@ from .news_tools import (
     newsapi_search,
     prwire_search,
     rss_company_announcements,
+    verify_url,
+    verify_reference_links,
 )
 
 logger = structlog.get_logger(__name__)
@@ -127,6 +129,8 @@ class AG2FreeToolsLoader:
             multi_engine_web_search,
             curated_ai_sources_catalog,
             curated_ai_sources_search,
+            verify_url,
+            verify_reference_links,
         ]
         self.loaded_tools['news'] = tools
         logger.info("tool_loaded", tool="Announcements NoAuth (RSS)")
@@ -137,6 +141,8 @@ class AG2FreeToolsLoader:
         logger.info("tool_loaded", tool="Multi-Engine Web Search")
         logger.info("tool_loaded", tool="Curated AI Sources Catalog")
         logger.info("tool_loaded", tool="Curated AI Sources Search")
+        logger.info("tool_loaded", tool="Verify URL")
+        logger.info("tool_loaded", tool="Verify Reference Links")
         return tools
 
     def load_langchain_tools(self, tool_names: Optional[List[str]] = None) -> List[Any]:

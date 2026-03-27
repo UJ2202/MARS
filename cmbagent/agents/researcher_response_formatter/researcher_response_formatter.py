@@ -1,8 +1,11 @@
 import os
 import base64
+import logging
 from cmbagent.base_agent import BaseAgent
 from pydantic import BaseModel, Field
 import re
+
+_fmt_logger = logging.getLogger(__name__)
 
 
 class ResearcherResponseFormatterAgent(BaseAgent):
@@ -19,6 +22,36 @@ class ResearcherResponseFormatterAgent(BaseAgent):
     def set_agent(self,**kwargs):
 
         super().set_assistant_agent(**kwargs)
+
+        # Register a high-priority reply function that programmatically
+        # extracts <code> blocks from the researcher's output and converts
+        # them to executable ```python blocks.  This bypasses the LLM
+        # structured-output path which is lossy for long report content.
+        def _extract_code_reply(agent, messages=None, sender=None, config=None):
+            if not messages:
+                return False, None
+            last_msg = messages[-1]
+            content = last_msg.get("content", "") if isinstance(last_msg, dict) else str(last_msg)
+            if isinstance(content, list):
+                content = " ".join(
+                    c.get("text", "") if isinstance(c, dict) else str(c)
+                    for c in content
+                )
+            code_match = re.search(r'<code>\s*(.*?)\s*</code>', content, re.DOTALL)
+            if not code_match:
+                return False, None
+            code_content = code_match.group(1).strip()
+            if 'open(' in code_content and '.write(' in code_content:
+                _fmt_logger.info("researcher_response_formatter: extracted <code> save script (%d chars), bypassing LLM", len(code_content))
+                return True, f"```python\n{code_content}\n```"
+            return False, None
+
+        from autogen import ConversableAgent as _CA
+        self.agent.register_reply(
+            trigger=_CA,
+            reply_func=_extract_code_reply,
+            position=0,
+        )
 
 
     class StructuredMardown(BaseModel):
@@ -43,19 +76,21 @@ class ResearcherResponseFormatterAgent(BaseAgent):
 
             updated_markdown_block = "\n".join(lines)
 
-            # Step 3: Produce a Python script that saves the content to a file.
-            # The researcher_executor is a code agent that can only execute Python;
-            # wrapping in ```markdown fences causes "unknown language" failures.
-            content_b64 = base64.b64encode(updated_markdown_block.encode()).decode()
-            safe_filename = full_path.replace('\\', '\\\\').replace("'", "\\'")
-
+            # Step 3: Produce a Python script the researcher_executor can run
+            # to save the markdown content to disk.  We use repr() so that
+            # all special characters inside the content are safely escaped.
+            safe_content = repr(updated_markdown_block)
+            safe_filename = repr(full_path)
             return (
+    f"Save the following content to file.\n\n"
     f"```python\n"
-    f"import base64\n"
-    f"content = base64.b64decode('{content_b64}').decode()\n"
-    f"with open('{safe_filename}', 'w') as f:\n"
+    f"import os\n"
+    f"content = {safe_content}\n"
+    f"filename = {safe_filename}\n"
+    f"filepath = os.path.join(os.getcwd(), filename)\n"
+    f"with open(filepath, 'w', encoding='utf-8') as f:\n"
     f"    f.write(content)\n"
-    f"print('Saved:', '{safe_filename}')\n"
+    f"print(f'Saved {{len(content)}} chars to {{filepath}}')\n"
     f"```"
             )
 

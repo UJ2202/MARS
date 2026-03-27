@@ -9,9 +9,10 @@ import CodeReviewTask from '@/components/tasks/CodeReviewTask'
 import ProductDiscoveryTask from '@/components/tasks/ProductDiscoveryTask'
 import DeepresearchResearchTask from '@/components/tasks/DeepresearchResearchTask'
 import NewsPulseTask from '@/components/tasks/NewsPulseTask'
+import RfpProposalTask from '@/components/tasks/RfpProposalTask'
 import { getApiUrl } from '@/lib/config'
 
-type ActiveTask = 'ai-weekly' | 'release-notes' | 'code-review' | 'product-discovery' | 'deepresearch-research' | 'newspulse' | null
+type ActiveTask = 'ai-weekly' | 'release-notes' | 'code-review' | 'product-discovery' | 'deepresearch-research' | 'newspulse' | 'rfp-proposal' | null
 
 interface RecentDeepresearchTask {
   task_id: string
@@ -141,6 +142,14 @@ export default function TasksPage() {
   if (activeTask === 'newspulse') {
     return (
       <NewsPulseTask
+        onBack={handleBack}
+        resumeTaskId={resumeTaskId}
+      />
+    )
+  }
+  if (activeTask === 'rfp-proposal') {
+    return (
+      <RfpProposalTask
         onBack={handleBack}
         resumeTaskId={resumeTaskId}
       />
