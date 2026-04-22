@@ -1371,10 +1371,13 @@ async def refine_stage_content(task_id: str, stage_num: int, request: ReleaseNot
 
     prompt = (
         "You are helping a software engineer refine release documentation. "
-        "Below is the current content, followed by the user's edit request.\n\n"
+        "Below is the COMPLETE current document, followed by the user's edit request.\n\n"
         f"--- CURRENT CONTENT ---\n{request.content}\n\n"
         f"--- USER REQUEST ---\n{request.message}\n\n"
-        "Provide the refined version. Return ONLY the refined content, no explanations."
+        "IMPORTANT: Return the ENTIRE document with the requested changes applied. "
+        "Do NOT omit any sections. Even if the user's request only targets a specific section, "
+        "you must return the full document with that section refined and all other sections intact. "
+        "Return ONLY the refined document content, no explanations or commentary."
     )
 
     try:
@@ -1384,7 +1387,7 @@ async def refine_stage_content(task_id: str, stage_num: int, request: ReleaseNot
                 messages=[{"role": "user", "content": prompt}],
                 model="gpt-4o",
                 temperature=0.7,
-                max_tokens=4096,
+                max_tokens=16384,
             )
 
         loop = asyncio.get_event_loop()
